@@ -25,7 +25,7 @@ async def create_wellness_survey(survey: WellnessSurvey, user_id: str = Depends(
     doc_ref.set(survey_dict)
     return {"id": doc_ref.id, **survey_dict}
 
-@router.put("/{survey_id}")
+@router.put("/{surveey_id}")
 async def update_wellness_survey(survey_id: str, survey: WellnessSurvey, user_id: str = Depends(get_user_id)):
     survey_dict = survey.dict(exclude={"id"})
     survey_dict["updated_at"] = datetime.now().isoformat()
