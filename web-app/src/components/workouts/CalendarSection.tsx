@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../../lib/api-client';
 import { CalendarDay, LogCategory } from '../../types/calendar';
@@ -12,15 +12,13 @@ interface CalendarSectionProps {
   splits: any[];
 }
 
-export default function CalendarSection({ exercises, splits }: CalendarSectionProps) {
-  const navigate = useNavigate();
+export default function CalendarSection({}: CalendarSectionProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [calendarData, setCalendarData] = useState<Map<string, CalendarDay>>(new Map());
   const [showFilters, setShowFilters] = useState(false);
   const [showOnlyActiveDates, setShowOnlyActiveDates] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<LogCategory>('all');
-  const [loading, setLoading] = useState(false);
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -42,7 +40,6 @@ export default function CalendarSection({ exercises, splits }: CalendarSectionPr
   }, [year, month]);
 
   const fetchCalendarData = async () => {
-    setLoading(true);
     try {
       const startDate = new Date(year, month, 1).toISOString().split('T')[0];
       const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
@@ -108,8 +105,6 @@ export default function CalendarSection({ exercises, splits }: CalendarSectionPr
       setCalendarData(dataMap);
     } catch (error) {
       console.error('Error fetching calendar data:', error);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -173,18 +168,7 @@ export default function CalendarSection({ exercises, splits }: CalendarSectionPr
     setSelectedDate(null);
   };
 
-  const filteredDays = useMemo(() => {
-    const days: number[] = [];
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dateKey = getDateKey(day);
-      if (shouldShowDate(dateKey)) {
-        days.push(day);
-      }
-    }
-    return days;
-  }, [daysInMonth, showOnlyActiveDates, categoryFilter, calendarData, year, month]);
-
-  const selectedDayData = selectedDate ? calendarData.get(selectedDate) : null;
+  const selectedDayData = selectedDate ? calendarData.get(selectedDate) : undefined;
 
   return (
     <div className="space-y-6">
@@ -331,8 +315,6 @@ export default function CalendarSection({ exercises, splits }: CalendarSectionPr
           dayData={selectedDayData}
           onClose={() => setSelectedDate(null)}
           onUpdate={fetchCalendarData}
-          exercises={exercises}
-          splits={splits}
         />
       )}
     </div>
@@ -344,11 +326,9 @@ interface DateDetailPanelProps {
   dayData: CalendarDay | undefined;
   onClose: () => void;
   onUpdate: () => void;
-  exercises: any[];
-  splits: any[];
 }
 
-function DateDetailPanel({ date, dayData, onClose, onUpdate, exercises, splits }: DateDetailPanelProps) {
+function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelProps) {
   const navigate = useNavigate();
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 

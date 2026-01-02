@@ -17,7 +17,6 @@ export default function WellnessPage() {
 
   useEffect(() => {
     const tabParam = searchParams.get('tab');
-    const editParam = searchParams.get('edit');
     
     if (tabParam && ['stress', 'body', 'survey'].includes(tabParam)) {
       setActiveTab(tabParam as TabType);
