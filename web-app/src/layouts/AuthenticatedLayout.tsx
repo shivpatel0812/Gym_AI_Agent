@@ -7,6 +7,7 @@ import {
   MdDirectionsRun,
   MdRestaurant,
   MdFavorite,
+  MdCalendarMonth,
   MdLogout,
   MdMenu,
   MdClose,
@@ -35,6 +36,7 @@ export default function AuthenticatedLayout({
     { label: "Activity", href: "/activity", icon: MdDirectionsRun },
     { label: "Nutrition", href: "/nutrition", icon: MdRestaurant },
     { label: "Wellness", href: "/wellness", icon: MdFavorite },
+    { label: "Calendar", href: "/calendar", icon: MdCalendarMonth },
   ];
 
   return (

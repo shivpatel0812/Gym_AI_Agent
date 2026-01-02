@@ -6,12 +6,16 @@ import { WellnessSurvey } from '@/types';
 import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
-import Modal from '@/components/ui/Modal';
-import { MdAdd, MdDelete } from 'react-icons/md';
+import { MdAdd, MdDelete, MdClose } from 'react-icons/md';
 
-export default function WellnessSurveySection() {
+interface WellnessSurveySectionProps {
+  editEntryId?: string | null;
+}
+
+export default function WellnessSurveySection({ editEntryId: propEditEntryId }: WellnessSurveySectionProps = {}) {
   const [entries, setEntries] = useState<WellnessSurvey[]>([]);
-  const [showModal, setShowModal] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [formData, setFormData] = useState<WellnessSurvey>({
     date: new Date().toISOString().split('T')[0],
     fatigue_level: 5,
@@ -25,6 +29,17 @@ export default function WellnessSurveySection() {
     fetchEntries();
   }, []);
 
+  useEffect(() => {
+    if (propEditEntryId && entries.length > 0) {
+      const entryToEdit = entries.find(e => e.id === propEditEntryId);
+      if (entryToEdit) {
+        setFormData(entryToEdit);
+        setEditingEntryId(entryToEdit.id || null);
+        setShowForm(true);
+      }
+    }
+  }, [propEditEntryId, entries]);
+
   const fetchEntries = async () => {
     try {
       const res = await apiClient.get('/api/wellness-survey');
@@ -37,8 +52,11 @@ export default function WellnessSurveySection() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await apiClient.post('/api/wellness-survey', formData);
-      setShowModal(false);
+      if (editingEntryId) {
+        await apiClient.put(`/api/wellness-survey/${editingEntryId}`, formData);
+      } else {
+        await apiClient.post('/api/wellness-survey', formData);
+      }
       setFormData({
         date: new Date().toISOString().split('T')[0],
         fatigue_level: 5,
@@ -47,6 +65,8 @@ export default function WellnessSurveySection() {
         sleep_quality: 5,
         mood: 5,
       });
+      setEditingEntryId(null);
+      setShowForm(false);
       fetchEntries();
     } catch (error) {
       console.error('Error saving wellness survey:', error);
@@ -73,26 +93,53 @@ export default function WellnessSurveySection() {
     return 'bg-[#10B981]';
   };
 
+  const handleCancel = () => {
+    setFormData({
+      date: new Date().toISOString().split('T')[0],
+      fatigue_level: 5,
+      aches_level: 5,
+      energy_level: 5,
+      sleep_quality: 5,
+      mood: 5,
+    });
+    setEditingEntryId(null);
+    setShowForm(false);
+  };
+
   return (
     <div>
       <div className="flex justify-end mb-6">
-        <Button onClick={() => setShowModal(true)} icon={<MdAdd />}>
-          Log Survey
-        </Button>
+        {!showForm && (
+          <Button onClick={() => setShowForm(true)} icon={<MdAdd />}>
+            Log Survey
+          </Button>
+        )}
       </div>
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="Wellness Survey">
-        <form onSubmit={handleSubmit}>
-          <Input
-            label="Date"
-            type="date"
-            value={formData.date}
-            onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-            required
-          />
+      {showForm && (
+        <Card className="mb-8 p-6 lg:p-8">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-lg font-semibold text-[#F9FAFB]">
+              {editingEntryId ? 'Edit Wellness Survey' : 'Wellness Survey'}
+            </h3>
+            <button
+              onClick={handleCancel}
+              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors"
+            >
+              <MdClose size={20} />
+            </button>
+          </div>
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <Input
+              label="Date"
+              type="date"
+              value={formData.date}
+              onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+              required
+            />
 
-          {/* Fatigue (reverse scoring) */}
-          <div className="mb-4">
+            {/* Fatigue (reverse scoring) */}
+            <div>
             <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
               Fatigue Level: {formData.fatigue_level}
             </label>
@@ -110,8 +157,8 @@ export default function WellnessSurveySection() {
             </div>
           </div>
 
-          {/* Aches (reverse scoring) */}
-          <div className="mb-4">
+            {/* Aches (reverse scoring) */}
+            <div>
             <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
               Body Aches: {formData.aches_level}
             </label>
@@ -129,8 +176,8 @@ export default function WellnessSurveySection() {
             </div>
           </div>
 
-          {/* Energy (normal scoring) */}
-          <div className="mb-4">
+            {/* Energy (normal scoring) */}
+            <div>
             <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
               Energy Level: {formData.energy_level}
             </label>
@@ -148,8 +195,8 @@ export default function WellnessSurveySection() {
             </div>
           </div>
 
-          {/* Sleep Quality (normal scoring) */}
-          <div className="mb-4">
+            {/* Sleep Quality (normal scoring) */}
+            <div>
             <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
               Sleep Quality: {formData.sleep_quality}
             </label>
@@ -167,8 +214,8 @@ export default function WellnessSurveySection() {
             </div>
           </div>
 
-          {/* Mood (normal scoring) */}
-          <div className="mb-4">
+            {/* Mood (normal scoring) */}
+            <div>
             <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
               Mood: {formData.mood}
             </label>
@@ -186,14 +233,17 @@ export default function WellnessSurveySection() {
             </div>
           </div>
 
-          <div className="flex gap-4 mt-6">
-            <Button type="submit" variant="primary" className="flex-1">Save</Button>
-            <Button type="button" variant="secondary" onClick={() => setShowModal(false)} className="flex-1">
-              Cancel
-            </Button>
-          </div>
-        </form>
-      </Modal>
+            <div className="flex gap-4 pt-4">
+              <Button type="submit" variant="primary">
+                {editingEntryId ? 'Update' : 'Save'}
+              </Button>
+              <Button type="button" variant="secondary" onClick={handleCancel}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
 
       {entries.length === 0 ? (
         <div className="text-center py-12">

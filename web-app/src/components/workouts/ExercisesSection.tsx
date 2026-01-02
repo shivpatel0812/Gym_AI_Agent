@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import apiClient from "@/lib/api-client";
 import { Exercise } from "@/types";
 import {
@@ -26,10 +26,32 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
     description: "",
   });
   const [muscleGroups, setMuscleGroups] = useState<string[]>([]);
+  const [muscleGroupSearch, setMuscleGroupSearch] = useState("");
+  const [showMuscleGroupDropdown, setShowMuscleGroupDropdown] = useState(false);
+  const muscleGroupDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchExercises();
   }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        muscleGroupDropdownRef.current &&
+        !muscleGroupDropdownRef.current.contains(event.target as Node)
+      ) {
+        setShowMuscleGroupDropdown(false);
+      }
+    };
+
+    if (showMuscleGroupDropdown) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showMuscleGroupDropdown]);
 
   const fetchExercises = async () => {
     try {
@@ -47,10 +69,11 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
       const payload = {
         name: formData.name,
         type: formData.type || "strength",
-        muscle_group: muscleGroups.length > 0 ? muscleGroups.join(", ") : undefined,
+        muscle_group:
+          muscleGroups.length > 0 ? muscleGroups.join(", ") : undefined,
         is_custom: true,
       };
-      
+
       await apiClient.post("/api/exercises", payload);
       setFormData({ name: "", type: "", muscle_group: "", description: "" });
       setMuscleGroups([]);
@@ -78,27 +101,62 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
   );
 
   const muscleGroupOptions = [
+    // Major Muscle Groups
     "Chest",
     "Back",
-    "Legs",
     "Shoulders",
     "Arms",
+    "Legs",
     "Core",
-    "Triceps",
+    // Back Subdivisions
+    "Lats",
+    "Upper Back",
+    "Mid Back",
+    "Lower Back",
+    "Traps",
+    "Erector Spinae",
+    // Shoulders Subdivisions
+    "Front Delts",
+    "Lateral Delts",
+    "Rear Delts",
+    "Rotator Cuff",
+    // Arms Subdivisions
     "Biceps",
-    "Glutes",
-    "Hamstrings",
+    "Triceps",
+    "Forearms",
+    // Legs Subdivisions
     "Quadriceps",
+    "Hamstrings",
+    "Glutes",
+    "Glute Maximus",
+    "Glute Medius",
     "Calves",
+    "Hip Flexors",
+    "Adductors",
+    "Abductors",
+    "Tibialis Anterior",
+    // Core Subdivisions
+    "Abs",
+    "Obliques",
+    "Transverse Abdominis",
+    // Neck & Stability
+    "Neck",
+    "Serratus Anterior",
   ];
 
-  const handleMuscleGroupSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const value = e.target.value;
+  const handleMuscleGroupSelect = (value: string) => {
     if (value && !muscleGroups.includes(value)) {
       setMuscleGroups([...muscleGroups, value]);
-      e.target.value = "";
+      setMuscleGroupSearch(""); // Clear search after selection
+      setShowMuscleGroupDropdown(false);
     }
   };
+
+  const filteredMuscleGroupOptions = muscleGroupOptions.filter(
+    (opt) =>
+      opt.toLowerCase().includes(muscleGroupSearch.toLowerCase()) &&
+      !muscleGroups.includes(opt)
+  );
 
   return (
     <div className="space-y-8">
@@ -186,26 +244,52 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
                   ))}
                 </div>
               )}
-              <div className="relative">
-                <select
-                  onChange={handleMuscleGroupSelect}
-                  value=""
-                  className="w-full px-4 py-3 pr-10 rounded-lg bg-[#2d3b4e] border-2 border-transparent text-gray-500 focus:outline-none focus:border-[#6366F1] appearance-none cursor-pointer transition-all"
-                >
-                  <option value="" disabled>
-                    Add muscle group...
-                  </option>
-                  {muscleGroupOptions
-                    .filter((opt) => !muscleGroups.includes(opt))
-                    .map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                </select>
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                  <MdKeyboardArrowDown className="text-gray-400 text-xl" />
+              <div className="relative" ref={muscleGroupDropdownRef}>
+                <div className="relative">
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
+                    <MdSearch size={18} />
+                  </div>
+                  <input
+                    type="text"
+                    value={muscleGroupSearch}
+                    onChange={(e) => {
+                      setMuscleGroupSearch(e.target.value);
+                      setShowMuscleGroupDropdown(true);
+                    }}
+                    onFocus={() => {
+                      if (muscleGroupSearch) {
+                        setShowMuscleGroupDropdown(true);
+                      }
+                    }}
+                    placeholder="Search and select muscle groups..."
+                    className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-[#2d3b4e] border-2 border-transparent text-white placeholder:text-gray-500 focus:outline-none focus:border-[#6366F1] transition-all"
+                  />
                 </div>
+                {showMuscleGroupDropdown &&
+                  muscleGroupSearch &&
+                  filteredMuscleGroupOptions.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-[#2d3b4e] border border-[#3d4d63] rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                      {filteredMuscleGroupOptions.map((option) => (
+                        <button
+                          key={option}
+                          type="button"
+                          onClick={() => handleMuscleGroupSelect(option)}
+                          className="w-full px-4 py-2 text-left text-white hover:bg-[#3d4d63] transition-colors first:rounded-t-lg last:rounded-b-lg"
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                {showMuscleGroupDropdown &&
+                  muscleGroupSearch &&
+                  filteredMuscleGroupOptions.length === 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-[#2d3b4e] border border-[#3d4d63] rounded-lg shadow-lg p-4">
+                      <p className="text-gray-400 text-sm">
+                        No matching muscle groups found
+                      </p>
+                    </div>
+                  )}
               </div>
             </div>
 

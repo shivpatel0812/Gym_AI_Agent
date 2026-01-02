@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import StressSection from "../components/wellness/StressSection";
 import BodyFeelingsSection from "../components/wellness/BodyFeelingsSection";
 import WellnessSurveySection from "../components/wellness/WellnessSurveySection";
@@ -11,7 +12,17 @@ import {
 type TabType = "stress" | "body" | "survey";
 
 export default function WellnessPage() {
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<TabType>("stress");
+
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    const editParam = searchParams.get('edit');
+    
+    if (tabParam && ['stress', 'body', 'survey'].includes(tabParam)) {
+      setActiveTab(tabParam as TabType);
+    }
+  }, [searchParams]);
 
   const tabs = [
     { id: "stress" as TabType, label: "Stress", icon: MdPsychology },
@@ -53,9 +64,9 @@ export default function WellnessPage() {
         })}
       </div>
 
-      {activeTab === "stress" && <StressSection />}
-      {activeTab === "body" && <BodyFeelingsSection />}
-      {activeTab === "survey" && <WellnessSurveySection />}
+      {activeTab === "stress" && <StressSection editEntryId={searchParams.get('edit')} />}
+      {activeTab === "body" && <BodyFeelingsSection editEntryId={searchParams.get('edit')} />}
+      {activeTab === "survey" && <WellnessSurveySection editEntryId={searchParams.get('edit')} />}
     </div>
   );
 }

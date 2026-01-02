@@ -11,9 +11,10 @@ import { MdAdd, MdDelete, MdFitnessCenter, MdClose, MdEdit } from 'react-icons/m
 interface SessionsSectionProps {
   exercises: Exercise[];
   splits: Split[];
+  editSessionId?: string | null;
 }
 
-export default function SessionsSection({ exercises, splits }: SessionsSectionProps) {
+export default function SessionsSection({ exercises, splits, editSessionId: propEditSessionId }: SessionsSectionProps) {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -40,6 +41,23 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   useEffect(() => {
     fetchSessions();
   }, []);
+
+  useEffect(() => {
+    if (propEditSessionId && sessions.length > 0) {
+      const sessionToEdit = sessions.find(s => s.id === propEditSessionId);
+      if (sessionToEdit) {
+        setFormData({
+          date: sessionToEdit.date,
+          split_id: sessionToEdit.split_id || '',
+          split_name: sessionToEdit.split_name || '',
+          exercises: sessionToEdit.exercises || [],
+          notes: sessionToEdit.notes || ''
+        });
+        setEditingSessionId(sessionToEdit.id || null);
+        setShowForm(true);
+      }
+    }
+  }, [propEditSessionId, sessions]);
 
   const fetchSessions = async () => {
     try {

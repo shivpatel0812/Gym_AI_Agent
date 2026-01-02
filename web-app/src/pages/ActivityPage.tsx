@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import apiClient from '../lib/api-client';
 import { PhysicalActivity } from '../types';
 import Button from '../components/ui/Button';
@@ -7,6 +8,7 @@ import Input from '../components/ui/Input';
 import { MdAdd, MdDirectionsRun, MdDelete, MdEdit, MdClose } from 'react-icons/md';
 
 export default function ActivityPage() {
+  const [searchParams] = useSearchParams();
   const [activities, setActivities] = useState<PhysicalActivity[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingActivity, setEditingActivity] = useState<PhysicalActivity | null>(null);
@@ -23,6 +25,16 @@ export default function ActivityPage() {
   useEffect(() => {
     fetchActivities();
   }, []);
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (editId && activities.length > 0) {
+      const activityToEdit = activities.find(a => a.id === editId);
+      if (activityToEdit) {
+        handleEdit(activityToEdit);
+      }
+    }
+  }, [searchParams, activities]);
 
   const fetchActivities = async () => {
     try {

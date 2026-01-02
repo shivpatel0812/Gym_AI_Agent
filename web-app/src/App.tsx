@@ -6,6 +6,7 @@ import WorkoutsPage from './pages/WorkoutsPage'
 import ActivityPage from './pages/ActivityPage'
 import NutritionPage from './pages/NutritionPage'
 import WellnessPage from './pages/WellnessPage'
+import CalendarPage from './pages/CalendarPage'
 import AuthenticatedLayout from './layouts/AuthenticatedLayout'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -41,6 +42,7 @@ function App() {
                 <Route path="/activity" element={<ActivityPage />} />
                 <Route path="/nutrition" element={<NutritionPage />} />
                 <Route path="/wellness" element={<WellnessPage />} />
+                <Route path="/calendar" element={<CalendarPage />} />
               </Routes>
             </AuthenticatedLayout>
           </ProtectedRoute>

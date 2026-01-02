@@ -38,6 +38,7 @@ export interface SessionExercise {
 export interface WorkoutSession {
   id?: string;
   date: string;
+  workout_name?: string;
   split_id?: string;
   split_name?: string;
   exercises: SessionExercise[];

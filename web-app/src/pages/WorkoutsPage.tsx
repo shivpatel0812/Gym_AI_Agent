@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import apiClient from "../lib/api-client";
 import { Exercise, Split } from "../types";
 import ExercisesSection from "../components/workouts/ExercisesSection";
@@ -9,14 +10,27 @@ import { MdFitnessCenter, MdCalendarToday, MdViewList } from "react-icons/md";
 type TabType = "exercises" | "splits" | "sessions";
 
 export default function WorkoutsPage() {
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<TabType>("exercises");
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [splits, setSplits] = useState<Split[]>([]);
+  const [editSessionId, setEditSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchExercises();
     fetchSplits();
-  }, []);
+    
+    const tabParam = searchParams.get('tab');
+    const editParam = searchParams.get('edit');
+    
+    if (tabParam && ['exercises', 'splits', 'sessions'].includes(tabParam)) {
+      setActiveTab(tabParam as TabType);
+    }
+    
+    if (editParam) {
+      setEditSessionId(editParam);
+    }
+  }, [searchParams]);
 
   const fetchExercises = async () => {
     try {
@@ -74,7 +88,7 @@ export default function WorkoutsPage() {
         <SplitsSection exercises={exercises} onUpdate={fetchSplits} />
       )}
       {activeTab === "sessions" && (
-        <SessionsSection exercises={exercises} splits={splits} />
+        <SessionsSection exercises={exercises} splits={splits} editSessionId={editSessionId} />
       )}
     </div>
   );

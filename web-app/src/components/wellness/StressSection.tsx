@@ -6,12 +6,16 @@ import { StressEntry } from '@/types';
 import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
-import Modal from '@/components/ui/Modal';
-import { MdAdd, MdDelete } from 'react-icons/md';
+import { MdAdd, MdDelete, MdClose } from 'react-icons/md';
 
-export default function StressSection() {
+interface StressSectionProps {
+  editEntryId?: string | null;
+}
+
+export default function StressSection({ editEntryId: propEditEntryId }: StressSectionProps = {}) {
   const [entries, setEntries] = useState<StressEntry[]>([]);
-  const [showModal, setShowModal] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [formData, setFormData] = useState<StressEntry>({
     date: new Date().toISOString().split('T')[0],
     stress_level: 5,
@@ -21,6 +25,17 @@ export default function StressSection() {
   useEffect(() => {
     fetchEntries();
   }, []);
+
+  useEffect(() => {
+    if (propEditEntryId && entries.length > 0) {
+      const entryToEdit = entries.find(e => e.id === propEditEntryId);
+      if (entryToEdit) {
+        setFormData(entryToEdit);
+        setEditingEntryId(entryToEdit.id || null);
+        setShowForm(true);
+      }
+    }
+  }, [propEditEntryId, entries]);
 
   const fetchEntries = async () => {
     try {
@@ -34,13 +49,18 @@ export default function StressSection() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await apiClient.post('/api/stress', formData);
-      setShowModal(false);
+      if (editingEntryId) {
+        await apiClient.put(`/api/stress/${editingEntryId}`, formData);
+      } else {
+        await apiClient.post('/api/stress', formData);
+      }
       setFormData({
         date: new Date().toISOString().split('T')[0],
         stress_level: 5,
         description: '',
       });
+      setEditingEntryId(null);
+      setShowForm(false);
       fetchEntries();
     } catch (error) {
       console.error('Error saving stress entry:', error);
@@ -70,57 +90,84 @@ export default function StressSection() {
     return 'text-[#EF4444]';
   };
 
+  const handleCancel = () => {
+    setFormData({
+      date: new Date().toISOString().split('T')[0],
+      stress_level: 5,
+      description: '',
+    });
+    setEditingEntryId(null);
+    setShowForm(false);
+  };
+
   return (
     <div>
       <div className="flex justify-end mb-6">
-        <Button onClick={() => setShowModal(true)} icon={<MdAdd />}>
-          Log Stress
-        </Button>
+        {!showForm && (
+          <Button onClick={() => setShowForm(true)} icon={<MdAdd />}>
+            Log Stress
+          </Button>
+        )}
       </div>
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="Log Stress Level">
-        <form onSubmit={handleSubmit}>
-          <Input
-            label="Date"
-            type="date"
-            value={formData.date}
-            onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-            required
-          />
-
-          <div className="mb-4">
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
-              Stress Level: {formData.stress_level}
-            </label>
-            <input
-              type="range"
-              min="1"
-              max="10"
-              value={formData.stress_level}
-              onChange={(e) => setFormData({ ...formData, stress_level: parseInt(e.target.value) })}
-              className="w-full"
+      {showForm && (
+        <Card className="mb-8 p-6 lg:p-8">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-lg font-semibold text-[#F9FAFB]">
+              {editingEntryId ? 'Edit Stress Level' : 'Log Stress Level'}
+            </h3>
+            <button
+              onClick={handleCancel}
+              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors"
+            >
+              <MdClose size={20} />
+            </button>
+          </div>
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <Input
+              label="Date"
+              type="date"
+              value={formData.date}
+              onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+              required
             />
-            <div className="flex justify-between text-xs text-[#9CA3AF]">
-              <span>Low (1)</span>
-              <span>High (10)</span>
+
+            <div>
+              <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+                Stress Level: {formData.stress_level}
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="10"
+                value={formData.stress_level}
+                onChange={(e) => setFormData({ ...formData, stress_level: parseInt(e.target.value) })}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-[#9CA3AF]">
+                <span>Low (1)</span>
+                <span>High (10)</span>
+              </div>
             </div>
-          </div>
 
-          <Input
-            label="Description (Optional)"
-            value={formData.description || ''}
-            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="What's causing the stress?"
-          />
+            <Input
+              label="Description (Optional)"
+              value={formData.description || ''}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              placeholder="What's causing the stress?"
+            />
 
-          <div className="flex gap-4 mt-6">
-            <Button type="submit" variant="primary" className="flex-1">Save</Button>
-            <Button type="button" variant="secondary" onClick={() => setShowModal(false)} className="flex-1">
-              Cancel
-            </Button>
-          </div>
-        </form>
-      </Modal>
+            <div className="flex gap-4 pt-4">
+              <Button type="submit" variant="primary">
+                {editingEntryId ? 'Update' : 'Save'}
+              </Button>
+              <Button type="button" variant="secondary" onClick={handleCancel}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
 
       {entries.length === 0 ? (
         <div className="text-center py-12">

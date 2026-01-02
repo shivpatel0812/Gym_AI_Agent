@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import apiClient from "../lib/api-client";
 import { MacroEntry, FoodItem } from "../types";
 import Button from "../components/ui/Button";
@@ -7,6 +8,7 @@ import Input from "../components/ui/Input";
 import { MdAdd, MdRestaurant, MdDelete, MdClose, MdEdit } from "react-icons/md";
 
 export default function NutritionPage() {
+  const [searchParams] = useSearchParams();
   const [entries, setEntries] = useState<MacroEntry[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [useIndividualFoods, setUseIndividualFoods] = useState(true);
@@ -31,6 +33,16 @@ export default function NutritionPage() {
   useEffect(() => {
     fetchEntries();
   }, []);
+
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (editId && entries.length > 0) {
+      const entryToEdit = entries.find((e) => e.id === editId);
+      if (entryToEdit) {
+        handleEditEntry(entryToEdit);
+      }
+    }
+  }, [searchParams, entries]);
 
   const fetchEntries = async () => {
     try {
