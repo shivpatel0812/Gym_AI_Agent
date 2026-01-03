@@ -7,6 +7,9 @@ import ActivityPage from './pages/ActivityPage'
 import NutritionPage from './pages/NutritionPage'
 import WellnessPage from './pages/WellnessPage'
 import CalendarPage from './pages/CalendarPage'
+import AboutMyselfPage from './pages/AboutMyselfPage'
+import GeneralAnalysisPage from './pages/GeneralAnalysisPage'
+import ChatbotPage from './pages/ChatbotPage'
 import AuthenticatedLayout from './layouts/AuthenticatedLayout'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -43,6 +46,9 @@ function App() {
                 <Route path="/nutrition" element={<NutritionPage />} />
                 <Route path="/wellness" element={<WellnessPage />} />
                 <Route path="/calendar" element={<CalendarPage />} />
+                <Route path="/about-myself" element={<AboutMyselfPage />} />
+                <Route path="/general-analysis" element={<GeneralAnalysisPage />} />
+                <Route path="/chatbot" element={<ChatbotPage />} />
               </Routes>
             </AuthenticatedLayout>
           </ProtectedRoute>

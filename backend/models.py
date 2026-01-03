@@ -88,3 +88,47 @@ class HydrationEntry(BaseModel):
     amount_cups: float
     notes: Optional[str] = None
 
+class AIAnalysis(BaseModel):
+    id: Optional[str] = None
+    user_id: str
+    year: int
+    month: int
+    analysis: str
+    model: Optional[str] = None
+    tokens_used: Optional[int] = None
+    summary_data: Optional[dict] = None
+    created_at: Optional[str] = None
+    previous_context_count: Optional[int] = 0
+
+class UserProfile(BaseModel):
+    id: Optional[str] = None
+    height_ft: Optional[int] = None
+    height_in: Optional[int] = None
+    height_cm: Optional[float] = None
+    weight: Optional[float] = None
+    age: Optional[int] = None
+    gender: Optional[str] = None
+    primary_goal: Optional[str] = None
+    primary_goal_custom: Optional[str] = None
+    secondary_goals: Optional[List[str]] = None
+    time_horizon: Optional[str] = None
+    experience_level: Optional[str] = None
+    training_history_style: Optional[List[str]] = None
+    training_history_notes: Optional[str] = None
+    work_school_hours: Optional[float] = None
+    busy_level: Optional[int] = None
+    family_obligations: Optional[bool] = None
+    family_obligations_note: Optional[str] = None
+    typical_stress_level: Optional[int] = None
+    stress_fluctuates: Optional[bool] = None
+    preferred_workout_time: Optional[str] = None
+    preferred_session_length: Optional[str] = None
+    preferred_workout_frequency: Optional[str] = None
+    coaching_style_preference: Optional[str] = None
+    dietary_preference: Optional[str] = None
+    dietary_preference_other: Optional[str] = None
+    willingness_to_track: Optional[str] = None
+    progress_feeling: Optional[str] = None
+    biggest_blocker: Optional[str] = None
+    open_reflection: Optional[str] = None
+

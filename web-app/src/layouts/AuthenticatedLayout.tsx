@@ -8,6 +8,9 @@ import {
   MdRestaurant,
   MdFavorite,
   MdCalendarMonth,
+  MdPerson,
+  MdAnalytics,
+  MdChatBubble,
   MdLogout,
   MdMenu,
   MdClose,
@@ -37,6 +40,9 @@ export default function AuthenticatedLayout({
     { label: "Nutrition", href: "/nutrition", icon: MdRestaurant },
     { label: "Wellness", href: "/wellness", icon: MdFavorite },
     { label: "Calendar", href: "/calendar", icon: MdCalendarMonth },
+    { label: "About Myself", href: "/about-myself", icon: MdPerson },
+    { label: "General Analysis", href: "/general-analysis", icon: MdAnalytics },
+    { label: "Chatbot", href: "/chatbot", icon: MdChatBubble },
   ];
 
   return (
