@@ -8,6 +8,63 @@ import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { MdAdd, MdDelete, MdFitnessCenter, MdClose, MdEdit } from 'react-icons/md';
 
+interface AddSetToExerciseProps {
+  exerciseIndex: number;
+  onAddSet: (reps: string, weight: string) => void;
+}
+
+function AddSetToExercise({ onAddSet }: AddSetToExerciseProps) {
+  const [reps, setReps] = useState('');
+  const [weight, setWeight] = useState('');
+
+  const handleAdd = () => {
+    if (reps) {
+      onAddSet(reps, weight);
+      setReps('');
+      setWeight('');
+    }
+  };
+
+  return (
+    <div className="flex gap-2 mt-3">
+      <input
+        type="number"
+        value={reps}
+        onChange={(e) => setReps(e.target.value)}
+        placeholder="Reps"
+        className="flex-1 px-3 py-2 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#6366F1] text-sm"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            handleAdd();
+          }
+        }}
+      />
+      <input
+        type="number"
+        value={weight}
+        onChange={(e) => setWeight(e.target.value)}
+        placeholder="Weight"
+        className="flex-1 px-3 py-2 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#6366F1] text-sm"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            handleAdd();
+          }
+        }}
+      />
+      <Button
+        type="button"
+        onClick={handleAdd}
+        variant="secondary"
+        className="whitespace-nowrap"
+      >
+        + Add Set
+      </Button>
+    </div>
+  );
+}
+
 interface SessionsSectionProps {
   exercises: Exercise[];
   splits: Split[];
@@ -341,37 +398,99 @@ export default function SessionsSection({ exercises, splits, editSessionId: prop
 
           {formData.exercises.length > 0 && (
             <div className="mb-6 space-y-4">
-              {formData.exercises.map((ex, idx) => (
-                <Card key={idx} className="p-4">
-                  <div className="flex items-start justify-between mb-4">
-                    <h4 className="text-base font-semibold text-[#F9FAFB]">{ex.exercise_name}</h4>
-                    <button
-                      type="button"
-                      onClick={() => setFormData({
-                        ...formData,
-                        exercises: formData.exercises.filter((_, i) => i !== idx)
-                      })}
-                      className="text-[#EF4444] hover:text-[#DC2626]"
-                    >
-                      <MdDelete size={20} />
-                    </button>
-                  </div>
-                  
-                  <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-[#9CA3AF] border-b border-[#374151] pb-2 mb-2">
-                    <div className="col-span-2">Set</div>
-                    <div className="col-span-5">Reps</div>
-                    <div className="col-span-5">Weight (lbs)</div>
-                  </div>
-                  
-                  {Array.isArray(ex.sets) && ex.sets.map((set: WorkoutSet, setIdx: number) => (
-                    <div key={setIdx} className="grid grid-cols-12 gap-2 mb-2 text-sm text-[#F9FAFB]">
-                      <div className="col-span-2">{set.set_number}</div>
-                      <div className="col-span-5">{set.reps}</div>
-                      <div className="col-span-5">{set.weight || '-'}</div>
+              {formData.exercises.map((ex, idx) => {
+                const exerciseSets = Array.isArray(ex.sets) ? ex.sets : [];
+                return (
+                  <Card key={idx} className="p-4">
+                    <div className="flex items-start justify-between mb-4">
+                      <h4 className="text-base font-semibold text-[#F9FAFB]">{ex.exercise_name}</h4>
+                      <button
+                        type="button"
+                        onClick={() => setFormData({
+                          ...formData,
+                          exercises: formData.exercises.filter((_, i) => i !== idx)
+                        })}
+                        className="text-[#EF4444] hover:text-[#DC2626]"
+                      >
+                        <MdDelete size={20} />
+                      </button>
                     </div>
-                  ))}
-                </Card>
-              ))}
+                    
+                    <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-[#9CA3AF] border-b border-[#374151] pb-2 mb-2">
+                      <div className="col-span-2">Set</div>
+                      <div className="col-span-4">Reps</div>
+                      <div className="col-span-4">Weight (lbs)</div>
+                      <div className="col-span-2"></div>
+                    </div>
+                    
+                    {exerciseSets.map((set: WorkoutSet, setIdx: number) => (
+                      <div key={setIdx} className="grid grid-cols-12 gap-2 mb-2 items-center">
+                        <div className="col-span-2 text-sm text-[#F9FAFB]">{set.set_number}</div>
+                        <div className="col-span-4">
+                          <input
+                            type="number"
+                            value={set.reps}
+                            onChange={(e) => {
+                              const newExercises = [...formData.exercises];
+                              const newSets = [...exerciseSets];
+                              newSets[setIdx] = { ...newSets[setIdx], reps: parseInt(e.target.value) || 0 };
+                              newExercises[idx] = { ...newExercises[idx], sets: newSets };
+                              setFormData({ ...formData, exercises: newExercises });
+                            }}
+                            className="w-full px-2 py-1 rounded bg-[#1A1F3A] border border-[#374151] text-[#F9FAFB] text-sm focus:outline-none focus:ring-1 focus:ring-[#6366F1]"
+                          />
+                        </div>
+                        <div className="col-span-4">
+                          <input
+                            type="number"
+                            value={set.weight || ''}
+                            onChange={(e) => {
+                              const newExercises = [...formData.exercises];
+                              const newSets = [...exerciseSets];
+                              newSets[setIdx] = { ...newSets[setIdx], weight: e.target.value ? parseFloat(e.target.value) : undefined };
+                              newExercises[idx] = { ...newExercises[idx], sets: newSets };
+                              setFormData({ ...formData, exercises: newExercises });
+                            }}
+                            className="w-full px-2 py-1 rounded bg-[#1A1F3A] border border-[#374151] text-[#F9FAFB] text-sm focus:outline-none focus:ring-1 focus:ring-[#6366F1]"
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newExercises = [...formData.exercises];
+                              const newSets = exerciseSets.filter((_, i) => i !== setIdx);
+                              newExercises[idx] = { 
+                                ...newExercises[idx], 
+                                sets: newSets.map((s, i) => ({ ...s, set_number: i + 1 }))
+                              };
+                              setFormData({ ...formData, exercises: newExercises });
+                            }}
+                            className="text-[#EF4444] hover:text-[#DC2626]"
+                          >
+                            <MdClose size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    <AddSetToExercise
+                      exerciseIndex={idx}
+                      onAddSet={(reps, weight) => {
+                        const newExercises = [...formData.exercises];
+                        const newSets = [...exerciseSets];
+                        newSets.push({
+                          set_number: exerciseSets.length + 1,
+                          reps: parseInt(reps) || 0,
+                          weight: weight ? parseFloat(weight) : undefined
+                        });
+                        newExercises[idx] = { ...newExercises[idx], sets: newSets };
+                        setFormData({ ...formData, exercises: newExercises });
+                      }}
+                    />
+                  </Card>
+                );
+              })}
             </div>
           )}
 
