@@ -13,13 +13,22 @@ def clean_for_json(obj: Any) -> Any:
     if obj is None:
         return None
     elif isinstance(obj, dict):
-        return {k: clean_for_json(v) for k, v in obj.items() if v is not None}
+        cleaned = {k: clean_for_json(v) for k, v in obj.items() if v is not None}
+        # Remove empty strings from dict values
+        cleaned = {k: v for k, v in cleaned.items() if v != ""}
+        return cleaned if cleaned else None
     elif isinstance(obj, list):
-        return [clean_for_json(item) for item in obj if item is not None]
+        cleaned = [clean_for_json(item) for item in obj if item is not None]
+        # Remove empty strings from list
+        cleaned = [item for item in cleaned if item != ""]
+        return cleaned if cleaned else None
     elif isinstance(obj, (str, int, float, bool)):
-        return obj
+        # Return empty string as None to be filtered out
+        return obj if (not isinstance(obj, str) or obj.strip()) else None
     else:
-        return str(obj) if obj else None
+        # Convert to string, but return None if empty
+        str_obj = str(obj) if obj else None
+        return str_obj if (str_obj and str_obj.strip()) else None
 
 
 class FitnessAICoach:
@@ -56,18 +65,32 @@ class FitnessAICoach:
         try:
             cleaned_profile = clean_for_json(self.user_profile)
             profile_json = json.dumps(cleaned_profile, indent=2, default=str)
-            if not profile_json or not profile_json.strip() or profile_json == "null":
-                profile_json = "{}"
-        except Exception:
-            profile_json = "{}"
+            # More strict validation - check if JSON is meaningful
+            if not profile_json or not profile_json.strip() or profile_json in ["null", "{}", "[]"]:
+                profile_json = json.dumps({
+                    "goal": "Get strong and build muscle",
+                    "experience_level": "intermediate"
+                }, indent=2)
+        except Exception as e:
+            print(f"Error processing profile: {e}")
+            profile_json = json.dumps({
+                "goal": "Get strong and build muscle",
+                "experience_level": "intermediate"
+            }, indent=2)
         
         try:
             cleaned_summary = clean_for_json(summary)
             summary_json = json.dumps(cleaned_summary, indent=2, default=str)
-            if not summary_json or not summary_json.strip() or summary_json == "null":
-                summary_json = "{}"
-        except Exception:
-            summary_json = "{}"
+            # More strict validation
+            if not summary_json or not summary_json.strip() or summary_json in ["null", "{}", "[]"]:
+                summary_json = json.dumps({
+                    "message": "No data available for this period"
+                }, indent=2)
+        except Exception as e:
+            print(f"Error processing summary: {e}")
+            summary_json = json.dumps({
+                "message": "Error processing data"
+            }, indent=2)
         
         prompt = f"""You are an expert fitness coach providing a personalized monthly review.
 
@@ -157,8 +180,9 @@ GUIDELINES:
         prompt += """
 Format your response with clear section headers."""
 
-        if not prompt or not prompt.strip():
-            return "You are an expert fitness coach. Provide a comprehensive monthly fitness analysis."
+        # Final validation before returning
+        if not prompt or not prompt.strip() or len(prompt.strip()) < 50:
+            return "You are an expert fitness coach. Provide a comprehensive monthly fitness analysis based on the available data."
         
         return prompt
 
