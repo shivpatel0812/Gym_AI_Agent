@@ -8,6 +8,20 @@ from typing import Dict, List, Any, Optional
 from openai import OpenAI
 
 
+def clean_for_json(obj: Any) -> Any:
+    """Recursively remove None values and ensure all values are JSON-serializable."""
+    if obj is None:
+        return None
+    elif isinstance(obj, dict):
+        return {k: clean_for_json(v) for k, v in obj.items() if v is not None}
+    elif isinstance(obj, list):
+        return [clean_for_json(item) for item in obj if item is not None]
+    elif isinstance(obj, (str, int, float, bool)):
+        return obj
+    else:
+        return str(obj) if obj else None
+
+
 class FitnessAICoach:
     """AI-powered fitness coach using OpenAI API."""
 
@@ -40,15 +54,17 @@ class FitnessAICoach:
     def _build_general_analysis_prompt(self, summary: Dict[str, Any], previous_analyses: Optional[List[str]] = None) -> str:
         """Build structured prompt for General Analysis with optional previous months' context."""
         try:
-            profile_json = json.dumps(self.user_profile, indent=2, default=str)
-            if not profile_json or not profile_json.strip():
+            cleaned_profile = clean_for_json(self.user_profile)
+            profile_json = json.dumps(cleaned_profile, indent=2, default=str)
+            if not profile_json or not profile_json.strip() or profile_json == "null":
                 profile_json = "{}"
         except Exception:
             profile_json = "{}"
         
         try:
-            summary_json = json.dumps(summary, indent=2, default=str)
-            if not summary_json or not summary_json.strip():
+            cleaned_summary = clean_for_json(summary)
+            summary_json = json.dumps(cleaned_summary, indent=2, default=str)
+            if not summary_json or not summary_json.strip() or summary_json == "null":
                 summary_json = "{}"
         except Exception:
             summary_json = "{}"

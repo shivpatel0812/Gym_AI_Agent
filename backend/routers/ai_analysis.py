@@ -69,6 +69,23 @@ async def generate_ai_analysis(
         analyzer = FitnessDataAnalyzer(db, user_id)
         summary = analyzer.build_complete_summary(request.year, request.month)
 
+        # Validate that there's actual data to analyze
+        has_data = False
+        for category in ["training", "nutrition", "recovery", "lifestyle"]:
+            category_data = summary.get(category, {})
+            # Check if category has data (not just error messages)
+            if category_data and not category_data.get("error"):
+                # Check if there's meaningful data (not just zeros)
+                if any(v for k, v in category_data.items() if k != "time_window" and k != "start_date" and k != "end_date" and v):
+                    has_data = True
+                    break
+        
+        if not has_data:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"No fitness data available for {request.year}-{request.month:02d}. Please log some workouts, nutrition, or wellness data first."
+            )
+
         # Get user profile for personalized analysis
         user_profile = get_user_profile_for_ai(db, user_id)
 
@@ -129,6 +146,9 @@ async def generate_ai_analysis(
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Error generating analysis: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error generating analysis: {str(e)}")
 
 
