@@ -40,7 +40,6 @@ export default function AboutMyselfPage() {
   const [profile, setProfile] = useState<UserProfile>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [useMetric, setUseMetric] = useState(false);
   const [heightUnit, setHeightUnit] = useState<"ftin" | "cm">("ftin");
 
   useEffect(() => {
@@ -53,7 +52,6 @@ export default function AboutMyselfPage() {
       if (res.data) {
         setProfile(res.data);
         if (res.data.height_cm) {
-          setUseMetric(true);
           setHeightUnit("cm");
         } else {
           setHeightUnit("ftin");

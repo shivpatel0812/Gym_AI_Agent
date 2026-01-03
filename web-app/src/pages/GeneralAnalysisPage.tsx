@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import apiClient from "../lib/api-client";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
-import { MdAnalytics, MdRefresh, MdDelete, MdExpandMore, MdExpandLess } from "react-icons/md";
+import { MdAnalytics, MdDelete, MdExpandMore, MdExpandLess } from "react-icons/md";
 
 interface Analysis {
   id: string;

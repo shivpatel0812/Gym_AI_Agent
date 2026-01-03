@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import apiClient from '@/lib/api-client';
 import { MacroEntry, FoodItem } from '@/types';
 import Button from '@/components/ui/Button';
