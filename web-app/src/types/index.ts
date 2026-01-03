@@ -102,6 +102,16 @@ export interface WellnessSurvey {
   mood?: number;
 }
 
+export interface SleepEntry {
+  id?: string;
+  date: string;
+  hours_slept: number;
+  quality?: number;
+  bedtime?: string;
+  wake_time?: string;
+  notes?: string;
+}
+
 // Dashboard stats
 export interface DashboardStats {
   workouts: number;

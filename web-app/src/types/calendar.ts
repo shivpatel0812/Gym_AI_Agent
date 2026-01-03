@@ -1,4 +1,4 @@
-import { WorkoutSession, MacroEntry, StressEntry, BodyFeeling, WellnessSurvey, PhysicalActivity } from './index';
+import { WorkoutSession, MacroEntry, StressEntry, BodyFeeling, WellnessSurvey, PhysicalActivity, SleepEntry } from './index';
 
 export interface CalendarDay {
   date: string;
@@ -7,8 +7,9 @@ export interface CalendarDay {
     nutrition?: MacroEntry[];
     wellness?: (StressEntry | BodyFeeling | WellnessSurvey)[];
     activity?: PhysicalActivity[];
+    sleep?: SleepEntry[];
   };
 }
 
-export type LogCategory = 'workouts' | 'nutrition' | 'wellness' | 'activity' | 'all';
+export type LogCategory = 'workouts' | 'nutrition' | 'wellness' | 'activity' | 'sleep' | 'all';
 

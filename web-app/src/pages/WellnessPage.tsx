@@ -3,13 +3,15 @@ import { useSearchParams } from "react-router-dom";
 import StressSection from "../components/wellness/StressSection";
 import BodyFeelingsSection from "../components/wellness/BodyFeelingsSection";
 import WellnessSurveySection from "../components/wellness/WellnessSurveySection";
+import SleepSection from "../components/wellness/SleepSection";
 import {
   MdPsychology,
   MdSentimentSatisfied,
   MdAssessment,
+  MdBedtime,
 } from "react-icons/md";
 
-type TabType = "stress" | "body" | "survey";
+type TabType = "stress" | "body" | "survey" | "sleep";
 
 export default function WellnessPage() {
   const [searchParams] = useSearchParams();
@@ -18,7 +20,7 @@ export default function WellnessPage() {
   useEffect(() => {
     const tabParam = searchParams.get('tab');
     
-    if (tabParam && ['stress', 'body', 'survey'].includes(tabParam)) {
+    if (tabParam && ['stress', 'body', 'survey', 'sleep'].includes(tabParam)) {
       setActiveTab(tabParam as TabType);
     }
   }, [searchParams]);
@@ -31,6 +33,7 @@ export default function WellnessPage() {
       icon: MdSentimentSatisfied,
     },
     { id: "survey" as TabType, label: "Survey", icon: MdAssessment },
+    { id: "sleep" as TabType, label: "Sleep", icon: MdBedtime },
   ];
 
   return (
@@ -66,6 +69,7 @@ export default function WellnessPage() {
       {activeTab === "stress" && <StressSection editEntryId={searchParams.get('edit')} />}
       {activeTab === "body" && <BodyFeelingsSection editEntryId={searchParams.get('edit')} />}
       {activeTab === "survey" && <WellnessSurveySection editEntryId={searchParams.get('edit')} />}
+      {activeTab === "sleep" && <SleepSection editEntryId={searchParams.get('edit')} />}
     </div>
   );
 }

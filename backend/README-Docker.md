@@ -49,3 +49,6 @@ Set these in your `.env` file or as environment variables:
 - For production, you may want to use environment variables instead of mounting files
 - The Dockerfile uses Python 3.11 slim image for smaller size
 
+
+
+

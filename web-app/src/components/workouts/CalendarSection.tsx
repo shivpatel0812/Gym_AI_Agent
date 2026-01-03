@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../../lib/api-client';
 import { CalendarDay, LogCategory } from '../../types/calendar';
-import { WorkoutSession, MacroEntry, StressEntry, BodyFeeling, WellnessSurvey, PhysicalActivity } from '../../types';
+import { WorkoutSession, MacroEntry, StressEntry, BodyFeeling, WellnessSurvey, PhysicalActivity, SleepEntry } from '../../types';
 import { MdChevronLeft, MdChevronRight, MdFilterList, MdClose, MdEdit } from 'react-icons/md';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
@@ -44,13 +44,14 @@ export default function CalendarSection({}: CalendarSectionProps) {
       const startDate = new Date(year, month, 1).toISOString().split('T')[0];
       const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
 
-      const [workoutsRes, nutritionRes, stressRes, bodyFeelingsRes, surveysRes, activitiesRes] = await Promise.all([
+      const [workoutsRes, nutritionRes, stressRes, bodyFeelingsRes, surveysRes, activitiesRes, sleepRes] = await Promise.all([
         apiClient.get('/api/workout-sessions'),
         apiClient.get('/api/macros'),
         apiClient.get('/api/stress'),
         apiClient.get('/api/body-feelings'),
         apiClient.get('/api/wellness-survey'),
         apiClient.get('/api/physical-activities'),
+        apiClient.get('/api/sleep'),
       ]);
 
       const dataMap = new Map<string, CalendarDay>();
@@ -102,6 +103,12 @@ export default function CalendarSection({}: CalendarSectionProps) {
         }
       });
 
+      sleepRes.data.forEach((entry: SleepEntry) => {
+        if (entry.date >= startDate && entry.date <= endDate) {
+          addToMap(entry.date, 'sleep', entry);
+        }
+      });
+
       setCalendarData(dataMap);
     } catch (error) {
       console.error('Error fetching calendar data:', error);
@@ -118,7 +125,7 @@ export default function CalendarSection({}: CalendarSectionProps) {
 
     if (category === 'all') {
       return !!(day.logs.workouts?.length || day.logs.nutrition?.length || 
-                day.logs.wellness?.length || day.logs.activity?.length);
+                day.logs.wellness?.length || day.logs.activity?.length || day.logs.sleep?.length);
     }
 
     return !!(day.logs[category]?.length);
@@ -133,6 +140,7 @@ export default function CalendarSection({}: CalendarSectionProps) {
     if (day.logs.nutrition?.length) indicators.push('nutrition');
     if (day.logs.wellness?.length) indicators.push('wellness');
     if (day.logs.activity?.length) indicators.push('activity');
+    if (day.logs.sleep?.length) indicators.push('sleep');
     return indicators;
   };
 
@@ -226,6 +234,7 @@ export default function CalendarSection({}: CalendarSectionProps) {
                 <option value="nutrition">Nutrition</option>
                 <option value="wellness">Wellness</option>
                 <option value="activity">Activity</option>
+                <option value="sleep">Sleep</option>
               </select>
             </div>
           </div>
@@ -249,6 +258,10 @@ export default function CalendarSection({}: CalendarSectionProps) {
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-[#F59E0B]"></div>
           <span className="text-white">Activity</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-[#9333EA]"></div>
+          <span className="text-white">Sleep</span>
         </div>
       </div>
 
@@ -301,6 +314,9 @@ export default function CalendarSection({}: CalendarSectionProps) {
                   )}
                   {indicators.includes('activity') && (
                     <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B]" />
+                  )}
+                  {indicators.includes('sleep') && (
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#9333EA]" />
                   )}
                 </div>
               )}
@@ -356,6 +372,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
         'body-feelings': '/api/body-feelings',
         'wellness-survey': '/api/wellness-survey',
         'physical-activities': '/api/physical-activities',
+        sleep: '/api/sleep',
       };
 
       const endpoint = endpoints[category];
@@ -393,6 +410,11 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
     onClose();
   };
 
+  const handleEditSleep = (sleepId: string) => {
+    navigate(`/wellness?tab=sleep&edit=${sleepId}`);
+    onClose();
+  };
+
   if (isMobile) {
     return (
       <div className="fixed inset-0 bg-black/50 z-50 flex items-end p-0">
@@ -403,10 +425,11 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
               <p className="text-xs text-[#9CA3AF] mt-1">
                 {dayData ? (
                   <>
-                    {dayData.logs.workouts?.length || 0} workouts,{' '}
-                    {dayData.logs.nutrition?.length || 0} nutrition,{' '}
-                    {dayData.logs.wellness?.length || 0} wellness,{' '}
-                    {dayData.logs.activity?.length || 0} activities
+                  {dayData.logs.workouts?.length || 0} workouts,{' '}
+                  {dayData.logs.nutrition?.length || 0} nutrition,{' '}
+                  {dayData.logs.wellness?.length || 0} wellness,{' '}
+                  {dayData.logs.activity?.length || 0} activities,{' '}
+                  {dayData.logs.sleep?.length || 0} sleep
                   </>
                 ) : (
                   'No logs'
@@ -421,7 +444,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
             </button>
           </div>
           {!dayData || (!dayData.logs.workouts?.length && !dayData.logs.nutrition?.length && 
-            !dayData.logs.wellness?.length && !dayData.logs.activity?.length) ? (
+            !dayData.logs.wellness?.length && !dayData.logs.activity?.length && !dayData.logs.sleep?.length) ? (
             <div className="text-center py-8">
               <p className="text-[#9CA3AF] mb-4">No logs for this date</p>
             </div>
@@ -599,6 +622,45 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                   </div>
                 </div>
               )}
+              {dayData.logs.sleep && dayData.logs.sleep.length > 0 && (
+                <div>
+                  <h4 className="text-base font-semibold text-white mb-2 flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-[#9333EA]"></div>
+                    Sleep
+                  </h4>
+                  <div className="space-y-2">
+                    {dayData.logs.sleep.map((entry: SleepEntry) => (
+                      <Card key={entry.id} className="p-3">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 text-sm">
+                            <h5 className="font-semibold text-white text-xs mb-1">
+                              {entry.hours_slept}h sleep
+                            </h5>
+                            {entry.quality && (
+                              <p className="text-xs text-[#9CA3AF]">Quality: {entry.quality}/10</p>
+                            )}
+                          </div>
+                          <div className="flex gap-2 ml-2">
+                            <button
+                              onClick={() => handleEditSleep(entry.id!)}
+                              className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                              title="Edit sleep"
+                            >
+                              <MdEdit size={16} />
+                            </button>
+                            <button
+                              onClick={() => handleDelete('sleep', entry.id!)}
+                              className="text-[#EF4444] text-xs"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </Card>
@@ -618,7 +680,8 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                   {dayData.logs.workouts?.length || 0} workouts,{' '}
                   {dayData.logs.nutrition?.length || 0} nutrition logs,{' '}
                   {dayData.logs.wellness?.length || 0} wellness entries,{' '}
-                  {dayData.logs.activity?.length || 0} activities
+                  {dayData.logs.activity?.length || 0} activities,{' '}
+                  {dayData.logs.sleep?.length || 0} sleep entries
                 </>
               ) : (
                 'No logs for this date'
@@ -634,7 +697,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
         </div>
 
         {!dayData || (!dayData.logs.workouts?.length && !dayData.logs.nutrition?.length && 
-          !dayData.logs.wellness?.length && !dayData.logs.activity?.length) ? (
+          !dayData.logs.wellness?.length && !dayData.logs.activity?.length && !dayData.logs.sleep?.length) ? (
           <div className="text-center py-12">
             <p className="text-[#9CA3AF] mb-4">No logs for this date</p>
             <div className="flex gap-2 justify-center">
@@ -839,6 +902,55 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                         </div>
                       </Card>
                     ))}
+                </div>
+              </div>
+            )}
+
+            {dayData.logs.sleep && dayData.logs.sleep.length > 0 && (
+              <div>
+                <h4 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-[#9333EA]"></div>
+                  Sleep ({dayData.logs.sleep.length})
+                </h4>
+                <div className="space-y-3">
+                  {dayData.logs.sleep.map((entry: SleepEntry) => (
+                    <Card key={entry.id} className="p-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <h5 className="font-semibold text-white mb-1">
+                            {entry.hours_slept} hours
+                          </h5>
+                          {entry.quality && (
+                            <p className="text-sm text-[#9CA3AF]">Quality: {entry.quality}/10</p>
+                          )}
+                          {entry.bedtime && entry.wake_time && (
+                            <p className="text-sm text-[#9CA3AF]">
+                              {entry.bedtime} - {entry.wake_time}
+                            </p>
+                          )}
+                          {entry.notes && (
+                            <p className="text-sm text-[#9CA3AF] mt-2">{entry.notes}</p>
+                          )}
+                        </div>
+                        <div className="flex gap-2 ml-4">
+                          <button
+                            onClick={() => handleEditSleep(entry.id!)}
+                            className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                            title="Edit sleep"
+                          >
+                            <MdEdit size={20} />
+                          </button>
+                          <button
+                            onClick={() => handleDelete('sleep', entry.id!)}
+                            className="text-[#EF4444] hover:text-[#DC2626] transition-colors"
+                            title="Delete sleep"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
                 </div>
               </div>
             )}

@@ -73,3 +73,12 @@ class WellnessSurvey(BaseModel):
     sleep_quality: Optional[int] = None
     mood: Optional[int] = None
 
+class SleepEntry(BaseModel):
+    id: Optional[str] = None
+    date: str
+    hours_slept: float
+    quality: Optional[int] = None
+    bedtime: Optional[str] = None
+    wake_time: Optional[str] = None
+    notes: Optional[str] = None
+
