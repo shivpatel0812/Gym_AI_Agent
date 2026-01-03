@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../../lib/api-client';
 import { CalendarDay, LogCategory } from '../../types/calendar';
-import { WorkoutSession, MacroEntry, StressEntry, BodyFeeling, WellnessSurvey, PhysicalActivity, SleepEntry } from '../../types';
+import { WorkoutSession, MacroEntry, StressEntry, BodyFeeling, WellnessSurvey, PhysicalActivity, SleepEntry, HydrationEntry } from '../../types';
 import { MdChevronLeft, MdChevronRight, MdFilterList, MdClose, MdEdit } from 'react-icons/md';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
@@ -44,7 +44,7 @@ export default function CalendarSection({}: CalendarSectionProps) {
       const startDate = new Date(year, month, 1).toISOString().split('T')[0];
       const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
 
-      const [workoutsRes, nutritionRes, stressRes, bodyFeelingsRes, surveysRes, activitiesRes, sleepRes] = await Promise.all([
+      const [workoutsRes, nutritionRes, stressRes, bodyFeelingsRes, surveysRes, activitiesRes, sleepRes, hydrationRes] = await Promise.all([
         apiClient.get('/api/workout-sessions'),
         apiClient.get('/api/macros'),
         apiClient.get('/api/stress'),
@@ -52,6 +52,7 @@ export default function CalendarSection({}: CalendarSectionProps) {
         apiClient.get('/api/wellness-survey'),
         apiClient.get('/api/physical-activities'),
         apiClient.get('/api/sleep'),
+        apiClient.get('/api/hydration'),
       ]);
 
       const dataMap = new Map<string, CalendarDay>();
@@ -109,6 +110,12 @@ export default function CalendarSection({}: CalendarSectionProps) {
         }
       });
 
+      hydrationRes.data.forEach((entry: HydrationEntry) => {
+        if (entry.date >= startDate && entry.date <= endDate) {
+          addToMap(entry.date, 'hydration', entry);
+        }
+      });
+
       setCalendarData(dataMap);
     } catch (error) {
       console.error('Error fetching calendar data:', error);
@@ -125,7 +132,7 @@ export default function CalendarSection({}: CalendarSectionProps) {
 
     if (category === 'all') {
       return !!(day.logs.workouts?.length || day.logs.nutrition?.length || 
-                day.logs.wellness?.length || day.logs.activity?.length || day.logs.sleep?.length);
+                day.logs.wellness?.length || day.logs.activity?.length || day.logs.sleep?.length || day.logs.hydration?.length);
     }
 
     return !!(day.logs[category]?.length);
@@ -141,6 +148,7 @@ export default function CalendarSection({}: CalendarSectionProps) {
     if (day.logs.wellness?.length) indicators.push('wellness');
     if (day.logs.activity?.length) indicators.push('activity');
     if (day.logs.sleep?.length) indicators.push('sleep');
+    if (day.logs.hydration?.length) indicators.push('hydration');
     return indicators;
   };
 
@@ -235,6 +243,7 @@ export default function CalendarSection({}: CalendarSectionProps) {
                 <option value="wellness">Wellness</option>
                 <option value="activity">Activity</option>
                 <option value="sleep">Sleep</option>
+                <option value="hydration">Hydration</option>
               </select>
             </div>
           </div>
@@ -262,6 +271,10 @@ export default function CalendarSection({}: CalendarSectionProps) {
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-[#9333EA]"></div>
           <span className="text-white">Sleep</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-[#3B82F6]"></div>
+          <span className="text-white">Hydration</span>
         </div>
       </div>
 
@@ -318,6 +331,9 @@ export default function CalendarSection({}: CalendarSectionProps) {
                   {indicators.includes('sleep') && (
                     <div className="w-1.5 h-1.5 rounded-full bg-[#9333EA]" />
                   )}
+                  {indicators.includes('hydration') && (
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#3B82F6]" />
+                  )}
                 </div>
               )}
             </button>
@@ -373,6 +389,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
         'wellness-survey': '/api/wellness-survey',
         'physical-activities': '/api/physical-activities',
         sleep: '/api/sleep',
+        hydration: '/api/hydration',
       };
 
       const endpoint = endpoints[category];
@@ -415,6 +432,11 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
     onClose();
   };
 
+  const handleEditHydration = (hydrationId: string) => {
+    navigate(`/nutrition?tab=hydration&edit=${hydrationId}`);
+    onClose();
+  };
+
   if (isMobile) {
     return (
       <div className="fixed inset-0 bg-black/50 z-50 flex items-end p-0">
@@ -429,7 +451,8 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                   {dayData.logs.nutrition?.length || 0} nutrition,{' '}
                   {dayData.logs.wellness?.length || 0} wellness,{' '}
                   {dayData.logs.activity?.length || 0} activities,{' '}
-                  {dayData.logs.sleep?.length || 0} sleep
+                  {dayData.logs.sleep?.length || 0} sleep,{' '}
+                  {dayData.logs.hydration?.length || 0} hydration
                   </>
                 ) : (
                   'No logs'
@@ -444,7 +467,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
             </button>
           </div>
           {!dayData || (!dayData.logs.workouts?.length && !dayData.logs.nutrition?.length && 
-            !dayData.logs.wellness?.length && !dayData.logs.activity?.length && !dayData.logs.sleep?.length) ? (
+            !dayData.logs.wellness?.length && !dayData.logs.activity?.length && !dayData.logs.sleep?.length && !dayData.logs.hydration?.length) ? (
             <div className="text-center py-8">
               <p className="text-[#9CA3AF] mb-4">No logs for this date</p>
             </div>
@@ -681,7 +704,8 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                   {dayData.logs.nutrition?.length || 0} nutrition logs,{' '}
                   {dayData.logs.wellness?.length || 0} wellness entries,{' '}
                   {dayData.logs.activity?.length || 0} activities,{' '}
-                  {dayData.logs.sleep?.length || 0} sleep entries
+                  {dayData.logs.sleep?.length || 0} sleep entries,{' '}
+                  {dayData.logs.hydration?.length || 0} hydration entries
                 </>
               ) : (
                 'No logs for this date'
@@ -697,7 +721,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
         </div>
 
         {!dayData || (!dayData.logs.workouts?.length && !dayData.logs.nutrition?.length && 
-          !dayData.logs.wellness?.length && !dayData.logs.activity?.length && !dayData.logs.sleep?.length) ? (
+          !dayData.logs.wellness?.length && !dayData.logs.activity?.length && !dayData.logs.sleep?.length && !dayData.logs.hydration?.length) ? (
           <div className="text-center py-12">
             <p className="text-[#9CA3AF] mb-4">No logs for this date</p>
             <div className="flex gap-2 justify-center">
@@ -944,6 +968,47 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                             onClick={() => handleDelete('sleep', entry.id!)}
                             className="text-[#EF4444] hover:text-[#DC2626] transition-colors"
                             title="Delete sleep"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {dayData.logs.hydration && dayData.logs.hydration.length > 0 && (
+              <div>
+                <h4 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-[#3B82F6]"></div>
+                  Hydration ({dayData.logs.hydration.length})
+                </h4>
+                <div className="space-y-3">
+                  {dayData.logs.hydration.map((entry: HydrationEntry) => (
+                    <Card key={entry.id} className="p-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <h5 className="font-semibold text-white mb-1">
+                            {entry.amount_ml >= 1000 ? `${(entry.amount_ml / 1000).toFixed(1)}L` : `${entry.amount_ml}ml`}
+                          </h5>
+                          {entry.notes && (
+                            <p className="text-sm text-[#9CA3AF] mt-2">{entry.notes}</p>
+                          )}
+                        </div>
+                        <div className="flex gap-2 ml-4">
+                          <button
+                            onClick={() => handleEditHydration(entry.id!)}
+                            className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                            title="Edit hydration"
+                          >
+                            <MdEdit size={20} />
+                          </button>
+                          <button
+                            onClick={() => handleDelete('hydration', entry.id!)}
+                            className="text-[#EF4444] hover:text-[#DC2626] transition-colors"
+                            title="Delete hydration"
                           >
                             Delete
                           </button>

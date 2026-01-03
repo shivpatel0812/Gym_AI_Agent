@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
-from routers import exercises, splits, workout_sessions, physical_activities, macros, stress, body_feelings, wellness_survey, sleep
+from routers import exercises, splits, workout_sessions, physical_activities, macros, stress, body_feelings, wellness_survey, sleep, hydration
 import db
 
 load_dotenv()
@@ -27,6 +27,7 @@ app.include_router(stress.router)
 app.include_router(body_feelings.router)
 app.include_router(wellness_survey.router)
 app.include_router(sleep.router)
+app.include_router(hydration.router)
 
 @app.get("/")
 async def root():

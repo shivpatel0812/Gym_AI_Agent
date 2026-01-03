@@ -112,6 +112,13 @@ export interface SleepEntry {
   notes?: string;
 }
 
+export interface HydrationEntry {
+  id?: string;
+  date: string;
+  amount_ml: number;
+  notes?: string;
+}
+
 // Dashboard stats
 export interface DashboardStats {
   workouts: number;
