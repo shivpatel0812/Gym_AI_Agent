@@ -39,8 +39,19 @@ class FitnessAICoach:
 
     def _build_general_analysis_prompt(self, summary: Dict[str, Any], previous_analyses: Optional[List[str]] = None) -> str:
         """Build structured prompt for General Analysis with optional previous months' context."""
-        profile_json = json.dumps(self.user_profile, indent=2, default=str)
-        summary_json = json.dumps(summary, indent=2, default=str)
+        try:
+            profile_json = json.dumps(self.user_profile, indent=2, default=str)
+            if not profile_json or not profile_json.strip():
+                profile_json = "{}"
+        except Exception:
+            profile_json = "{}"
+        
+        try:
+            summary_json = json.dumps(summary, indent=2, default=str)
+            if not summary_json or not summary_json.strip():
+                summary_json = "{}"
+        except Exception:
+            summary_json = "{}"
         
         prompt = f"""You are an expert fitness coach providing a personalized monthly review.
 
@@ -50,18 +61,20 @@ USER PROFILE:
 
         # Add previous months' analyses as context if provided
         if previous_analyses and len(previous_analyses) > 0:
-            if len(previous_analyses) == 1:
-                prompt += f"""
+            valid_analyses = [str(a).strip() for a in previous_analyses if a and str(a).strip()]
+            if valid_analyses:
+                if len(valid_analyses) == 1:
+                    prompt += f"""
 PREVIOUS MONTH'S ANALYSIS (for context and comparison):
-{previous_analyses[0]}
+{valid_analyses[0]}
 
 """
-            else:
-                prompt += f"""
+                else:
+                    prompt += f"""
 PREVIOUS MONTHS' ANALYSES (in chronological order, for context and trend analysis):
 """
-                for i, analysis in enumerate(previous_analyses, 1):
-                    prompt += f"""
+                    for i, analysis in enumerate(valid_analyses, 1):
+                        prompt += f"""
 --- Month {i} ---
 {analysis}
 
@@ -69,6 +82,7 @@ PREVIOUS MONTHS' ANALYSES (in chronological order, for context and trend analysi
 
         prompt += f"""CURRENT MONTH DATA:
 {summary_json}
+
 
 Provide a structured analysis covering these sections:
 
@@ -127,6 +141,9 @@ GUIDELINES:
         prompt += """
 Format your response with clear section headers."""
 
+        if not prompt or not prompt.strip():
+            return "You are an expert fitness coach. Provide a comprehensive monthly fitness analysis."
+        
         return prompt
 
     def generate_general_analysis(self, summary: Dict[str, Any], previous_analyses: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -163,18 +180,27 @@ Format your response with clear section headers."""
                     "error": "Prompt is not a valid string"
                 }
             
+            messages = [
+                {
+                    "role": "system",
+                    "content": system_content
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+            
+            for msg in messages:
+                if not isinstance(msg.get("content"), str) or not msg["content"].strip():
+                    return {
+                        "status": "error",
+                        "error": f"Message content is invalid: {msg.get('role')}"
+                    }
+            
             response = self.client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_content
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
+                messages=messages,
                 temperature=0.7,
                 max_tokens=1500
             )
