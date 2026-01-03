@@ -39,10 +39,13 @@ class FitnessAICoach:
 
     def _build_general_analysis_prompt(self, summary: Dict[str, Any], previous_analyses: Optional[List[str]] = None) -> str:
         """Build structured prompt for General Analysis with optional previous months' context."""
+        profile_json = json.dumps(self.user_profile, indent=2, default=str)
+        summary_json = json.dumps(summary, indent=2, default=str)
+        
         prompt = f"""You are an expert fitness coach providing a personalized monthly review.
 
 USER PROFILE:
-{json.dumps(self.user_profile, indent=2)}
+{profile_json}
 """
 
         # Add previous months' analyses as context if provided
@@ -65,7 +68,7 @@ PREVIOUS MONTHS' ANALYSES (in chronological order, for context and trend analysi
 """
 
         prompt += f"""CURRENT MONTH DATA:
-{json.dumps(summary, indent=2)}
+{summary_json}
 
 Provide a structured analysis covering these sections:
 
@@ -137,15 +140,35 @@ Format your response with clear section headers."""
         Returns:
             Dict containing analysis status, text, tokens used, etc.
         """
+        if previous_analyses:
+            previous_analyses = [str(analysis) for analysis in previous_analyses if analysis and str(analysis).strip()]
+        
         prompt = self._build_general_analysis_prompt(summary, previous_analyses)
+        
+        if not prompt or not prompt.strip():
+            return {
+                "status": "error",
+                "error": "Generated prompt is empty"
+            }
 
         try:
+            system_content = "You are an expert fitness coach providing personalized, data-driven insights. You are direct, supportive, and focused on long-term sustainable progress."
+            
+            if not isinstance(system_content, str) or not system_content.strip():
+                system_content = "You are an expert fitness coach."
+            
+            if not isinstance(prompt, str) or not prompt.strip():
+                return {
+                    "status": "error",
+                    "error": "Prompt is not a valid string"
+                }
+            
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert fitness coach providing personalized, data-driven insights. You are direct, supportive, and focused on long-term sustainable progress."
+                        "content": system_content
                     },
                     {
                         "role": "user",

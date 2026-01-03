@@ -6,6 +6,12 @@ Converts UserProfile data from Firestore into AI-friendly format.
 from typing import Dict, Any, Optional, List
 
 
+def safe_str(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 def transform_user_profile(profile_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Transform UserProfile from Firestore into format suitable for AI analysis.
@@ -17,7 +23,6 @@ def transform_user_profile(profile_data: Optional[Dict[str, Any]]) -> Dict[str, 
         Transformed profile data for AI prompts
     """
     if not profile_data:
-        # Return default profile if no user profile exists
         return {
             "goal": "Get strong and build muscle",
             "priority": "Long-term consistency over short-term aesthetics",
@@ -56,12 +61,11 @@ def transform_user_profile(profile_data: Optional[Dict[str, Any]]) -> Dict[str, 
     # Goals
     goal_parts = []
     primary_goal = profile_data.get('primary_goal')
-
-    # Handle both short predefined options and longer custom text paragraphs
+    
     if primary_goal:
-        # If it's a longer text (paragraph), include it as-is
-        # If it's a short predefined option, include it normally
-        goal_parts.append(primary_goal)
+        primary_goal_str = safe_str(primary_goal)
+        if primary_goal_str:
+            goal_parts.append(primary_goal_str)
 
     # Check for custom primary goal text field (if exists)
     primary_goal_custom = profile_data.get('primary_goal_custom') or profile_data.get('primary_goal_text')
@@ -71,7 +75,9 @@ def transform_user_profile(profile_data: Optional[Dict[str, Any]]) -> Dict[str, 
     if profile_data.get('secondary_goals'):
         secondary = profile_data['secondary_goals']
         if isinstance(secondary, list) and secondary:
-            goal_parts.append(f"Also: {', '.join(secondary)}")
+            secondary_str = [safe_str(s) for s in secondary if safe_str(s)]
+            if secondary_str:
+                goal_parts.append(f"Also: {', '.join(secondary_str)}")
 
     profile['goal'] = ' | '.join(goal_parts) if goal_parts else "Get strong and build muscle"
 
@@ -127,7 +133,9 @@ def transform_user_profile(profile_data: Optional[Dict[str, Any]]) -> Dict[str, 
     if profile_data.get('training_history_style'):
         styles = profile_data['training_history_style']
         if isinstance(styles, list):
-            training_style_parts.append(f"Experience with: {', '.join(styles)}")
+            styles_str = [safe_str(s) for s in styles if safe_str(s)]
+            if styles_str:
+                training_style_parts.append(f"Experience with: {', '.join(styles_str)}")
 
     if profile_data.get('training_history_notes'):
         training_style_parts.append(profile_data['training_history_notes'])
