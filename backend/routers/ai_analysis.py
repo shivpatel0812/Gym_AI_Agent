@@ -88,6 +88,46 @@ async def generate_ai_analysis(
 
         # Get user profile for personalized analysis
         user_profile = get_user_profile_for_ai(db, user_id)
+        
+        # Check if user profile is set up (not just defaults)
+        try:
+            profile_doc_ref = db.collection("users").document(user_id).collection("user_profile").document("profile")
+            profile_doc = profile_doc_ref.get()
+            
+            if not profile_doc.exists:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Please complete your 'About Myself' profile before generating analysis. This helps provide personalized insights."
+                )
+            
+            profile_data = profile_doc.to_dict()
+            if not profile_data:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Please complete your 'About Myself' profile before generating analysis. This helps provide personalized insights."
+                )
+            
+            # Check if profile has at least some basic info filled out
+            has_profile_data = any([
+                profile_data.get('primary_goal'),
+                profile_data.get('experience_level'),
+                profile_data.get('preferred_workout_frequency'),
+                profile_data.get('open_reflection')
+            ])
+            
+            if not has_profile_data:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Please complete your 'About Myself' profile with at least your fitness goals and preferences before generating analysis."
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Error checking profile: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail="Please complete your 'About Myself' profile before generating analysis."
+            )
 
         # Get previous analyses if requested
         previous_analyses = []

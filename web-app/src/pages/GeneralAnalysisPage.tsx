@@ -53,7 +53,8 @@ export default function GeneralAnalysisPage() {
       alert("Analysis generated successfully!");
     } catch (error: any) {
       console.error("Error generating analysis:", error);
-      alert(error.response?.data?.detail || "Error generating analysis");
+      const errorMessage = error.response?.data?.detail || error.response?.data?.message || error.message || "Error generating analysis";
+      alert(errorMessage);
     } finally {
       setGenerating(false);
     }
