@@ -75,13 +75,19 @@ async def generate_ai_analysis(
         # Get previous analyses if requested
         previous_analyses = []
         if request.include_previous_months:
-            analyses_ref = db.collection("users").document(user_id).collection("ai_analyses")
-            analyses_docs = analyses_ref.where("year", "==", request.year).where("month", "<", request.month).order_by("month").stream()
+            try:
+                analyses_ref = db.collection("users").document(user_id).collection("ai_analyses")
+                analyses_docs = analyses_ref.where("year", "==", request.year).where("month", "<", request.month).order_by("month").stream()
 
-            for doc in analyses_docs:
-                doc_data = doc.to_dict()
-                if doc_data.get("status") == "success" and doc_data.get("analysis"):
-                    previous_analyses.append(doc_data["analysis"])
+                for doc in analyses_docs:
+                    doc_data = doc.to_dict()
+                    if doc_data.get("status") == "success" and doc_data.get("analysis"):
+                        analysis_text = str(doc_data["analysis"]).strip()
+                        if analysis_text:
+                            previous_analyses.append(analysis_text)
+            except Exception as e:
+                print(f"Warning: Could not fetch previous analyses: {e}")
+                previous_analyses = []
 
         # Initialize AI Coach with user's actual profile
         coach = FitnessAICoach(api_key=openai_api_key, user_profile=user_profile)
@@ -140,11 +146,19 @@ async def get_all_analyses(
         analyses_ref = db.collection("users").document(user_id).collection("ai_analyses")
 
         if year:
-            query = analyses_ref.where("year", "==", year).order_by("month", direction="DESCENDING").limit(limit)
+            try:
+                query = analyses_ref.where("year", "==", year).order_by("month", direction="DESCENDING").limit(limit)
+                docs = query.stream()
+            except Exception as index_error:
+                query = analyses_ref.where("year", "==", year).limit(limit)
+                docs = query.stream()
         else:
-            query = analyses_ref.order_by("created_at", direction="DESCENDING").limit(limit)
-
-        docs = query.stream()
+            try:
+                query = analyses_ref.order_by("created_at", direction="DESCENDING").limit(limit)
+                docs = query.stream()
+            except Exception:
+                query = analyses_ref.limit(limit)
+                docs = query.stream()
 
         analyses = []
         for doc in docs:
@@ -159,6 +173,9 @@ async def get_all_analyses(
                 "created_at": data.get("created_at"),
                 "status": data.get("status")
             })
+        
+        if year:
+            analyses.sort(key=lambda x: x.get("month", 0), reverse=True)
 
         return {
             "status": "success",
