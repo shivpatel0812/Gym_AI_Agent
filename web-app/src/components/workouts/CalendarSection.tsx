@@ -684,6 +684,45 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                   </div>
                 </div>
               )}
+              {dayData.logs.hydration && dayData.logs.hydration.length > 0 && (
+                <div>
+                  <h4 className="text-base font-semibold text-white mb-2 flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-[#3B82F6]"></div>
+                    Hydration
+                  </h4>
+                  <div className="space-y-2">
+                    {dayData.logs.hydration.map((entry: HydrationEntry) => (
+                      <Card key={entry.id} className="p-3">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 text-sm">
+                            <h5 className="font-semibold text-white text-xs mb-1">
+                              {entry.amount_cups === 1 ? '1 cup' : `${entry.amount_cups} cups`}
+                            </h5>
+                            {entry.notes && (
+                              <p className="text-xs text-[#9CA3AF]">{entry.notes}</p>
+                            )}
+                          </div>
+                          <div className="flex gap-2 ml-2">
+                            <button
+                              onClick={() => handleEditHydration(entry.id!)}
+                              className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                              title="Edit hydration"
+                            >
+                              <MdEdit size={16} />
+                            </button>
+                            <button
+                              onClick={() => handleDelete('hydration', entry.id!)}
+                              className="text-[#EF4444] text-xs"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </Card>
@@ -991,7 +1030,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
                           <h5 className="font-semibold text-white mb-1">
-                            {entry.amount_ml >= 1000 ? `${(entry.amount_ml / 1000).toFixed(1)}L` : `${entry.amount_ml}ml`}
+                            {entry.amount_cups === 1 ? '1 cup' : `${entry.amount_cups} cups`}
                           </h5>
                           {entry.notes && (
                             <p className="text-sm text-[#9CA3AF] mt-2">{entry.notes}</p>

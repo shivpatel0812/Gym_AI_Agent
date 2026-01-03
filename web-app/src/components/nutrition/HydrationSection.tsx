@@ -18,7 +18,7 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [formData, setFormData] = useState<HydrationEntry>({
     date: new Date().toISOString().split('T')[0],
-    amount_ml: 0,
+    amount_cups: 0,
     notes: '',
   });
 
@@ -56,7 +56,7 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
       }
       setFormData({
         date: new Date().toISOString().split('T')[0],
-        amount_ml: 0,
+        amount_cups: 0,
         notes: '',
       });
       setEditingEntryId(null);
@@ -79,20 +79,20 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
   };
 
   const handleCancel = () => {
-    setFormData({
-      date: new Date().toISOString().split('T')[0],
-      amount_ml: 0,
-      notes: '',
-    });
-    setEditingEntryId(null);
-    setShowForm(false);
-  };
+      setFormData({
+        date: new Date().toISOString().split('T')[0],
+        amount_cups: 0,
+        notes: '',
+      });
+      setEditingEntryId(null);
+      setShowForm(false);
+    };
 
-  const formatAmount = (ml: number) => {
-    if (ml >= 1000) {
-      return `${(ml / 1000).toFixed(1)}L`;
+  const formatAmount = (cups: number) => {
+    if (cups === 1) {
+      return '1 cup';
     }
-    return `${ml}ml`;
+    return `${cups} cups`;
   };
 
   return (
@@ -128,13 +128,13 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
             />
 
             <Input
-              label="Amount (ml)"
+              label="Amount (cups)"
               type="number"
-              step="50"
+              step="0.25"
               min="0"
-              value={formData.amount_ml.toString()}
-              onChange={(e) => setFormData({ ...formData, amount_ml: parseFloat(e.target.value) || 0 })}
-              placeholder="e.g., 500"
+              value={formData.amount_cups.toString()}
+              onChange={(e) => setFormData({ ...formData, amount_cups: parseFloat(e.target.value) || 0 })}
+              placeholder="e.g., 2"
               required
             />
 
@@ -172,7 +172,7 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
                     <div className="flex items-center gap-2">
                       <MdWaterDrop className="text-[#3B82F6] text-2xl" />
                       <span className="text-2xl font-bold text-[#3B82F6]">
-                        {formatAmount(entry.amount_ml)}
+                        {formatAmount(entry.amount_cups)}
                       </span>
                     </div>
                   </div>

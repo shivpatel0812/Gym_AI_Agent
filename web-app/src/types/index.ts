@@ -115,7 +115,7 @@ export interface SleepEntry {
 export interface HydrationEntry {
   id?: string;
   date: string;
-  amount_ml: number;
+  amount_cups: number;
   notes?: string;
 }
 

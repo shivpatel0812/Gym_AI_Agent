@@ -85,6 +85,6 @@ class SleepEntry(BaseModel):
 class HydrationEntry(BaseModel):
     id: Optional[str] = None
     date: str
-    amount_ml: float
+    amount_cups: float
     notes: Optional[str] = None
 
