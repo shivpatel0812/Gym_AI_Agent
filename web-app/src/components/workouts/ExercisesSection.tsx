@@ -28,7 +28,9 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
   const [muscleGroups, setMuscleGroups] = useState<string[]>([]);
   const [muscleGroupSearch, setMuscleGroupSearch] = useState("");
   const [showMuscleGroupDropdown, setShowMuscleGroupDropdown] = useState(false);
+  const [showTypeDropdown, setShowTypeDropdown] = useState(false);
   const muscleGroupDropdownRef = useRef<HTMLDivElement>(null);
+  const typeDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchExercises();
@@ -42,16 +44,22 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
       ) {
         setShowMuscleGroupDropdown(false);
       }
+      if (
+        typeDropdownRef.current &&
+        !typeDropdownRef.current.contains(event.target as Node)
+      ) {
+        setShowTypeDropdown(false);
+      }
     };
 
-    if (showMuscleGroupDropdown) {
+    if (showMuscleGroupDropdown || showTypeDropdown) {
       document.addEventListener("mousedown", handleClickOutside);
     }
 
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
     };
-  }, [showMuscleGroupDropdown]);
+  }, [showMuscleGroupDropdown, showTypeDropdown]);
 
   const fetchExercises = async () => {
     try {
@@ -159,26 +167,26 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
   );
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-4 sm:space-y-6 lg:space-y-8">
       {/* Create Exercise Form */}
       {showForm && (
-        <div className="bg-[#1a2332] rounded-lg border border-[#2d3b4e] p-8">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-semibold text-white">
+        <div className="bg-[#1a2332] rounded-lg border border-[#2d3b4e] p-3 sm:p-5 lg:p-8 relative z-0 overflow-visible">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
+            <h2 className="text-lg sm:text-xl font-semibold text-white">
               Create Exercise
             </h2>
             <button
               onClick={() => setShowForm(false)}
-              className="text-sm font-medium text-gray-400 hover:text-white transition-colors"
+              className="text-xs sm:text-sm font-medium text-gray-400 hover:text-white transition-colors self-start sm:self-auto"
             >
               Hide Form
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-5">
             {/* Exercise Name */}
             <div>
-              <label className="block text-sm font-medium text-white mb-2">
+              <label className="block text-xs sm:text-sm font-medium text-white mb-1.5 sm:mb-2">
                 Exercise Name
               </label>
               <input
@@ -189,65 +197,105 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
                 }
                 placeholder="Enter exercise name"
                 required
-                className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-2 border-transparent text-white placeholder:text-gray-500 focus:outline-none focus:border-[#6366F1] transition-all"
+                className="w-full px-3 sm:px-4 py-2.5 sm:py-3 text-sm sm:text-base rounded-lg bg-[#2d3b4e] border-2 border-transparent text-white placeholder:text-gray-500 focus:outline-none focus:border-[#6366F1] transition-all"
               />
             </div>
 
             {/* Type */}
-            <div>
-              <label className="block text-sm font-medium text-white mb-2">
+            <div className="relative z-30" ref={typeDropdownRef}>
+              <label className="block text-xs sm:text-sm font-medium text-white mb-1.5 sm:mb-2">
                 Type
               </label>
               <div className="relative">
-                <select
-                  value={formData.type}
-                  onChange={(e) =>
-                    setFormData({ ...formData, type: e.target.value })
-                  }
-                  className="w-full px-4 py-3 pr-10 rounded-lg bg-[#2d3b4e] border-2 border-transparent text-gray-400 focus:outline-none focus:border-[#6366F1] appearance-none cursor-pointer transition-all"
-                  required
+                <button
+                  type="button"
+                  onClick={() => setShowTypeDropdown(!showTypeDropdown)}
+                  className="w-full px-3 sm:px-4 py-2.5 sm:py-3 pr-8 sm:pr-10 text-sm sm:text-base rounded-lg bg-[#2d3b4e] border-2 border-transparent text-left text-gray-400 focus:outline-none focus:border-[#6366F1] cursor-pointer transition-all relative z-10 flex items-center justify-between"
                 >
-                  <option value="" disabled>
-                    Select exercise type
-                  </option>
-                  <option value="strength">Strength</option>
-                  <option value="cardio">Cardio</option>
-                  <option value="custom">Custom</option>
-                </select>
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                  <MdKeyboardArrowDown className="text-gray-400 text-xl" />
-                </div>
+                  <span className={formData.type ? "text-white" : ""}>
+                    {formData.type
+                      ? formData.type.charAt(0).toUpperCase() +
+                        formData.type.slice(1)
+                      : "Select exercise type"}
+                  </span>
+                  <MdKeyboardArrowDown
+                    className={`text-gray-400 text-lg sm:text-xl flex-shrink-0 transition-transform ${
+                      showTypeDropdown ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
+                {showTypeDropdown && (
+                  <div className="absolute z-[100] w-full mt-1 bg-[#2d3b4e] border border-[#3d4d63] rounded-lg shadow-lg overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({ ...formData, type: "strength" });
+                        setShowTypeDropdown(false);
+                      }}
+                      className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-white hover:bg-[#3d4d63] transition-colors ${
+                        formData.type === "strength" ? "bg-[#6366F1]/20" : ""
+                      }`}
+                    >
+                      Strength
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({ ...formData, type: "cardio" });
+                        setShowTypeDropdown(false);
+                      }}
+                      className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-white hover:bg-[#3d4d63] transition-colors ${
+                        formData.type === "cardio" ? "bg-[#6366F1]/20" : ""
+                      }`}
+                    >
+                      Cardio
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({ ...formData, type: "custom" });
+                        setShowTypeDropdown(false);
+                      }}
+                      className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-white hover:bg-[#3d4d63] transition-colors ${
+                        formData.type === "custom" ? "bg-[#6366F1]/20" : ""
+                      }`}
+                    >
+                      Custom
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
             {/* Muscle Group */}
             <div>
-              <label className="block text-sm font-medium text-white mb-2">
+              <label className="block text-xs sm:text-sm font-medium text-white mb-1.5 sm:mb-2">
                 Muscle Group
               </label>
               {muscleGroups.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-3">
+                <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-2 sm:mb-3">
                   {muscleGroups.map((group, idx) => (
                     <span
                       key={idx}
-                      className="inline-flex items-center gap-2 px-4 py-1.5 rounded-lg bg-[#6366F1] text-white text-sm font-medium"
+                      className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1 sm:py-1.5 rounded-lg bg-[#6366F1] text-white text-xs sm:text-sm font-medium"
                     >
                       {group}
                       <button
                         type="button"
                         onClick={() => removeMuscleGroup(group)}
-                        className="hover:opacity-80 transition-opacity"
+                        className="hover:opacity-80 transition-opacity flex-shrink-0"
+                        aria-label={`Remove ${group}`}
                       >
-                        <MdClose size={16} />
+                        <MdClose size={14} className="sm:w-4 sm:h-4" />
                       </button>
                     </span>
                   ))}
                 </div>
               )}
-              <div className="relative" ref={muscleGroupDropdownRef}>
+              <div className="relative z-20" ref={muscleGroupDropdownRef}>
                 <div className="relative">
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
-                    <MdSearch size={18} />
+                  <div className="absolute left-2.5 sm:left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none z-10">
+                    <MdSearch size={16} className="sm:w-[18px] sm:h-[18px]" />
                   </div>
                   <input
                     type="text"
@@ -262,19 +310,19 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
                       }
                     }}
                     placeholder="Search and select muscle groups..."
-                    className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-[#2d3b4e] border-2 border-transparent text-white placeholder:text-gray-500 focus:outline-none focus:border-[#6366F1] transition-all"
+                    className="w-full pl-8 sm:pl-10 pr-3 sm:pr-4 py-2.5 text-sm sm:text-base rounded-lg bg-[#2d3b4e] border-2 border-transparent text-white placeholder:text-gray-500 focus:outline-none focus:border-[#6366F1] transition-all relative z-10"
                   />
                 </div>
                 {showMuscleGroupDropdown &&
                   muscleGroupSearch &&
                   filteredMuscleGroupOptions.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-[#2d3b4e] border border-[#3d4d63] rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                    <div className="absolute z-50 w-full mt-1 bg-[#2d3b4e] border border-[#3d4d63] rounded-lg shadow-lg max-h-48 sm:max-h-60 overflow-y-auto">
                       {filteredMuscleGroupOptions.map((option) => (
                         <button
                           key={option}
                           type="button"
                           onClick={() => handleMuscleGroupSelect(option)}
-                          className="w-full px-4 py-2 text-left text-white hover:bg-[#3d4d63] transition-colors first:rounded-t-lg last:rounded-b-lg"
+                          className="w-full px-3 sm:px-4 py-2 text-sm sm:text-base text-left text-white hover:bg-[#3d4d63] transition-colors first:rounded-t-lg last:rounded-b-lg"
                         >
                           {option}
                         </button>
@@ -284,8 +332,8 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
                 {showMuscleGroupDropdown &&
                   muscleGroupSearch &&
                   filteredMuscleGroupOptions.length === 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-[#2d3b4e] border border-[#3d4d63] rounded-lg shadow-lg p-4">
-                      <p className="text-gray-400 text-sm">
+                    <div className="absolute z-50 w-full mt-1 bg-[#2d3b4e] border border-[#3d4d63] rounded-lg shadow-lg p-3 sm:p-4">
+                      <p className="text-gray-400 text-xs sm:text-sm">
                         No matching muscle groups found
                       </p>
                     </div>
@@ -295,7 +343,7 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
 
             {/* Description */}
             <div>
-              <label className="block text-sm font-medium text-white mb-2">
+              <label className="block text-xs sm:text-sm font-medium text-white mb-1.5 sm:mb-2">
                 Description
               </label>
               <textarea
@@ -304,23 +352,23 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
                   setFormData({ ...formData, description: e.target.value })
                 }
                 placeholder="Exercise description..."
-                rows={4}
-                className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-2 border-transparent text-white placeholder:text-gray-500 focus:outline-none focus:border-[#6366F1] resize-none transition-all"
+                rows={3}
+                className="w-full px-3 sm:px-4 py-2.5 sm:py-3 text-sm sm:text-base rounded-lg bg-[#2d3b4e] border-2 border-transparent text-white placeholder:text-gray-500 focus:outline-none focus:border-[#6366F1] resize-none transition-all"
               />
             </div>
 
             {/* Form Buttons */}
-            <div className="flex gap-3 pt-2">
+            <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 pt-2 sm:pt-3">
               <button
                 type="submit"
-                className="px-6 py-3 rounded-lg bg-[#6366F1] text-white font-semibold hover:bg-[#5558E3] transition-all"
+                className="w-full sm:w-auto px-5 sm:px-6 py-2.5 sm:py-3 text-sm sm:text-base rounded-lg bg-[#6366F1] text-white font-semibold hover:bg-[#5558E3] transition-all active:scale-[0.98]"
               >
                 Create Exercise
               </button>
               <button
                 type="button"
                 onClick={handleCancel}
-                className="px-6 py-3 rounded-lg font-semibold text-white hover:bg-white/5 transition-all"
+                className="w-full sm:w-auto px-5 sm:px-6 py-2.5 sm:py-3 text-sm sm:text-base rounded-lg font-semibold text-white hover:bg-white/5 transition-all active:scale-[0.98]"
               >
                 Cancel
               </button>
@@ -331,10 +379,10 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
 
       {/* All Exercises Section */}
       <div>
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
           <h2 className="text-2xl font-bold text-white">All Exercises</h2>
-          <div className="flex items-center gap-4">
-            <div className="relative w-80">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
+            <div className="relative w-full sm:w-64 lg:w-80">
               <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
                 <MdSearch size={20} />
               </div>
@@ -349,7 +397,7 @@ export default function ExercisesSection({ onUpdate }: ExercisesSectionProps) {
             {!showForm && (
               <button
                 onClick={() => setShowForm(true)}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#6366F1] text-white font-semibold hover:bg-[#5558E3] transition-all"
+                className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-[#6366F1] text-white font-semibold hover:bg-[#5558E3] transition-all whitespace-nowrap"
               >
                 <MdAdd size={20} />
                 Create Exercise

@@ -87,7 +87,7 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
 
   return (
     <div>
-      <div className="flex justify-end mb-6">
+      <div className="flex justify-end mb-4 sm:mb-6">
         {!showForm && (
           <Button onClick={() => setShowForm(true)} icon={<MdAdd />}>
             Log Feeling
@@ -96,19 +96,19 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
       </div>
 
       {showForm && (
-        <Card className="mb-8 p-6 lg:p-8">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-[#F9FAFB]">
+        <Card className="mb-6 sm:mb-8 p-4 sm:p-5 lg:p-8">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
+            <h3 className="text-base sm:text-lg font-semibold text-[#F9FAFB]">
               {editingEntryId ? 'Edit Body Feeling' : 'Log Body Feeling'}
             </h3>
             <button
               onClick={handleCancel}
-              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors"
+              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors self-start sm:self-auto"
             >
-              <MdClose size={20} />
+              <MdClose size={18} className="sm:w-5 sm:h-5" />
             </button>
           </div>
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">
             <Input
               label="Date"
               type="date"
@@ -118,7 +118,7 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
             />
 
             <div>
-              <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+              <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
                 Description
               </label>
               <textarea
@@ -126,16 +126,16 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 placeholder="How does your body feel today?"
                 required
-                rows={4}
-                className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#6366F1] focus:border-transparent transition-all"
+                rows={3}
+                className="w-full px-3 sm:px-4 py-2.5 sm:py-3 text-sm sm:text-base rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#6366F1] focus:border-transparent transition-all resize-none"
               />
             </div>
 
-            <div className="flex gap-4 pt-4">
-              <Button type="submit" variant="primary">
+            <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-4 pt-3 sm:pt-4">
+              <Button type="submit" variant="primary" className="w-full sm:w-auto">
                 {editingEntryId ? 'Update' : 'Save'}
               </Button>
-              <Button type="button" variant="secondary" onClick={handleCancel}>
+              <Button type="button" variant="secondary" onClick={handleCancel} className="w-full sm:w-auto">
                 Cancel
               </Button>
             </div>

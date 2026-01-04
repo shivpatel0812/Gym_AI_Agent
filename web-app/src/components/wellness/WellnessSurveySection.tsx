@@ -108,7 +108,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
   return (
     <div>
-      <div className="flex justify-end mb-6">
+      <div className="flex justify-end mb-4 sm:mb-6">
         {!showForm && (
           <Button onClick={() => setShowForm(true)} icon={<MdAdd />}>
             Log Survey
@@ -117,19 +117,19 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
       </div>
 
       {showForm && (
-        <Card className="mb-8 p-6 lg:p-8">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-[#F9FAFB]">
+        <Card className="mb-6 sm:mb-8 p-4 sm:p-5 lg:p-8">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
+            <h3 className="text-base sm:text-lg font-semibold text-[#F9FAFB]">
               {editingEntryId ? 'Edit Wellness Survey' : 'Wellness Survey'}
             </h3>
             <button
               onClick={handleCancel}
-              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors"
+              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors self-start sm:self-auto"
             >
-              <MdClose size={20} />
+              <MdClose size={18} className="sm:w-5 sm:h-5" />
             </button>
           </div>
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">
             <Input
               label="Date"
               type="date"
@@ -140,7 +140,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
             {/* Fatigue (reverse scoring) */}
             <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
               Fatigue Level: {formData.fatigue_level}
             </label>
             <input
@@ -151,7 +151,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
               onChange={(e) => setFormData({ ...formData, fatigue_level: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-xs text-[#9CA3AF]">
+            <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
               <span>None (1)</span>
               <span>Extreme (10)</span>
             </div>
@@ -159,7 +159,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
             {/* Aches (reverse scoring) */}
             <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
               Body Aches: {formData.aches_level}
             </label>
             <input
@@ -170,7 +170,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
               onChange={(e) => setFormData({ ...formData, aches_level: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-xs text-[#9CA3AF]">
+            <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
               <span>None (1)</span>
               <span>Severe (10)</span>
             </div>
@@ -178,7 +178,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
             {/* Energy (normal scoring) */}
             <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
               Energy Level: {formData.energy_level}
             </label>
             <input
@@ -189,7 +189,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
               onChange={(e) => setFormData({ ...formData, energy_level: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-xs text-[#9CA3AF]">
+            <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
               <span>Low (1)</span>
               <span>High (10)</span>
             </div>
@@ -197,7 +197,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
             {/* Sleep Quality (normal scoring) */}
             <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
               Sleep Quality: {formData.sleep_quality}
             </label>
             <input
@@ -208,7 +208,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
               onChange={(e) => setFormData({ ...formData, sleep_quality: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-xs text-[#9CA3AF]">
+            <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
               <span>Poor (1)</span>
               <span>Excellent (10)</span>
             </div>
@@ -216,7 +216,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
             {/* Mood (normal scoring) */}
             <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
               Mood: {formData.mood}
             </label>
             <input
@@ -227,17 +227,17 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
               onChange={(e) => setFormData({ ...formData, mood: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-xs text-[#9CA3AF]">
+            <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
               <span>Low (1)</span>
               <span>High (10)</span>
             </div>
           </div>
 
-            <div className="flex gap-4 pt-4">
-              <Button type="submit" variant="primary">
+            <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-4 pt-3 sm:pt-4">
+              <Button type="submit" variant="primary" className="w-full sm:w-auto">
                 {editingEntryId ? 'Update' : 'Save'}
               </Button>
-              <Button type="button" variant="secondary" onClick={handleCancel}>
+              <Button type="button" variant="secondary" onClick={handleCancel} className="w-full sm:w-auto">
                 Cancel
               </Button>
             </div>

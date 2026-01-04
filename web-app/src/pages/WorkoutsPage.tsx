@@ -19,14 +19,14 @@ export default function WorkoutsPage() {
   useEffect(() => {
     fetchExercises();
     fetchSplits();
-    
-    const tabParam = searchParams.get('tab');
-    const editParam = searchParams.get('edit');
-    
-    if (tabParam && ['exercises', 'splits', 'sessions'].includes(tabParam)) {
+
+    const tabParam = searchParams.get("tab");
+    const editParam = searchParams.get("edit");
+
+    if (tabParam && ["exercises", "splits", "sessions"].includes(tabParam)) {
       setActiveTab(tabParam as TabType);
     }
-    
+
     if (editParam) {
       setEditSessionId(editParam);
     }
@@ -57,28 +57,78 @@ export default function WorkoutsPage() {
   ];
 
   return (
-    <div className="p-8 lg:p-12 max-w-[1600px] mx-auto">
-      <h1 className="text-4xl font-bold text-[#F9FAFB] mb-10">Workouts</h1>
+    <div className="p-4 sm:p-6 lg:p-12 max-w-[1600px] mx-auto">
+      <h1 className="text-3xl sm:text-4xl font-bold text-[#F9FAFB] mb-6 sm:mb-10">
+        Workouts
+      </h1>
 
-      <div className="flex gap-3 mb-8 bg-[#1A1F3A] p-2 rounded-xl border border-[#374151] w-fit">
-        {tabs.map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-all ${
-                isActive
-                  ? "bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white shadow-md"
-                  : "text-[#9CA3AF] hover:text-[#F9FAFB] hover:bg-[#374151]/30"
-              }`}
-            >
-              <Icon className="text-xl" />
-              <span className="font-semibold text-sm">{tab.label}</span>
-            </button>
-          );
-        })}
+      <div className="mb-6 sm:mb-8 bg-[#1A1F3A] p-2 rounded-xl border border-[#374151] w-full sm:w-fit">
+        {/* Mobile: 2x1 layout with Sessions centered */}
+        <div className="grid grid-cols-2 gap-2 sm:hidden">
+          {tabs
+            .filter((tab) => tab.id !== "sessions")
+            .map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg transition-all text-sm ${
+                    isActive
+                      ? "bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white shadow-md"
+                      : "text-[#9CA3AF] hover:text-[#F9FAFB] hover:bg-[#374151]/30"
+                  }`}
+                >
+                  <Icon className="text-lg" />
+                  <span className="font-semibold">{tab.label}</span>
+                </button>
+              );
+            })}
+        </div>
+        <div className="flex justify-center mt-2 sm:hidden">
+          {tabs
+            .filter((tab) => tab.id === "sessions")
+            .map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg transition-all text-sm ${
+                    isActive
+                      ? "bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white shadow-md"
+                      : "text-[#9CA3AF] hover:text-[#F9FAFB] hover:bg-[#374151]/30"
+                  }`}
+                >
+                  <Icon className="text-lg" />
+                  <span className="font-semibold">{tab.label}</span>
+                </button>
+              );
+            })}
+        </div>
+        {/* Desktop: All tabs in a row */}
+        <div className="hidden sm:flex sm:flex-wrap sm:gap-3">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-all text-base ${
+                  isActive
+                    ? "bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white shadow-md"
+                    : "text-[#9CA3AF] hover:text-[#F9FAFB] hover:bg-[#374151]/30"
+                }`}
+              >
+                <Icon className="text-xl" />
+                <span className="font-semibold">{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {activeTab === "exercises" && (
@@ -88,7 +138,11 @@ export default function WorkoutsPage() {
         <SplitsSection exercises={exercises} onUpdate={fetchSplits} />
       )}
       {activeTab === "sessions" && (
-        <SessionsSection exercises={exercises} splits={splits} editSessionId={editSessionId} />
+        <SessionsSection
+          exercises={exercises}
+          splits={splits}
+          editSessionId={editSessionId}
+        />
       )}
     </div>
   );

@@ -47,13 +47,15 @@ export default function AuthenticatedLayout({
 
   return (
     <div className="flex h-screen bg-[#0A0E27]">
-      {/* Mobile Menu Button */}
-      <button
-        onClick={() => setSidebarOpen(!sidebarOpen)}
-        className="lg:hidden fixed top-4 left-4 z-50 p-2 rounded-lg bg-[#1A1F3A] text-[#F9FAFB] border border-[#374151]"
-      >
-        {sidebarOpen ? <MdClose size={24} /> : <MdMenu size={24} />}
-      </button>
+      {/* Mobile Menu Button (Hamburger - only when sidebar is closed) */}
+      {!sidebarOpen && (
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="lg:hidden fixed top-4 left-4 z-50 p-2 rounded-lg bg-[#1A1F3A] text-[#F9FAFB] border border-[#374151]"
+        >
+          <MdMenu size={24} />
+        </button>
+      )}
 
       {/* Sidebar Overlay (Mobile) */}
       {sidebarOpen && (
@@ -70,7 +72,14 @@ export default function AuthenticatedLayout({
         }`}
       >
         {/* Logo */}
-        <div className="p-6 border-b border-[#374151]">
+        <div className="p-6 border-b border-[#374151] relative">
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="lg:hidden absolute top-4 right-4 p-1.5 rounded-full bg-[#374151]/50 hover:bg-[#374151] text-[#F9FAFB] transition-colors z-10"
+            aria-label="Close menu"
+          >
+            <MdClose size={20} />
+          </button>
           <h1 className="text-2xl font-bold bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] bg-clip-text text-transparent">
             GymAI
           </h1>
