@@ -2,13 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import apiClient from "@/lib/api-client";
-import {
-  WorkoutSession,
-  Exercise,
-  Split,
-  SessionExercise,
-  WorkoutSet,
-} from "@/types";
+import { WorkoutSession, Exercise, Split, SessionExercise } from "@/types";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
@@ -170,14 +164,6 @@ export default function SessionsSection({
     setExerciseSearchQuery("");
     setSelectedCategory(null);
     setSelectedEquipment(null);
-  };
-
-  const getEquipmentTypes = (category: string): string[] => {
-    const equipmentSet = new Set<string>();
-    allExercises
-      .filter((ex) => ex.category === category && ex.equipment)
-      .forEach((ex) => equipmentSet.add(ex.equipment!));
-    return Array.from(equipmentSet).sort();
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
