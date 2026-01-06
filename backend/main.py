@@ -10,10 +10,13 @@ load_dotenv()
 app = FastAPI()
 
 cors_origins = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")
+# Use cors_origins if specified, otherwise allow all origins
+# Note: allow_credentials cannot be True when allow_origins=["*"]
+allow_all_origins = "*" in cors_origins or len(cors_origins) == 1 and cors_origins[0] == "*"
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins if not allow_all_origins else ["*"],
+    allow_credentials=not allow_all_origins,  # Can't use credentials with wildcard
     allow_methods=["*"],
     allow_headers=["*"],
 )
