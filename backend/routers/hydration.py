@@ -43,3 +43,4 @@ async def delete_hydration_entry(hydration_id: str, user_id: str = Depends(get_u
     doc_ref.delete()
     return {"message": "Hydration entry deleted"}
 
+

@@ -23,6 +23,7 @@ class WorkoutSession(BaseModel):
     id: Optional[str] = None
     date: str
     split_name: Optional[str] = None
+    split_day: Optional[str] = None
     exercises: List[dict]
     notes: Optional[str] = None
 
