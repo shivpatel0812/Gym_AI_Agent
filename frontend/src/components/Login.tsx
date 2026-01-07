@@ -1,15 +1,19 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase';
-import { useNavigation } from '@react-navigation/native';
+import LinearGradient from './shared/LinearGradient';
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import Button from './shared/Button';
+import Input from './shared/Input';
+import Card from './shared/Card';
+import { colors, spacing, borderRadius, shadows } from '../theme';
 
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [error, setError] = useState('');
-  const navigation = useNavigation();
 
   const handleSubmit = async () => {
     setError('');
@@ -25,99 +29,143 @@ export default function Login() {
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    <LinearGradient
+      colors={[colors.background, colors.cardBackground]}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.formContainer}>
-          <Text style={styles.title}>{isSignUp ? 'Sign Up' : 'Login'}</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Email"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoComplete="email"
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Password"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            autoCapitalize="none"
-          />
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          <TouchableOpacity style={styles.button} onPress={handleSubmit}>
-            <Text style={styles.buttonText}>{isSignUp ? 'Sign Up' : 'Login'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setIsSignUp(!isSignUp)}>
-            <Text style={styles.switchText}>
-              {isSignUp ? 'Already have an account? Login' : "Don't have an account? Sign Up"}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardView}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.logoContainer}>
+            <LinearGradient
+              colors={[colors.accentPrimary, colors.accentSecondary]}
+              style={styles.logo}
+            >
+              <MaterialCommunityIcons name="dumbbell" size={48} color={colors.textPrimary} />
+            </LinearGradient>
+            <Text style={styles.appName}>GymAI</Text>
+            <Text style={styles.tagline}>Your Fitness Companion</Text>
+          </View>
+
+          <Card style={styles.card}>
+            <Text style={styles.title}>{isSignUp ? 'Create Account' : 'Welcome Back'}</Text>
+            <Text style={styles.subtitle}>
+              {isSignUp ? 'Start your fitness journey' : 'Sign in to continue'}
             </Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+
+            <Input
+              label="Email"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoComplete="email"
+              icon={<MaterialCommunityIcons name="email-outline" size={20} color={colors.textSecondary} />}
+            />
+
+            <Input
+              label="Password"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              autoCapitalize="none"
+              icon={<MaterialCommunityIcons name="lock-outline" size={20} color={colors.textSecondary} />}
+              error={error}
+            />
+
+            <Button
+              title={isSignUp ? 'Sign Up' : 'Sign In'}
+              onPress={handleSubmit}
+              variant="primary"
+              style={styles.button}
+            />
+
+            <View style={styles.switchContainer}>
+              <Text style={styles.switchText}>
+                {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
+              </Text>
+              <Text style={styles.switchLink} onPress={() => setIsSignUp(!isSignUp)}>
+                {isSignUp ? 'Sign In' : 'Sign Up'}
+              </Text>
+            </View>
+          </Card>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+  },
+  keyboardView: {
+    flex: 1,
   },
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    padding: 20,
+    padding: spacing.lg,
   },
-  formContainer: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
+  logoContainer: {
+    alignItems: 'center',
+    marginBottom: spacing['3xl'],
+  },
+  logo: {
+    width: 96,
+    height: 96,
+    borderRadius: borderRadius.xl,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...shadows.large,
+    marginBottom: spacing.lg,
+  },
+  appName: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: spacing.xs,
+  },
+  tagline: {
+    fontSize: 16,
+    color: colors.textSecondary,
+  },
+  card: {
+    ...shadows.xl,
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 24,
+    fontSize: 28,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: spacing.xs,
     textAlign: 'center',
   },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    fontSize: 16,
-  },
-  error: {
-    color: '#ef4444',
-    marginBottom: 16,
+  subtitle: {
+    fontSize: 14,
+    color: colors.textSecondary,
     textAlign: 'center',
+    marginBottom: spacing.xl,
   },
   button: {
-    backgroundColor: '#2563eb',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    alignItems: 'center',
+    marginTop: spacing.md,
   },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
+  switchContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: spacing.lg,
   },
   switchText: {
-    color: '#2563eb',
-    textAlign: 'center',
+    color: colors.textSecondary,
     fontSize: 14,
+  },
+  switchLink: {
+    color: colors.accentPrimary,
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

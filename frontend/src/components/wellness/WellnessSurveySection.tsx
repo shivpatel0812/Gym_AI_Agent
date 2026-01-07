@@ -1,8 +1,13 @@
 import { useState, useEffect } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Modal } from "react-native";
+import { View, Text, StyleSheet, Modal, ScrollView } from "react-native";
+import BlurView from "../shared/BlurView";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import apiClient from "../../api/client";
 import { WellnessSurvey } from "./types";
 import WellnessSurveyForm from "./WellnessSurveyForm";
+import Button from "../shared/Button";
+import Card from "../shared/Card";
+import { colors, spacing, borderRadius, shadows } from "../../theme";
 
 export default function WellnessSurveySection() {
   const [surveys, setSurveys] = useState<WellnessSurvey[]>([]);
@@ -31,18 +36,24 @@ export default function WellnessSurveySection() {
     }
   };
 
+  const getScoreColor = (score: number) => {
+    if (score >= 7) return colors.success;
+    if (score >= 4) return colors.warning;
+    return colors.danger;
+  };
+
   return (
     <View style={styles.container}>
-      <Text style={styles.sectionTitle}>Wellness Survey</Text>
-      <TouchableOpacity
-        style={styles.button}
+      <Button
+        title="Complete Survey"
         onPress={() => setShowSurveyForm(true)}
-      >
-        <Text style={styles.buttonText}>Complete Survey</Text>
-      </TouchableOpacity>
+        variant="primary"
+        icon={<MaterialCommunityIcons name="clipboard-text" size={20} color={colors.textPrimary} />}
+        style={styles.button}
+      />
 
       <Modal visible={showSurveyForm} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={20} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <WellnessSurveyForm
               survey={editingSurvey}
@@ -57,138 +68,156 @@ export default function WellnessSurveySection() {
               }}
             />
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
-      {surveys.map((survey) => (
-        <View key={survey.id} style={styles.card}>
-          <View style={styles.cardContent}>
-            <Text style={styles.cardTitle}>{survey.date}</Text>
-            <Text style={styles.cardText}>Fatigue: {survey.fatigue}/10</Text>
-            <Text style={styles.cardText}>
-              Body Aches: {survey.body_aches}/10
-            </Text>
-            {survey.energy && (
-              <Text style={styles.cardText}>Energy: {survey.energy}/10</Text>
-            )}
-            {survey.sleep_quality && (
-              <Text style={styles.cardText}>
-                Sleep Quality: {survey.sleep_quality}/10
-              </Text>
-            )}
-            {survey.mood && (
-              <Text style={styles.cardText}>Mood: {survey.mood}/10</Text>
-            )}
-          </View>
-          <View style={styles.cardActions}>
-            <TouchableOpacity
-              style={styles.editButton}
-              onPress={() => {
-                setEditingSurvey(survey);
-                setShowSurveyForm(true);
-              }}
-            >
-              <Text style={styles.editButtonText}>Edit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.deleteButton}
-              onPress={() => survey.id && deleteSurvey(survey.id)}
-            >
-              <Text style={styles.deleteButtonText}>Delete</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ))}
+      <ScrollView showsVerticalScrollIndicator={false}>
+        {surveys.map((survey) => (
+          <Card key={survey.id} style={styles.card}>
+            <View style={styles.cardHeader}>
+              <MaterialCommunityIcons
+                name="clipboard-text"
+                size={24}
+                color={colors.accentSecondary}
+              />
+              <Text style={styles.cardDate}>{survey.date}</Text>
+            </View>
+
+            <View style={styles.scoresContainer}>
+              <View style={styles.scoreRow}>
+                <Text style={styles.scoreLabel}>Fatigue</Text>
+                <View style={[styles.scoreBadge, { backgroundColor: getScoreColor(survey.fatigue) + "20" }]}>
+                  <Text style={[styles.scoreValue, { color: getScoreColor(survey.fatigue) }]}>
+                    {survey.fatigue}/10
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.scoreRow}>
+                <Text style={styles.scoreLabel}>Body Aches</Text>
+                <View style={[styles.scoreBadge, { backgroundColor: getScoreColor(survey.body_aches) + "20" }]}>
+                  <Text style={[styles.scoreValue, { color: getScoreColor(survey.body_aches) }]}>
+                    {survey.body_aches}/10
+                  </Text>
+                </View>
+              </View>
+              {survey.energy && (
+                <View style={styles.scoreRow}>
+                  <Text style={styles.scoreLabel}>Energy</Text>
+                  <View style={[styles.scoreBadge, { backgroundColor: getScoreColor(survey.energy) + "20" }]}>
+                    <Text style={[styles.scoreValue, { color: getScoreColor(survey.energy) }]}>
+                      {survey.energy}/10
+                    </Text>
+                  </View>
+                </View>
+              )}
+              {survey.sleep_quality && (
+                <View style={styles.scoreRow}>
+                  <Text style={styles.scoreLabel}>Sleep Quality</Text>
+                  <View style={[styles.scoreBadge, { backgroundColor: getScoreColor(survey.sleep_quality) + "20" }]}>
+                    <Text style={[styles.scoreValue, { color: getScoreColor(survey.sleep_quality) }]}>
+                      {survey.sleep_quality}/10
+                    </Text>
+                  </View>
+                </View>
+              )}
+              {survey.mood && (
+                <View style={styles.scoreRow}>
+                  <Text style={styles.scoreLabel}>Mood</Text>
+                  <View style={[styles.scoreBadge, { backgroundColor: getScoreColor(survey.mood) + "20" }]}>
+                    <Text style={[styles.scoreValue, { color: getScoreColor(survey.mood) }]}>
+                      {survey.mood}/10
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.cardActions}>
+              <Button
+                title="Edit"
+                onPress={() => {
+                  setEditingSurvey(survey);
+                  setShowSurveyForm(true);
+                }}
+                variant="secondary"
+                style={styles.actionButton}
+              />
+              <Button
+                title="Delete"
+                onPress={() => survey.id && deleteSurvey(survey.id)}
+                variant="danger"
+                style={styles.actionButton}
+              />
+            </View>
+          </Card>
+        ))}
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: "600",
-    marginBottom: 16,
-    color: "#111827",
+    padding: spacing.lg,
   },
   button: {
-    backgroundColor: "#2563eb",
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    alignItems: "center",
-  },
-  buttonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "600",
+    marginBottom: spacing.lg,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
-    padding: 20,
+    padding: spacing.lg,
   },
   modalContent: {
-    backgroundColor: "white",
-    borderRadius: 8,
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.xl,
     maxHeight: "90%",
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   card: {
-    backgroundColor: "white",
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    marginBottom: spacing.md,
   },
-  cardContent: {
-    flex: 1,
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginBottom: spacing.md,
   },
-  cardTitle: {
-    fontSize: 18,
+  cardDate: {
+    fontSize: 16,
     fontWeight: "600",
-    marginBottom: 8,
+    color: colors.textPrimary,
   },
-  cardText: {
+  scoresContainer: {
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  scoreRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  scoreLabel: {
     fontSize: 14,
-    color: "#374151",
-    marginBottom: 4,
+    color: colors.textSecondary,
+    fontWeight: "500",
+  },
+  scoreBadge: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.md,
+  },
+  scoreValue: {
+    fontSize: 14,
+    fontWeight: "700",
   },
   cardActions: {
     flexDirection: "row",
-    gap: 8,
-    marginTop: 12,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
-  editButton: {
-    backgroundColor: "#2563eb",
-    borderRadius: 6,
-    padding: 6,
-    paddingHorizontal: 12,
+  actionButton: {
     flex: 1,
-    alignItems: "center",
-  },
-  editButtonText: {
-    color: "white",
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  deleteButton: {
-    backgroundColor: "#ef4444",
-    borderRadius: 6,
-    padding: 6,
-    paddingHorizontal: 12,
-    flex: 1,
-    alignItems: "center",
-  },
-  deleteButtonText: {
-    color: "white",
-    fontSize: 14,
-    fontWeight: "600",
   },
 });

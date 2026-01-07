@@ -1,4 +1,4 @@
-require('dotenv').config();
+require("dotenv").config();
 
 module.exports = {
   expo: {
@@ -9,29 +9,30 @@ module.exports = {
     userInterfaceStyle: "light",
     splash: {
       resizeMode: "contain",
-      backgroundColor: "#ffffff"
+      backgroundColor: "#ffffff",
     },
-    assetBundlePatterns: [
-      "**/*"
-    ],
+    assetBundlePatterns: ["**/*"],
     ios: {
-      supportsTablet: true
+      supportsTablet: true,
     },
     android: {
       adaptiveIcon: {
-        backgroundColor: "#ffffff"
-      }
+        backgroundColor: "#ffffff",
+      },
     },
     web: {},
+    plugins: ["expo-font"],
     extra: {
-      apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL || "http://localhost:8000",
+      apiBaseUrl:
+        process.env.EXPO_PUBLIC_API_BASE_URL ||
+        "https://gymaiagent-production.up.railway.app",
       firebaseApiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
       firebaseAuthDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
       firebaseProjectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
       firebaseStorageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
-      firebaseMessagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+      firebaseMessagingSenderId:
+        process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
       firebaseAppId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
-    }
-  }
+    },
+  },
 };
-

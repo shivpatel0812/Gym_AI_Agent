@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Modal, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Modal, Switch, Platform, StatusBar } from 'react-native';
+import BlurView from './shared/BlurView';
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import apiClient from '../api/client';
+import Button from './shared/Button';
+import Card from './shared/Card';
+import Input from './shared/Input';
+import { colors, spacing, borderRadius, shadows } from '../theme';
 
 interface PhysicalActivity {
   id?: string;
@@ -102,124 +108,224 @@ export default function PhysicalActivity() {
   };
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.contentContainer}
+    >
       <View style={styles.header}>
-        <Text style={styles.title}>Physical Activity</Text>
-        <TouchableOpacity style={styles.button} onPress={() => setShowForm(true)}>
-          <Text style={styles.buttonText}>Log Activity</Text>
-        </TouchableOpacity>
+        <Text style={styles.title}>Activity</Text>
+        <Button
+          title="Log Activity"
+          onPress={() => setShowForm(true)}
+          variant="primary"
+          icon={<MaterialCommunityIcons name="plus" size={20} color={colors.textPrimary} />}
+          style={styles.headerButton}
+        />
       </View>
 
       <Modal visible={showForm} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>
-              {editingActivity ? "Edit Activity" : "Log Activity"}
-            </Text>
-            <TextInput
-              style={styles.input}
-              value={newActivity.date}
-              onChangeText={(text) => setNewActivity({ ...newActivity, date: text })}
-              placeholder="Date (YYYY-MM-DD)"
-            />
-            <TextInput
-              style={styles.input}
-              value={newActivity.steps?.toString() || ''}
-              onChangeText={(text) => setNewActivity({ ...newActivity, steps: text ? parseInt(text) : undefined })}
-              placeholder="Steps"
-              keyboardType="numeric"
-            />
-            <TextInput
-              style={styles.input}
-              value={newActivity.activity_type || ''}
-              onChangeText={(text) => setNewActivity({ ...newActivity, activity_type: text || undefined })}
-              placeholder="Activity type"
-            />
-            <View style={styles.switchContainer}>
-              <Text style={styles.switchLabel}>Whole Day Activity</Text>
-              <Switch
-                value={newActivity.is_whole_day || false}
-                onValueChange={(value) => {
-                  setNewActivity({ 
-                    ...newActivity, 
-                    is_whole_day: value,
-                    duration_minutes: value ? undefined : newActivity.duration_minutes
-                  });
-                }}
+        <BlurView intensity={20} style={styles.modalOverlay}>
+          <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
+            <View style={styles.modalHeader}>
+              <MaterialCommunityIcons
+                name="run-fast"
+                size={28}
+                color={colors.success}
               />
+              <Text style={styles.modalTitle}>
+                {editingActivity ? "Edit Activity" : "Log Activity"}
+              </Text>
             </View>
-            {!newActivity.is_whole_day && (
-              <TextInput
-                style={styles.input}
-                value={newActivity.duration_minutes?.toString() || ''}
-                onChangeText={(text) => setNewActivity({ ...newActivity, duration_minutes: text ? parseInt(text) : undefined })}
-                placeholder="Duration (minutes)"
+
+            <Card style={styles.formCard}>
+              <Input
+                label="Date"
+                value={newActivity.date}
+                onChangeText={(text) => setNewActivity({ ...newActivity, date: text })}
+                placeholder="YYYY-MM-DD"
+                icon={<MaterialCommunityIcons name="calendar" size={20} color={colors.textSecondary} />}
+              />
+
+              <Input
+                label="Steps (Optional)"
+                value={newActivity.steps?.toString() || ''}
+                onChangeText={(text) => setNewActivity({ ...newActivity, steps: text ? parseInt(text) : undefined })}
+                placeholder="Number of steps"
                 keyboardType="numeric"
+                icon={<MaterialCommunityIcons name="walk" size={20} color={colors.textSecondary} />}
               />
-            )}
-            <TextInput
-              style={styles.input}
-              value={newActivity.intensity_level?.toString() || ''}
-              onChangeText={(text) => {
-                const value = text ? parseInt(text) : undefined;
-                if (value !== undefined && (value < 0 || value > 10)) return;
-                setNewActivity({ ...newActivity, intensity_level: value });
-              }}
-              placeholder="Intensity Level (0-10, optional)"
-              keyboardType="numeric"
-            />
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              value={newActivity.description || ''}
-              onChangeText={(text) => setNewActivity({ ...newActivity, description: text || undefined })}
-              placeholder="Description"
-              multiline
-            />
-            <View style={styles.buttonRow}>
-              <TouchableOpacity style={[styles.button, styles.saveButton]} onPress={saveActivity}>
-                <Text style={styles.buttonText}>Save</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.button, styles.cancelButton]} onPress={handleCancel}>
-                <Text style={styles.buttonText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
+
+              <Input
+                label="Activity Type (Optional)"
+                value={newActivity.activity_type || ''}
+                onChangeText={(text) => setNewActivity({ ...newActivity, activity_type: text || undefined })}
+                placeholder="e.g., Hiking, Construction, etc."
+                icon={<MaterialCommunityIcons name="run" size={20} color={colors.textSecondary} />}
+              />
+
+              <View style={styles.switchContainer}>
+                <View style={styles.switchLabelContainer}>
+                  <MaterialCommunityIcons name="calendar-clock" size={20} color={colors.textPrimary} />
+                  <Text style={styles.switchLabel}>Whole Day Activity</Text>
+                </View>
+                <Switch
+                  value={newActivity.is_whole_day || false}
+                  onValueChange={(value) => {
+                    setNewActivity({
+                      ...newActivity,
+                      is_whole_day: value,
+                      duration_minutes: value ? undefined : newActivity.duration_minutes,
+                    });
+                  }}
+                  trackColor={{ false: colors.border, true: colors.success + '80' }}
+                  thumbColor={newActivity.is_whole_day ? colors.success : colors.textSecondary}
+                />
+              </View>
+
+              {!newActivity.is_whole_day && (
+                <Input
+                  label="Duration (minutes)"
+                  value={newActivity.duration_minutes?.toString() || ''}
+                  onChangeText={(text) =>
+                    setNewActivity({
+                      ...newActivity,
+                      duration_minutes: text ? parseInt(text) : undefined,
+                    })
+                  }
+                  placeholder="Duration in minutes"
+                  keyboardType="numeric"
+                  icon={<MaterialCommunityIcons name="timer" size={20} color={colors.textSecondary} />}
+                />
+              )}
+
+              <Input
+                label="Intensity Level (0-10, Optional)"
+                value={newActivity.intensity_level?.toString() || ''}
+                onChangeText={(text) => {
+                  const value = text ? parseInt(text) : undefined;
+                  if (value !== undefined && (value < 0 || value > 10)) return;
+                  setNewActivity({ ...newActivity, intensity_level: value });
+                }}
+                placeholder="0-10"
+                keyboardType="numeric"
+                maxLength={2}
+                icon={<MaterialCommunityIcons name="gauge" size={20} color={colors.textSecondary} />}
+              />
+
+              <Input
+                label="Description (Optional)"
+                value={newActivity.description || ''}
+                onChangeText={(text) => setNewActivity({ ...newActivity, description: text || undefined })}
+                placeholder="Additional details..."
+                multiline
+                style={styles.textArea}
+                icon={<MaterialCommunityIcons name="text" size={20} color={colors.textSecondary} />}
+              />
+
+              <View style={styles.buttonRow}>
+                <Button
+                  title="Save"
+                  onPress={saveActivity}
+                  variant="primary"
+                  style={styles.button}
+                />
+                <Button
+                  title="Cancel"
+                  onPress={handleCancel}
+                  variant="secondary"
+                  style={styles.button}
+                />
+              </View>
+            </Card>
+          </ScrollView>
+        </BlurView>
       </Modal>
 
       {activities.map((activity) => (
-        <View key={activity.id} style={styles.card}>
+        <Card key={activity.id} style={styles.card}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>{activity.date}</Text>
+            <View style={styles.cardHeaderLeft}>
+              <View style={styles.activityIconContainer}>
+                <MaterialCommunityIcons
+                  name={activity.activity_type ? "run" : "walk"}
+                  size={24}
+                  color={colors.success}
+                />
+              </View>
+              <View>
+                <Text style={styles.cardDate}>{activity.date}</Text>
+                {activity.activity_type && (
+                  <Text style={styles.activityType}>{activity.activity_type}</Text>
+                )}
+              </View>
+            </View>
             <View style={styles.cardActions}>
-              <TouchableOpacity
-                style={styles.editButton}
+              <Button
+                title="Edit"
                 onPress={() => handleEdit(activity)}
-              >
-                <Text style={styles.editButtonText}>Edit</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.deleteButton}
+                variant="secondary"
+                style={styles.actionButton}
+              />
+              <Button
+                title="Delete"
                 onPress={() => activity.id && deleteActivity(activity.id)}
-              >
-                <Text style={styles.deleteButtonText}>Delete</Text>
-              </TouchableOpacity>
+                variant="danger"
+                style={styles.actionButton}
+              />
             </View>
           </View>
+
           <View style={styles.cardContent}>
-            {activity.steps && <Text style={styles.cardText}>Steps: {activity.steps}</Text>}
-            {activity.activity_type && <Text style={styles.cardText}>Activity: {activity.activity_type}</Text>}
+            {activity.steps && (
+              <View style={styles.infoRow}>
+                <MaterialCommunityIcons name="walk" size={18} color={colors.textSecondary} />
+                <Text style={styles.cardText}>Steps: {activity.steps.toLocaleString()}</Text>
+              </View>
+            )}
             {activity.is_whole_day ? (
-              <Text style={styles.cardText}>Duration: Whole Day</Text>
+              <View style={styles.infoRow}>
+                <MaterialCommunityIcons name="calendar-clock" size={18} color={colors.textSecondary} />
+                <Text style={styles.cardText}>Duration: Whole Day</Text>
+              </View>
             ) : (
-              activity.duration_minutes && <Text style={styles.cardText}>Duration: {activity.duration_minutes} minutes</Text>
+              activity.duration_minutes && (
+                <View style={styles.infoRow}>
+                  <MaterialCommunityIcons name="timer" size={18} color={colors.textSecondary} />
+                  <Text style={styles.cardText}>Duration: {activity.duration_minutes} minutes</Text>
+                </View>
+              )
             )}
             {activity.intensity_level !== undefined && (
-              <Text style={styles.cardText}>Intensity Level: {activity.intensity_level}/10</Text>
+              <View style={styles.intensityContainer}>
+                <Text style={styles.intensityLabel}>Intensity:</Text>
+                <View style={styles.intensityBar}>
+                  <View
+                    style={[
+                      styles.intensityFill,
+                      {
+                        width: `${(activity.intensity_level / 10) * 100}%`,
+                        backgroundColor:
+                          activity.intensity_level >= 7
+                            ? colors.danger
+                            : activity.intensity_level >= 4
+                            ? colors.warning
+                            : colors.success,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.intensityValue}>{activity.intensity_level}/10</Text>
+              </View>
             )}
-            {activity.description && <Text style={styles.cardDescription}>{activity.description}</Text>}
+            {activity.description && (
+              <View style={styles.descriptionContainer}>
+                <MaterialCommunityIcons name="text" size={16} color={colors.textSecondary} />
+                <Text style={styles.cardDescription}>{activity.description}</Text>
+              </View>
+            )}
           </View>
-        </View>
+        </Card>
       ))}
     </ScrollView>
   );
@@ -228,143 +334,189 @@ export default function PhysicalActivity() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.background,
+  },
+  contentContainer: {
+    paddingTop: 0,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.xl,
   },
   header: {
-    padding: 20,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: Platform.OS === "ios" ? 60 : StatusBar.currentHeight ? StatusBar.currentHeight + 16 : 16,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.md,
   },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginBottom: 16,
+    fontSize: 32,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    textAlign: 'left',
   },
-  button: {
-    backgroundColor: '#2563eb',
-    borderRadius: 8,
-    padding: 12,
-    alignItems: 'center',
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
+  headerButton: {
+    marginTop: 0,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
-    padding: 20,
+    padding: spacing.md,
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 20,
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.xl,
+    maxHeight: '90%',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.md,
+    paddingTop: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 16,
+    fontSize: 24,
+    fontWeight: '700',
+    color: colors.textPrimary,
   },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    fontSize: 16,
+  formCard: {
+    margin: spacing.md,
   },
   switchContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
-    paddingVertical: 8,
+    marginBottom: spacing.md,
+    padding: spacing.md,
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  switchLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   switchLabel: {
     fontSize: 16,
-    color: '#374151',
+    fontWeight: '600',
+    color: colors.textPrimary,
   },
   textArea: {
-    height: 100,
+    minHeight: 100,
     textAlignVertical: 'top',
   },
   buttonRow: {
     flexDirection: 'row',
-    gap: 12,
-    marginTop: 8,
+    gap: spacing.md,
+    marginTop: spacing.lg,
   },
-  saveButton: {
+  button: {
     flex: 1,
-    backgroundColor: '#16a34a',
-  },
-  cancelButton: {
-    flex: 1,
-    backgroundColor: '#6b7280',
   },
   card: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 16,
-    margin: 16,
-    marginBottom: 0,
-    marginTop: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    marginBottom: spacing.md,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
+    alignItems: 'flex-start',
+    marginBottom: spacing.md,
   },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '600',
+  cardHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
     flex: 1,
+  },
+  activityIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.success + '20',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cardDate: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  activityType: {
+    fontSize: 12,
+    color: colors.success,
+    fontWeight: '500',
+    marginTop: spacing.xs,
   },
   cardActions: {
     flexDirection: 'row',
-    gap: 8,
+    gap: spacing.sm,
   },
-  editButton: {
-    backgroundColor: '#2563eb',
-    borderRadius: 6,
-    padding: 6,
-    paddingHorizontal: 12,
-  },
-  editButtonText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '600',
+  actionButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
   cardContent: {
-    flex: 1,
+    gap: spacing.sm,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   cardText: {
     fontSize: 14,
-    color: '#374151',
-    marginBottom: 4,
+    color: colors.textSecondary,
+  },
+  intensityContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  intensityLabel: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    fontWeight: '500',
+    minWidth: 70,
+  },
+  intensityBar: {
+    flex: 1,
+    height: 8,
+    backgroundColor: colors.border,
+    borderRadius: borderRadius.sm,
+    overflow: 'hidden',
+  },
+  intensityFill: {
+    height: '100%',
+    borderRadius: borderRadius.sm,
+  },
+  intensityValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    minWidth: 30,
+    textAlign: 'right',
+  },
+  descriptionContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   cardDescription: {
     fontSize: 14,
-    color: '#6b7280',
-    marginTop: 8,
-  },
-  deleteButton: {
-    backgroundColor: '#ef4444',
-    borderRadius: 6,
-    padding: 6,
-    paddingHorizontal: 12,
-  },
-  deleteButtonText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '600',
+    color: colors.textSecondary,
+    flex: 1,
+    lineHeight: 20,
   },
 });

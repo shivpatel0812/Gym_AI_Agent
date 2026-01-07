@@ -1,54 +1,117 @@
 import { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import LinearGradient from './shared/LinearGradient';
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import apiClient from '../api/client';
+import { colors, spacing, borderRadius, shadows } from '../theme';
 
 export default function Dashboard() {
   const [stats, setStats] = useState<any>({});
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchStats = async () => {
       try {
+        const dateFilter = new Date().toISOString().split('T')[0];
+        console.log('Fetching stats for date:', dateFilter);
+        
+        // Fetch all stats in parallel
         const [sessions, activities, macros, stress] = await Promise.all([
-          apiClient.get('/api/workout-sessions?date_filter=' + new Date().toISOString().split('T')[0]),
-          apiClient.get('/api/physical-activities?date_filter=' + new Date().toISOString().split('T')[0]),
-          apiClient.get('/api/macros?date_filter=' + new Date().toISOString().split('T')[0]),
-          apiClient.get('/api/stress?date_filter=' + new Date().toISOString().split('T')[0]),
+          apiClient.get('/api/workout-sessions?date_filter=' + dateFilter),
+          apiClient.get('/api/physical-activities?date_filter=' + dateFilter),
+          apiClient.get('/api/macros?date_filter=' + dateFilter),
+          apiClient.get('/api/stress?date_filter=' + dateFilter),
         ]);
+        
         setStats({
-          workouts: sessions.data.length,
-          activities: activities.data.length,
-          macros: macros.data.length,
-          stress: stress.data.length,
+          workouts: sessions.data?.length || 0,
+          activities: activities.data?.length || 0,
+          macros: macros.data?.length || 0,
+          stress: stress.data?.length || 0,
         });
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error fetching stats:', error);
+        // Set default stats on error to prevent undefined values
+        setStats({
+          workouts: 0,
+          activities: 0,
+          macros: 0,
+          stress: 0,
+        });
+        
+        // Log detailed error information for debugging
+        if (error.response) {
+          console.error('API Error Response:', {
+            status: error.response.status,
+            statusText: error.response.statusText,
+            data: error.response.data,
+          });
+        } else if (error.request) {
+          console.error('Network Error - No response received:', {
+            message: error.message,
+            code: error.code,
+          });
+        } else {
+          console.error('Error setting up request:', error.message);
+        }
+      } finally {
+        setLoading(false);
       }
     };
     fetchStats();
   }, []);
 
+  const StatCard = ({ label, value, icon, gradient }: { label: string; value: number; icon: string; gradient: string[] }) => (
+    <View style={styles.statCardContainer}>
+      <LinearGradient
+        colors={gradient}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.statCard}
+      >
+        <View style={styles.statIconContainer}>
+          <MaterialCommunityIcons name={icon as any} size={32} color={colors.textPrimary} />
+        </View>
+        <Text style={styles.statValue}>{value || 0}</Text>
+        <Text style={styles.statLabel}>{label}</Text>
+      </LinearGradient>
+    </View>
+  );
+
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
-        <Text style={styles.title}>Dashboard</Text>
+        <View>
+          <Text style={styles.greeting}>Welcome Back</Text>
+          <Text style={styles.title}>Dashboard</Text>
+        </View>
       </View>
+
       <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Workouts Today</Text>
-          <Text style={styles.statValue}>{stats.workouts || 0}</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Activities Today</Text>
-          <Text style={styles.statValue}>{stats.activities || 0}</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Macro Entries</Text>
-          <Text style={styles.statValue}>{stats.macros || 0}</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Stress Entries</Text>
-          <Text style={styles.statValue}>{stats.stress || 0}</Text>
-        </View>
+        <StatCard
+          label="Workouts Today"
+          value={stats.workouts || 0}
+          icon="dumbbell"
+          gradient={[colors.accentPrimary, colors.accentSecondary]}
+        />
+        <StatCard
+          label="Activities"
+          value={stats.activities || 0}
+          icon="run-fast"
+          gradient={[colors.success, '#059669']}
+        />
+        <StatCard
+          label="Macro Entries"
+          value={stats.macros || 0}
+          icon="food-apple"
+          gradient={[colors.warning, '#D97706']}
+        />
+        <StatCard
+          label="Wellness"
+          value={stats.stress || 0}
+          icon="heart-pulse"
+          gradient={[colors.accentSecondary, '#7C3AED']}
+        />
       </View>
     </ScrollView>
   );
@@ -57,45 +120,57 @@ export default function Dashboard() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.background,
   },
   header: {
-    padding: 20,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    padding: spacing.lg,
+    paddingTop: spacing.xl,
+  },
+  greeting: {
+    fontSize: 16,
+    color: colors.textSecondary,
+    marginBottom: spacing.xs,
   },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#111827',
+    fontSize: 32,
+    fontWeight: '700',
+    color: colors.textPrimary,
   },
   statsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    padding: 16,
-    gap: 16,
+    padding: spacing.lg,
+    gap: spacing.lg,
+  },
+  statCardContainer: {
+    width: '47%',
+    ...shadows.large,
   },
   statCard: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 20,
-    width: '47%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderRadius: borderRadius.xl,
+    padding: spacing.lg,
+    minHeight: 140,
+    justifyContent: 'space-between',
   },
-  statLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#6b7280',
-    marginBottom: 8,
+  statIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: borderRadius.lg,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: spacing.md,
   },
   statValue: {
     fontSize: 36,
-    fontWeight: 'bold',
-    color: '#111827',
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: spacing.xs,
+  },
+  statLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    opacity: 0.9,
   },
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -6,12 +6,12 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
+  FlatList,
 } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { Exercise, Split, WorkoutSession } from "../types";
-import SplitSelector from "./SplitSelector";
-import ExerciseInput from "./ExerciseInput";
-import SetManager from "./SetManager";
-import ExerciseList from "./ExerciseList";
+import defaultExercises, { categories, categoryToMuscleGroup } from "../../../data/defaultExercises";
+import { colors, spacing, borderRadius } from "../../../theme";
 
 interface SessionFormProps {
   exercises: Exercise[];
@@ -28,185 +28,593 @@ export default function SessionForm({
   onCancel,
   initialSession,
 }: SessionFormProps) {
-  const [newSession, setNewSession] = useState<WorkoutSession>(
-    initialSession || {
-      date: new Date().toISOString().split("T")[0],
-      exercises: [],
-      split_name: "",
-      notes: "",
-    }
-  );
-  const [exerciseNameInput, setExerciseNameInput] = useState("");
-  const [currentSets, setCurrentSets] = useState<
-    Array<{ set_number: number; reps: string; weight: string }>
-  >([]);
-  const [currentSetReps, setCurrentSetReps] = useState("");
-  const [currentSetWeight, setCurrentSetWeight] = useState("");
-  const [selectedDay, setSelectedDay] = useState(
-    (initialSession as any)?.selected_day || ""
-  );
+  const [formData, setFormData] = useState<{
+    date: string;
+    workout_name: string;
+    split_name: string;
+    split_day: string;
+    exercises: any[];
+    notes: string;
+  }>({
+    date: initialSession?.date || new Date().toISOString().split("T")[0],
+    workout_name: (initialSession as any)?.workout_name || initialSession?.split_name || "",
+    split_name: initialSession?.split_name || "",
+    split_day: (initialSession as any)?.split_day || "",
+    exercises: initialSession?.exercises || [],
+    notes: initialSession?.notes || "",
+  });
 
-  const getFilteredExercisesByDay = () => {
-    if (!selectedDay) return exercises;
-    const dayLower = selectedDay.toLowerCase();
-    return exercises.filter((ex) => {
-      const nameMatch = ex.name.toLowerCase().includes(dayLower);
-      const muscleMatch = ex.muscle_group?.toLowerCase().includes(dayLower);
-      const typeMatch = ex.type?.toLowerCase().includes(dayLower);
-      return nameMatch || muscleMatch || typeMatch;
+  const [showSplitDropdown, setShowSplitDropdown] = useState(false);
+  const [showDayDropdown, setShowDayDropdown] = useState(false);
+  const [selectedSplitId, setSelectedSplitId] = useState<string>(() => {
+    if (initialSession?.split_name) {
+      const split = splits.find((s) => s.name === initialSession.split_name);
+      return split?.id || "";
+    }
+    return "";
+  });
+
+  const selectedSplit = selectedSplitId ? splits.find((s) => s.id === selectedSplitId) : null;
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedEquipment, setSelectedEquipment] = useState<string | null>(null);
+  const [exerciseTab, setExerciseTab] = useState<"browse" | "search">("browse");
+  const [exerciseSearchQuery, setExerciseSearchQuery] = useState("");
+
+  const allExercises = useMemo(() => {
+    const defaultExercisesList = (defaultExercises || []).map((ex) => ({
+      id: ex.id,
+      name: ex.name,
+      category: ex.category,
+      equipment: ex.equipment,
+      is_default: true,
+    }));
+
+    const customExercisesList = (exercises || [])
+      .filter((ex) => ex.id)
+      .map((ex) => {
+        let category = null;
+        if (ex.muscle_group) {
+          const muscleGroup = ex.muscle_group.toLowerCase();
+          for (const [cat, muscle] of Object.entries(categoryToMuscleGroup)) {
+            if (muscleGroup.includes(muscle.toLowerCase())) {
+              category = cat;
+              break;
+            }
+          }
+        }
+        return {
+          id: ex.id!,
+          name: ex.name,
+          category: category,
+          equipment: null,
+          is_default: false,
+        };
+      });
+
+    return [...defaultExercisesList, ...customExercisesList];
+  }, [exercises]);
+
+  const handleExerciseChange = (exerciseId: string, exerciseName: string) => {
+    setFormData({
+      ...formData,
+      exercises: [
+        ...formData.exercises,
+        {
+          exercise_id: exerciseId,
+          exercise_name: exerciseName,
+          sets: [{ set_number: 1, reps: 0, weight: undefined }],
+        },
+      ],
     });
+    setExerciseSearchQuery("");
+    setSelectedCategory(null);
+    setSelectedEquipment(null);
   };
 
-  const filteredExercises = getFilteredExercisesByDay();
-
-  const addSet = () => {
-    if (currentSetReps.trim()) {
-      const newSet = {
-        set_number: currentSets.length + 1,
-        reps: currentSetReps.trim(),
-        weight: currentSetWeight.trim() || "",
-      };
-      setCurrentSets([...currentSets, newSet]);
-      setCurrentSetReps("");
-      setCurrentSetWeight("");
-    }
+  const handleSubmit = () => {
+    const payload = {
+      date: formData.date,
+      workout_name: formData.workout_name || undefined,
+      split_name: formData.split_name || undefined,
+      split_day: formData.split_day || undefined,
+      exercises: formData.exercises,
+      notes: formData.notes || undefined,
+    };
+    onSuccess(payload as WorkoutSession);
   };
 
-  const removeSet = (index: number) => {
-    const updatedSets = currentSets
-      .filter((_, i) => i !== index)
-      .map((set, i) => ({ ...set, set_number: i + 1 }));
-    setCurrentSets(updatedSets);
-  };
-
-  const addExerciseToSession = () => {
-    if (exerciseNameInput.trim() && currentSets.length > 0) {
-      const matchedExercise = exercises.find(
-        (ex) => ex.name.toLowerCase() === exerciseNameInput.trim().toLowerCase()
+  const filteredExercises = useMemo(() => {
+    if (exerciseTab === "browse") {
+      if (!selectedCategory) return [];
+      return allExercises.filter(
+        (ex) =>
+          ex.category === selectedCategory &&
+          (!selectedEquipment || ex.equipment === selectedEquipment)
       );
-      const setsData = currentSets.map((set) => ({
-        set_number: set.set_number,
-        reps: parseInt(set.reps),
-        weight: set.weight ? parseFloat(set.weight) : null,
-      }));
-      const exerciseEntry = {
-        exercise_id: matchedExercise
-          ? matchedExercise.id
-          : `custom-${Date.now()}`,
-        exercise_name: exerciseNameInput.trim(),
-        sets: setsData,
-        is_custom: !matchedExercise,
-      };
-      setNewSession({
-        ...newSession,
-        exercises: [...newSession.exercises, exerciseEntry],
-      });
-      setExerciseNameInput("");
-      setCurrentSets([]);
-      setCurrentSetReps("");
-      setCurrentSetWeight("");
+    } else {
+      if (!exerciseSearchQuery.trim()) return [];
+      const query = exerciseSearchQuery.toLowerCase();
+      return allExercises
+        .filter((ex) => ex.name.toLowerCase().includes(query))
+        .slice(0, 20);
     }
-  };
-
-  const handleSave = () => {
-    onSuccess(newSession);
-    if (!initialSession) {
-      setNewSession({
-        date: new Date().toISOString().split("T")[0],
-        exercises: [],
-        split_name: "",
-        notes: "",
-      });
-      setSelectedDay("");
-      setExerciseNameInput("");
-      setCurrentSets([]);
-      setCurrentSetReps("");
-      setCurrentSetWeight("");
-    }
-  };
-
-  const removeExercise = (index: number) => {
-    const updatedExercises = [...newSession.exercises];
-    updatedExercises.splice(index, 1);
-    setNewSession({ ...newSession, exercises: updatedExercises });
-  };
+  }, [allExercises, selectedCategory, selectedEquipment, exerciseTab, exerciseSearchQuery]);
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>
-        {initialSession ? "Edit Workout" : "Log Workout"}
-      </Text>
-      <TextInput
-        style={styles.input}
-        value={newSession.date}
-        onChangeText={(text) => setNewSession({ ...newSession, date: text })}
-        placeholder="Date (YYYY-MM-DD)"
-      />
-      <SplitSelector
-        splits={splits}
-        selectedSplitName={newSession.split_name || ""}
-        selectedDay={selectedDay}
-        onSplitChange={(splitName) => {
-          setNewSession({ ...newSession, split_name: splitName });
-          setSelectedDay("");
-        }}
-        onDayChange={setSelectedDay}
-      />
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={onCancel} style={styles.backButton}>
+          <MaterialCommunityIcons name="arrow-left" size={24} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <Text style={styles.title}>
+          {initialSession ? "Edit Workout Session" : "Log Workout Session"}
+        </Text>
+      </View>
 
-      <Text style={styles.sectionTitle}>Add Exercise</Text>
-      <ExerciseInput
-        exercises={filteredExercises}
-        value={exerciseNameInput}
-        onChange={setExerciseNameInput}
-      />
-      {exerciseNameInput.trim() && (
-        <View>
-          <SetManager
-            sets={currentSets}
-            currentReps={currentSetReps}
-            currentWeight={currentSetWeight}
-            onRepsChange={setCurrentSetReps}
-            onWeightChange={setCurrentSetWeight}
-            onAddSet={addSet}
-            onRemoveSet={removeSet}
+      {/* Form Fields */}
+      <View style={styles.formSection}>
+        {/* Workout Name */}
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Workout Name (Optional)</Text>
+          <TextInput
+            style={styles.input}
+            value={formData.workout_name}
+            onChangeText={(text) => setFormData({ ...formData, workout_name: text })}
+            placeholder="e.g., Push Day, Leg Day, Full Body"
+            placeholderTextColor={colors.textSecondary}
           />
-          {currentSets.length > 0 && (
-            <TouchableOpacity
-              style={styles.addExerciseButton}
-              onPress={addExerciseToSession}
-            >
-              <Text style={styles.buttonText}>Add Exercise</Text>
-            </TouchableOpacity>
+        </View>
+
+        {/* Date */}
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Date</Text>
+          <TextInput
+            style={styles.input}
+            value={formData.date}
+            onChangeText={(text) => setFormData({ ...formData, date: text })}
+            placeholder="YYYY-MM-DD"
+            placeholderTextColor={colors.textSecondary}
+          />
+        </View>
+
+        {/* Split Dropdown */}
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Split (Optional)</Text>
+          <TouchableOpacity
+            style={styles.dropdown}
+            onPress={() => setShowSplitDropdown(!showSplitDropdown)}
+          >
+            <Text style={styles.dropdownText}>
+              {selectedSplitId
+                ? splits.find((s) => s.id === selectedSplitId)?.name || "No Split"
+                : "No Split"}
+            </Text>
+            <MaterialCommunityIcons
+              name={showSplitDropdown ? "chevron-up" : "chevron-down"}
+              size={20}
+              color={colors.textSecondary}
+            />
+          </TouchableOpacity>
+          {showSplitDropdown && (
+            <View style={styles.dropdownMenu}>
+              <TouchableOpacity
+                style={[
+                  styles.dropdownItem,
+                  !selectedSplitId && styles.dropdownItemActive,
+                ]}
+                onPress={() => {
+                  setSelectedSplitId("");
+                  setFormData({ ...formData, split_name: "", split_day: "" });
+                  setShowSplitDropdown(false);
+                }}
+              >
+                <Text style={styles.dropdownItemText}>No Split</Text>
+              </TouchableOpacity>
+              {splits.map((split) => (
+                <TouchableOpacity
+                  key={split.id}
+                  style={[
+                    styles.dropdownItem,
+                    selectedSplitId === split.id && styles.dropdownItemActive,
+                  ]}
+                  onPress={() => {
+                    setSelectedSplitId(split.id || "");
+                    setFormData({ ...formData, split_name: split.name, split_day: "" });
+                    setShowSplitDropdown(false);
+                  }}
+                >
+                  <Text style={styles.dropdownItemText}>{split.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           )}
         </View>
-      )}
 
-      <Text style={styles.sectionTitle}>Exercises in Session</Text>
-      <ExerciseList
-        exercises={newSession.exercises}
-        onRemove={removeExercise}
-      />
+        {/* Day Dropdown - Only show if a split is selected */}
+        {selectedSplit && selectedSplit.days && selectedSplit.days.length > 0 && (
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Split Day (Optional)</Text>
+            <TouchableOpacity
+              style={styles.dropdown}
+              onPress={() => setShowDayDropdown(!showDayDropdown)}
+            >
+              <Text style={styles.dropdownText}>
+                {formData.split_day || "Select Day"}
+              </Text>
+              <MaterialCommunityIcons
+                name={showDayDropdown ? "chevron-up" : "chevron-down"}
+                size={20}
+                color={colors.textSecondary}
+              />
+            </TouchableOpacity>
+            {showDayDropdown && (
+              <View style={styles.dropdownMenu}>
+                <TouchableOpacity
+                  style={[
+                    styles.dropdownItem,
+                    !formData.split_day && styles.dropdownItemActive,
+                  ]}
+                  onPress={() => {
+                    setFormData({ ...formData, split_day: "" });
+                    setShowDayDropdown(false);
+                  }}
+                >
+                  <Text style={styles.dropdownItemText}>No Specific Day</Text>
+                </TouchableOpacity>
+                {selectedSplit.days.map((day, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={[
+                      styles.dropdownItem,
+                      formData.split_day === day && styles.dropdownItemActive,
+                    ]}
+                    onPress={() => {
+                      setFormData({ ...formData, split_day: day });
+                      setShowDayDropdown(false);
+                    }}
+                  >
+                    <Text style={styles.dropdownItemText}>{day}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
+      </View>
 
-      <TextInput
-        style={[styles.input, styles.textArea]}
-        placeholder="Notes (optional)"
-        value={newSession.notes || ""}
-        onChangeText={(text) => setNewSession({ ...newSession, notes: text })}
-        multiline
-      />
+      {/* Exercises Section */}
+      <View style={styles.exercisesSection}>
+        <Text style={styles.sectionTitle}>Exercises</Text>
 
+        {/* Exercise Selection Box */}
+        <View style={styles.exerciseSelectionBox}>
+          <View style={styles.exerciseSelectionHeader}>
+            <Text style={styles.exerciseSelectionTitle}>Select Exercise</Text>
+          </View>
+
+          {/* Tabs */}
+          <View style={styles.tabsContainer}>
+            <TouchableOpacity
+              style={[styles.tab, exerciseTab === "browse" && styles.tabActive]}
+              onPress={() => setExerciseTab("browse")}
+            >
+              <Text
+                style={[
+                  styles.tabText,
+                  exerciseTab === "browse" && styles.tabTextActive,
+                ]}
+              >
+                Browse
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, exerciseTab === "search" && styles.tabActive]}
+              onPress={() => setExerciseTab("search")}
+            >
+              <Text
+                style={[
+                  styles.tabText,
+                  exerciseTab === "search" && styles.tabTextActive,
+                ]}
+              >
+                Search
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {exerciseTab === "browse" ? (
+            !selectedCategory ? (
+              <View>
+                <Text style={styles.subsectionTitle}>Select Body Part</Text>
+                <View style={styles.categoryGrid}>
+                  {categories.map((category) => (
+                    <TouchableOpacity
+                      key={category}
+                      style={styles.categoryButton}
+                      onPress={() => setSelectedCategory(category)}
+                    >
+                      <Text style={styles.categoryButtonText}>
+                        {">"} {category}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                  {!categories.includes("CARDIO") && (
+                    <TouchableOpacity
+                      style={styles.categoryButton}
+                      onPress={() => setSelectedCategory("CARDIO")}
+                    >
+                      <Text style={styles.categoryButtonText}>
+                        {">"} CARDIO
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            ) : (
+              <View>
+                <View style={styles.categoryHeader}>
+                  <Text style={styles.categoryTitle}>
+                    {selectedCategory} Exercises
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setSelectedCategory(null);
+                      setSelectedEquipment(null);
+                    }}
+                  >
+                    <Text style={styles.changeCategoryText}>
+                      Change Body Part
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.filterTitle}>Filter by Equipment</Text>
+                <View style={styles.equipmentFilters}>
+                  {["Barbell", "Dumbbell", "Cable", "Machine", "Bodyweight"].map(
+                    (equip) => (
+                      <TouchableOpacity
+                        key={equip}
+                        style={[
+                          styles.equipmentFilter,
+                          selectedEquipment === equip &&
+                            styles.equipmentFilterActive,
+                        ]}
+                        onPress={() =>
+                          setSelectedEquipment(
+                            selectedEquipment === equip ? null : equip
+                          )
+                        }
+                      >
+                        <Text
+                          style={[
+                            styles.equipmentFilterText,
+                            selectedEquipment === equip &&
+                              styles.equipmentFilterTextActive,
+                          ]}
+                        >
+                          {equip}
+                        </Text>
+                      </TouchableOpacity>
+                    )
+                  )}
+                </View>
+
+                <FlatList
+                  data={filteredExercises}
+                  keyExtractor={(item) => item.id}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.exerciseButton}
+                      onPress={() => handleExerciseChange(item.id, item.name)}
+                    >
+                      <Text style={styles.exerciseButtonText}>{item.name}</Text>
+                      {item.equipment && (
+                        <View style={styles.equipmentBadge}>
+                          <Text style={styles.equipmentBadgeText}>
+                            {item.equipment}
+                          </Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  )}
+                  scrollEnabled={false}
+                />
+              </View>
+            )
+          ) : (
+            <View>
+              <View style={styles.searchContainer}>
+                <MaterialCommunityIcons
+                  name="magnify"
+                  size={20}
+                  color={colors.textSecondary}
+                />
+                <TextInput
+                  style={styles.searchInput}
+                  value={exerciseSearchQuery}
+                  onChangeText={setExerciseSearchQuery}
+                  placeholder="Search for a workout..."
+                  placeholderTextColor={colors.textSecondary}
+                  autoFocus
+                />
+              </View>
+              {exerciseSearchQuery && (
+                <FlatList
+                  data={filteredExercises}
+                  keyExtractor={(item) => item.id}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.exerciseButton}
+                      onPress={() => handleExerciseChange(item.id, item.name)}
+                    >
+                      <Text style={styles.exerciseButtonText}>{item.name}</Text>
+                      <Text style={styles.exerciseCategoryText}>
+                        {item.category}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                  scrollEnabled={false}
+                />
+              )}
+            </View>
+          )}
+        </View>
+
+        {/* List of Added Exercises */}
+        {formData.exercises.map((ex, idx) => {
+          const exerciseSets = Array.isArray(ex.sets) ? ex.sets : [];
+          return (
+            <View key={idx} style={styles.exerciseCard}>
+              <View style={styles.exerciseCardHeader}>
+                <Text style={styles.exerciseCardTitle}>{ex.exercise_name}</Text>
+                <TouchableOpacity
+                  onPress={() =>
+                    setFormData({
+                      ...formData,
+                      exercises: formData.exercises.filter((_, i) => i !== idx),
+                    })
+                  }
+                >
+                  <MaterialCommunityIcons
+                    name="close"
+                    size={24}
+                    color={colors.danger}
+                  />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.setsHeader}>
+                <Text style={styles.setHeaderText}>Set</Text>
+                <Text style={styles.setHeaderText}>Reps</Text>
+                <Text style={styles.setHeaderText}>Weight (lbs)</Text>
+              </View>
+
+              <View style={styles.setsContainer}>
+                {exerciseSets.map((set: any, setIdx: number) => (
+                  <View key={setIdx} style={styles.setRow}>
+                    <Text style={styles.setNumber}>{set.set_number}</Text>
+                    <TextInput
+                      style={styles.setInput}
+                      value={set.reps === 0 ? "" : String(set.reps)}
+                      onChangeText={(text) => {
+                        const newExercises = [...formData.exercises];
+                        const newSets = [...exerciseSets];
+                        const value = text === "" ? 0 : parseInt(text) || 0;
+                        newSets[setIdx] = { ...newSets[setIdx], reps: value };
+                        newExercises[idx] = {
+                          ...newExercises[idx],
+                          sets: newSets,
+                        };
+                        setFormData({ ...formData, exercises: newExercises });
+                      }}
+                      placeholder="Reps"
+                      placeholderTextColor={colors.textSecondary}
+                      keyboardType="number-pad"
+                    />
+                    <TextInput
+                      style={styles.setInput}
+                      value={set.weight ? String(set.weight) : ""}
+                      onChangeText={(text) => {
+                        const newExercises = [...formData.exercises];
+                        const newSets = [...exerciseSets];
+                        newSets[setIdx] = {
+                          ...newSets[setIdx],
+                          weight: text ? parseFloat(text) : undefined,
+                        };
+                        newExercises[idx] = {
+                          ...newExercises[idx],
+                          sets: newSets,
+                        };
+                        setFormData({ ...formData, exercises: newExercises });
+                      }}
+                      placeholder="Weight"
+                      placeholderTextColor={colors.textSecondary}
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                ))}
+              </View>
+
+              <TouchableOpacity
+                style={styles.addSetButton}
+                onPress={() => {
+                  const newExercises = [...formData.exercises];
+                  const newSets = [...exerciseSets];
+                  newSets.push({
+                    set_number: exerciseSets.length + 1,
+                    reps: 0,
+                    weight: undefined,
+                  });
+                  newExercises[idx] = {
+                    ...newExercises[idx],
+                    sets: newSets,
+                  };
+                  setFormData({ ...formData, exercises: newExercises });
+                }}
+              >
+                <MaterialCommunityIcons
+                  name="plus"
+                  size={20}
+                  color={colors.background}
+                />
+                <Text style={styles.addSetButtonText}>Add Set</Text>
+              </TouchableOpacity>
+            </View>
+          );
+        })}
+
+        <TouchableOpacity
+          style={styles.addExerciseButton}
+          onPress={() => {
+            // Scroll to top to show exercise selection
+          }}
+        >
+          <MaterialCommunityIcons
+            name="plus"
+            size={20}
+            color={colors.accentPrimary}
+          />
+          <Text style={styles.addExerciseButtonText}>Add Exercise</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Notes */}
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Notes (Optional)</Text>
+        <TextInput
+          style={[styles.input, styles.notesInput]}
+          value={formData.notes}
+          onChangeText={(text) => setFormData({ ...formData, notes: text })}
+          placeholder="How did the workout feel?"
+          placeholderTextColor={colors.textSecondary}
+          multiline
+          textAlignVertical="top"
+        />
+      </View>
+
+      {/* Action Buttons */}
       <View style={styles.buttonRow}>
         <TouchableOpacity
-          style={[styles.button, styles.saveButton]}
-          onPress={handleSave}
+          style={[
+            styles.actionButton,
+            styles.saveButton,
+            formData.exercises.length === 0 && styles.buttonDisabled,
+          ]}
+          onPress={handleSubmit}
+          disabled={formData.exercises.length === 0}
         >
-          <Text style={styles.buttonText}>Save Session</Text>
+          <Text style={styles.actionButtonText}>
+            {initialSession ? "Update Workout" : "Save Workout"}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.button, styles.cancelButton]}
+          style={[styles.actionButton, styles.cancelButton]}
           onPress={onCancel}
         >
-          <Text style={styles.buttonText}>Cancel</Text>
+          <Text style={[styles.actionButtonText, styles.cancelButtonText]}>
+            Cancel
+          </Text>
         </TouchableOpacity>
       </View>
     </ScrollView>
@@ -215,61 +623,364 @@ export default function SessionForm({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: "white",
-    borderRadius: 8,
-    padding: 16,
+    flex: 1,
+    padding: spacing.lg,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: spacing.xl,
+  },
+  backButton: {
+    marginRight: spacing.md,
   },
   title: {
-    fontSize: 18,
-    fontWeight: "bold",
-    marginBottom: 16,
+    fontSize: 24,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  formSection: {
+    marginBottom: spacing.xl,
+  },
+  inputContainer: {
+    marginBottom: spacing.lg,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.textPrimary,
+    marginBottom: spacing.sm,
   },
   input: {
-    borderWidth: 1,
-    borderColor: "#d1d5db",
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
+    backgroundColor: "#2d3b4e",
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    color: colors.textPrimary,
     fontSize: 16,
+    borderWidth: 0,
+  },
+  dropdown: {
+    backgroundColor: "#2d3b4e",
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  dropdownText: {
+    color: colors.textPrimary,
+    fontSize: 16,
+  },
+  dropdownMenu: {
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.lg,
+    marginTop: spacing.xs,
+    overflow: "hidden",
+  },
+  dropdownItem: {
+    padding: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  dropdownItemActive: {
+    backgroundColor: colors.accentPrimary + "20",
+  },
+  dropdownItemText: {
+    color: colors.textPrimary,
+    fontSize: 16,
+  },
+  exercisesSection: {
+    marginBottom: spacing.xl,
   },
   sectionTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    marginBottom: spacing.lg,
+  },
+  exerciseSelectionBox: {
+    backgroundColor: "#1a2332",
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: "#2d3b4e",
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  exerciseSelectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: spacing.lg,
+  },
+  exerciseSelectionTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  tabsContainer: {
+    flexDirection: "row",
+    backgroundColor: "#2d3b4e",
+    borderRadius: borderRadius.lg,
+    padding: spacing.xs,
+    marginBottom: spacing.lg,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    alignItems: "center",
+  },
+  tabActive: {
+    backgroundColor: colors.textPrimary,
+  },
+  tabText: {
     fontSize: 16,
     fontWeight: "600",
-    marginBottom: 8,
-    marginTop: 8,
+    color: colors.textSecondary,
+  },
+  tabTextActive: {
+    color: colors.background,
+  },
+  subsectionTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.textSecondary,
+    marginBottom: spacing.md,
+  },
+  categoryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.md,
+  },
+  categoryButton: {
+    flex: 1,
+    minWidth: "45%",
+    backgroundColor: "#2d3b4e",
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: "transparent",
+  },
+  categoryButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.textPrimary,
+    fontStyle: "italic",
+  },
+  categoryHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: spacing.md,
+  },
+  categoryTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    fontStyle: "italic",
+    textTransform: "uppercase",
+  },
+  changeCategoryText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.accentPrimary,
+  },
+  filterTitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textSecondary,
+    marginBottom: spacing.sm,
+  },
+  equipmentFilters: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  equipmentFilter: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.xl,
+    backgroundColor: "#2d3b4e",
+  },
+  equipmentFilterActive: {
+    backgroundColor: colors.accentPrimary,
+  },
+  equipmentFilterText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.textSecondary,
+  },
+  equipmentFilterTextActive: {
+    color: colors.textPrimary,
+  },
+  exerciseButton: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#2d3b4e",
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  exerciseButtonText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    flex: 1,
+  },
+  equipmentBadge: {
+    backgroundColor: colors.border,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs / 2,
+    borderRadius: borderRadius.sm,
+  },
+  equipmentBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.textSecondary,
+    textTransform: "uppercase",
+  },
+  exerciseCategoryText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    textTransform: "uppercase",
+  },
+  searchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#2d3b4e",
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  searchInput: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: 16,
+    paddingVertical: spacing.md,
+  },
+  exerciseCard: {
+    backgroundColor: "#1a2332",
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: "#2d3b4e",
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  exerciseCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: spacing.lg,
+  },
+  exerciseCardTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    fontStyle: "italic",
+    textTransform: "uppercase",
+    flex: 1,
+  },
+  setsHeader: {
+    flexDirection: "row",
+    marginBottom: spacing.sm,
+  },
+  setHeaderText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.textSecondary,
+    textTransform: "uppercase",
+    fontStyle: "italic",
+  },
+  setsContainer: {
+    marginBottom: spacing.lg,
+  },
+  setRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: spacing.md,
+    gap: spacing.md,
+  },
+  setNumber: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.textSecondary,
+    fontStyle: "italic",
+    width: 40,
+  },
+  setInput: {
+    flex: 1,
+    backgroundColor: "#2d3b4e",
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    color: colors.textPrimary,
+    fontSize: 16,
+  },
+  addSetButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.textPrimary,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  addSetButtonText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.background,
   },
   addExerciseButton: {
-    backgroundColor: "#16a34a",
-    borderRadius: 8,
-    padding: 12,
+    flexDirection: "row",
     alignItems: "center",
-    marginTop: 12,
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: colors.textPrimary + "33",
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    gap: spacing.sm,
   },
-  buttonText: {
-    color: "white",
+  addExerciseButtonText: {
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: "700",
+    color: colors.accentPrimary,
   },
-  textArea: {
+  notesInput: {
     height: 100,
-    textAlignVertical: "top",
   },
   buttonRow: {
     flexDirection: "row",
-    gap: 12,
-    marginTop: 16,
+    gap: spacing.md,
+    marginTop: spacing.lg,
+    marginBottom: spacing.lg,
   },
-  button: {
+  actionButton: {
     flex: 1,
-    borderRadius: 8,
-    padding: 12,
+    borderRadius: borderRadius.lg,
+    padding: spacing.lg,
     alignItems: "center",
   },
   saveButton: {
-    backgroundColor: "#16a34a",
+    backgroundColor: colors.accentPrimary,
   },
   cancelButton: {
-    backgroundColor: "#6b7280",
+    backgroundColor: colors.textPrimary,
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+  actionButtonText: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  cancelButtonText: {
+    color: colors.background,
   },
 });
-

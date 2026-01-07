@@ -1,8 +1,13 @@
 import { useState, useEffect } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Modal } from "react-native";
+import { View, Text, StyleSheet, Modal, ScrollView } from "react-native";
+import BlurView from "../shared/BlurView";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import apiClient from "../../api/client";
 import { BodyFeeling } from "./types";
 import BodyFeelingForm from "./BodyFeelingForm";
+import Button from "../shared/Button";
+import Card from "../shared/Card";
+import { colors, spacing, borderRadius, shadows } from "../../theme";
 
 export default function BodyFeelingsSection() {
   const [bodyFeelings, setBodyFeelings] = useState<BodyFeeling[]>([]);
@@ -33,16 +38,16 @@ export default function BodyFeelingsSection() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.sectionTitle}>Body Feelings</Text>
-      <TouchableOpacity
-        style={styles.button}
+      <Button
+        title="Log Body Feeling"
         onPress={() => setShowFeelingForm(true)}
-      >
-        <Text style={styles.buttonText}>Log Body Feeling</Text>
-      </TouchableOpacity>
+        variant="primary"
+        icon={<MaterialCommunityIcons name="plus" size={20} color={colors.textPrimary} />}
+        style={styles.button}
+      />
 
       <Modal visible={showFeelingForm} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={20} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <BodyFeelingForm
               feeling={editingFeeling}
@@ -57,123 +62,96 @@ export default function BodyFeelingsSection() {
               }}
             />
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
-      {bodyFeelings.map((feeling) => (
-        <View key={feeling.id} style={styles.card}>
-          <View style={styles.cardContent}>
-            <Text style={styles.cardTitle}>{feeling.date}</Text>
+      <ScrollView showsVerticalScrollIndicator={false}>
+        {bodyFeelings.map((feeling) => (
+          <Card key={feeling.id} style={styles.card}>
+            <View style={styles.cardHeader}>
+              <View style={styles.iconContainer}>
+                <MaterialCommunityIcons name="body" size={24} color={colors.accentSecondary} />
+              </View>
+              <Text style={styles.cardDate}>{feeling.date}</Text>
+            </View>
             <Text style={styles.cardDescription}>{feeling.description}</Text>
-          </View>
-          <View style={styles.cardActions}>
-            <TouchableOpacity
-              style={styles.editButton}
-              onPress={() => {
-                setEditingFeeling(feeling);
-                setShowFeelingForm(true);
-              }}
-            >
-              <Text style={styles.editButtonText}>Edit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.deleteButton}
-              onPress={() => feeling.id && deleteFeeling(feeling.id)}
-            >
-              <Text style={styles.deleteButtonText}>Delete</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ))}
+            <View style={styles.cardActions}>
+              <Button
+                title="Edit"
+                onPress={() => {
+                  setEditingFeeling(feeling);
+                  setShowFeelingForm(true);
+                }}
+                variant="secondary"
+                style={styles.actionButton}
+              />
+              <Button
+                title="Delete"
+                onPress={() => feeling.id && deleteFeeling(feeling.id)}
+                variant="danger"
+                style={styles.actionButton}
+              />
+            </View>
+          </Card>
+        ))}
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    marginBottom: 16,
-    color: '#111827',
+    padding: spacing.lg,
   },
   button: {
-    backgroundColor: '#2563eb',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    alignItems: 'center',
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
+    marginBottom: spacing.lg,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    padding: 20,
+    justifyContent: "center",
+    padding: spacing.lg,
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    maxHeight: '80%',
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.xl,
+    maxHeight: "90%",
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   card: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    marginBottom: spacing.md,
   },
-  cardContent: {
-    flex: 1,
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginBottom: spacing.md,
   },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 8,
+  iconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.accentSecondary + "20",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cardDate: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.textPrimary,
   },
   cardDescription: {
     fontSize: 14,
-    color: '#6b7280',
+    color: colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: spacing.md,
   },
   cardActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
-  editButton: {
-    backgroundColor: '#2563eb',
-    borderRadius: 6,
-    padding: 6,
-    paddingHorizontal: 12,
+  actionButton: {
     flex: 1,
-    alignItems: 'center',
-  },
-  editButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  deleteButton: {
-    backgroundColor: '#ef4444',
-    borderRadius: 6,
-    padding: 6,
-    paddingHorizontal: 12,
-    flex: 1,
-    alignItems: 'center',
-  },
-  deleteButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
   },
 });

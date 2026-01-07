@@ -1,8 +1,13 @@
 import { useState, useEffect } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Modal } from "react-native";
+import { View, Text, StyleSheet, Modal, ScrollView } from "react-native";
+import BlurView from "../shared/BlurView";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import apiClient from "../../api/client";
 import { StressEntry } from "./types";
 import StressForm from "./StressForm";
+import Button from "../shared/Button";
+import Card from "../shared/Card";
+import { colors, spacing, borderRadius, shadows } from "../../theme";
 
 export default function StressSection() {
   const [stressEntries, setStressEntries] = useState<StressEntry[]>([]);
@@ -33,16 +38,16 @@ export default function StressSection() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.sectionTitle}>Stress Levels</Text>
-      <TouchableOpacity
-        style={styles.button}
+      <Button
+        title="Log Stress"
         onPress={() => setShowStressForm(true)}
-      >
-        <Text style={styles.buttonText}>Log Stress</Text>
-      </TouchableOpacity>
+        variant="primary"
+        icon={<MaterialCommunityIcons name="plus" size={20} color={colors.textPrimary} />}
+        style={styles.button}
+      />
 
       <Modal visible={showStressForm} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={20} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <StressForm
               entry={editingEntry}
@@ -57,127 +62,113 @@ export default function StressSection() {
               }}
             />
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
-      {stressEntries.map((entry) => (
-        <View key={entry.id} style={styles.card}>
-          <View style={styles.cardContent}>
-            <Text style={styles.cardTitle}>
-              {entry.date} - Stress Level: {entry.level}/10
-            </Text>
+      <ScrollView showsVerticalScrollIndicator={false}>
+        {stressEntries.map((entry) => (
+          <Card key={entry.id} style={styles.card}>
+            <View style={styles.cardHeader}>
+              <View style={styles.levelContainer}>
+                <MaterialCommunityIcons
+                  name="brain"
+                  size={24}
+                  color={entry.level >= 7 ? colors.danger : entry.level >= 4 ? colors.warning : colors.success}
+                />
+                <View style={styles.levelBadge}>
+                  <Text style={styles.levelText}>{entry.level}/10</Text>
+                </View>
+              </View>
+              <Text style={styles.cardDate}>{entry.date}</Text>
+            </View>
             {entry.description && (
               <Text style={styles.cardDescription}>{entry.description}</Text>
             )}
-          </View>
-          <View style={styles.cardActions}>
-            <TouchableOpacity
-              style={styles.editButton}
-              onPress={() => {
-                setEditingEntry(entry);
-                setShowStressForm(true);
-              }}
-            >
-              <Text style={styles.editButtonText}>Edit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.deleteButton}
-              onPress={() => entry.id && deleteStress(entry.id)}
-            >
-              <Text style={styles.deleteButtonText}>Delete</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ))}
+            <View style={styles.cardActions}>
+              <Button
+                title="Edit"
+                onPress={() => {
+                  setEditingEntry(entry);
+                  setShowStressForm(true);
+                }}
+                variant="secondary"
+                style={styles.actionButton}
+              />
+              <Button
+                title="Delete"
+                onPress={() => entry.id && deleteStress(entry.id)}
+                variant="danger"
+                style={styles.actionButton}
+              />
+            </View>
+          </Card>
+        ))}
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    marginBottom: 16,
-    color: '#111827',
+    padding: spacing.lg,
   },
   button: {
-    backgroundColor: '#2563eb',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    alignItems: 'center',
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
+    marginBottom: spacing.lg,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    padding: 20,
+    justifyContent: "center",
+    padding: spacing.lg,
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    maxHeight: '80%',
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.xl,
+    maxHeight: "90%",
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   card: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    marginBottom: spacing.md,
   },
-  cardContent: {
-    flex: 1,
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: spacing.md,
   },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 8,
+  levelContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  levelBadge: {
+    backgroundColor: colors.accentPrimary + "20",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.md,
+  },
+  levelText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.accentPrimary,
+  },
+  cardDate: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    fontWeight: "600",
   },
   cardDescription: {
     fontSize: 14,
-    color: '#6b7280',
+    color: colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: spacing.md,
   },
   cardActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
-  editButton: {
-    backgroundColor: '#2563eb',
-    borderRadius: 6,
-    padding: 6,
-    paddingHorizontal: 12,
+  actionButton: {
     flex: 1,
-    alignItems: 'center',
-  },
-  editButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  deleteButton: {
-    backgroundColor: '#ef4444',
-    borderRadius: 6,
-    padding: 6,
-    paddingHorizontal: 12,
-    flex: 1,
-    alignItems: 'center',
-  },
-  deleteButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
   },
 });

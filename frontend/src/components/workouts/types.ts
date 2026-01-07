@@ -15,7 +15,9 @@ export interface Split {
 export interface WorkoutSession {
   id?: string;
   date: string;
+  workout_name?: string;
   split_name?: string;
+  split_day?: string;
   exercises: any[];
   notes?: string;
 }

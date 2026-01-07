@@ -1,8 +1,13 @@
 import { useState, useEffect } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Modal, FlatList } from "react-native";
+import { View, Text, StyleSheet, Modal, FlatList } from "react-native";
+import BlurView from "../shared/BlurView";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import apiClient from "../../api/client";
 import { Split } from "./types";
 import SplitForm from "./SplitForm";
+import Button from "../shared/Button";
+import Card from "../shared/Card";
+import { colors, spacing, borderRadius, shadows } from "../../theme";
 
 interface SplitsSectionProps {
   onSplitsUpdate: () => void;
@@ -28,16 +33,18 @@ export default function SplitsSection({ onSplitsUpdate }: SplitsSectionProps) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.sectionTitle}>Workout Splits</Text>
-      <TouchableOpacity
-        style={styles.button}
-        onPress={() => setShowSplitForm(true)}
-      >
-        <Text style={styles.buttonText}>Create Split</Text>
-      </TouchableOpacity>
+      <View style={styles.headerRow}>
+        <Text style={styles.sectionTitle}>Workout Splits</Text>
+        <Button
+          title="Create"
+          onPress={() => setShowSplitForm(true)}
+          variant="primary"
+          style={styles.createButton}
+        />
+      </View>
 
       <Modal visible={showSplitForm} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={20} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <SplitForm
               onSuccess={() => {
@@ -47,18 +54,34 @@ export default function SplitsSection({ onSplitsUpdate }: SplitsSectionProps) {
               onCancel={() => setShowSplitForm(false)}
             />
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       <FlatList
         data={splits}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.id || ""}
         numColumns={2}
+        scrollEnabled={false}
         renderItem={({ item }) => (
-          <View style={styles.splitCard}>
-            <Text style={styles.splitName}>{item.name}</Text>
-            <Text style={styles.splitDays}>{item.days.join(", ")}</Text>
-          </View>
+          <Card style={styles.splitCard}>
+            <View style={styles.splitCardContent}>
+              <View style={styles.splitIconContainer}>
+                <MaterialCommunityIcons
+                  name="calendar-week"
+                  size={24}
+                  color={colors.accentSecondary}
+                />
+              </View>
+              <Text style={styles.splitName}>{item.name}</Text>
+              <View style={styles.daysContainer}>
+                {item.days.map((day, idx) => (
+                  <View key={idx} style={styles.dayBadge}>
+                    <Text style={styles.dayText}>{day}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          </Card>
         )}
         contentContainerStyle={styles.listContent}
       />
@@ -68,59 +91,77 @@ export default function SplitsSection({ onSplitsUpdate }: SplitsSectionProps) {
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
+    padding: spacing.md,
+  },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: spacing.sm,
   },
   sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    marginBottom: 16,
-    color: '#111827',
+    fontSize: 24,
+    fontWeight: "700",
+    color: colors.textPrimary,
   },
-  button: {
-    backgroundColor: '#2563eb',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    alignItems: 'center',
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
+  createButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    padding: 20,
+    justifyContent: "center",
+    padding: spacing.md,
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    maxHeight: '80%',
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.xl,
+    maxHeight: "90%",
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   listContent: {
-    gap: 12,
+    gap: spacing.sm,
   },
   splitCard: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 16,
     flex: 1,
-    margin: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    margin: spacing.xs,
+    minHeight: 120,
+  },
+  splitCardContent: {
+    alignItems: "center",
+  },
+  splitIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.accentSecondary + "20",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: spacing.sm,
   },
   splitName: {
     fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 4,
+    fontWeight: "600",
+    color: colors.textPrimary,
+    marginBottom: spacing.sm,
+    textAlign: "center",
   },
-  splitDays: {
-    fontSize: 14,
-    color: '#6b7280',
+  daysContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    justifyContent: "center",
+  },
+  dayBadge: {
+    backgroundColor: colors.accentPrimary + "20",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
+  dayText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: colors.accentPrimary,
   },
 });

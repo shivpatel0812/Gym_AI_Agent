@@ -1,7 +1,12 @@
 import { useState } from "react";
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
+import { View, Text, StyleSheet, ScrollView } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import apiClient from "../../api/client";
 import { BodyFeeling } from "./types";
+import Button from "../shared/Button";
+import Input from "../shared/Input";
+import Card from "../shared/Card";
+import { colors, spacing } from "../../theme";
 
 interface BodyFeelingFormProps {
   feeling?: BodyFeeling | null;
@@ -37,76 +42,72 @@ export default function BodyFeelingForm({
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>{feeling ? "Edit Body Feeling" : "Log Body Feeling"}</Text>
-      <TextInput
-        style={styles.input}
-        value={newFeeling.date}
-        onChangeText={(text) => setNewFeeling({ ...newFeeling, date: text })}
-        placeholder="Date (YYYY-MM-DD)"
-      />
-      <TextInput
-        style={[styles.input, styles.textArea]}
-        placeholder="Describe how your body feels (energy, fatigue, etc.)..."
-        value={newFeeling.description}
-        onChangeText={(text) => setNewFeeling({ ...newFeeling, description: text })}
-        multiline
-      />
-      <View style={styles.buttonRow}>
-        <TouchableOpacity style={[styles.button, styles.saveButton]} onPress={saveFeeling}>
-          <Text style={styles.buttonText}>Save</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.button, styles.cancelButton]} onPress={onCancel}>
-          <Text style={styles.buttonText}>Cancel</Text>
-        </TouchableOpacity>
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <View style={styles.header}>
+        <MaterialCommunityIcons name="body" size={32} color={colors.accentSecondary} />
+        <Text style={styles.title}>
+          {feeling ? "Edit Body Feeling" : "Log Body Feeling"}
+        </Text>
       </View>
+
+      <Card style={styles.card}>
+        <Input
+          label="Date"
+          value={newFeeling.date}
+          onChangeText={(text) => setNewFeeling({ ...newFeeling, date: text })}
+          placeholder="YYYY-MM-DD"
+          icon={<MaterialCommunityIcons name="calendar" size={20} color={colors.textSecondary} />}
+        />
+
+        <Input
+          label="Description"
+          placeholder="Describe how your body feels (energy, fatigue, etc.)..."
+          value={newFeeling.description}
+          onChangeText={(text) => setNewFeeling({ ...newFeeling, description: text })}
+          multiline
+          style={styles.textArea}
+          icon={<MaterialCommunityIcons name="text" size={20} color={colors.textSecondary} />}
+        />
+
+        <View style={styles.buttonRow}>
+          <Button title="Save" onPress={saveFeeling} variant="primary" style={styles.button} />
+          <Button title="Cancel" onPress={onCancel} variant="secondary" style={styles.button} />
+        </View>
+      </Card>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 16,
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    padding: spacing.lg,
+    paddingTop: spacing.xl,
   },
   title: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 16,
+    fontSize: 28,
+    fontWeight: "700",
+    color: colors.textPrimary,
   },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    fontSize: 16,
+  card: {
+    margin: spacing.lg,
   },
   textArea: {
-    height: 150,
-    textAlignVertical: 'top',
+    minHeight: 150,
+    textAlignVertical: "top",
   },
   buttonRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 8,
+    flexDirection: "row",
+    gap: spacing.md,
+    marginTop: spacing.lg,
   },
   button: {
     flex: 1,
-    borderRadius: 8,
-    padding: 12,
-    alignItems: 'center',
-  },
-  saveButton: {
-    backgroundColor: '#16a34a',
-  },
-  cancelButton: {
-    backgroundColor: '#6b7280',
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
   },
 });

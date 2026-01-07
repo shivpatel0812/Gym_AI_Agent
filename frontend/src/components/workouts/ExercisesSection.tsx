@@ -1,14 +1,29 @@
 import { useState, useEffect } from "react";
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, FlatList } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  Modal,
+  FlatList,
+  TouchableOpacity,
+} from "react-native";
+import BlurView from "../shared/BlurView";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import apiClient from "../../api/client";
 import { Exercise } from "./types";
 import ExerciseForm from "./ExerciseForm";
+import Button from "../shared/Button";
+import Card from "../shared/Card";
+import Input from "../shared/Input";
+import { colors, spacing, borderRadius, shadows } from "../../theme";
 
 interface ExercisesSectionProps {
   onExercisesUpdate: () => void;
 }
 
-export default function ExercisesSection({ onExercisesUpdate }: ExercisesSectionProps) {
+export default function ExercisesSection({
+  onExercisesUpdate,
+}: ExercisesSectionProps) {
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showExerciseForm, setShowExerciseForm] = useState(false);
@@ -33,24 +48,32 @@ export default function ExercisesSection({ onExercisesUpdate }: ExercisesSection
 
   return (
     <View style={styles.container}>
-      <Text style={styles.sectionTitle}>Exercises</Text>
-      <View style={styles.searchRow}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search exercises..."
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-        <TouchableOpacity
-          style={styles.button}
+      <View style={styles.headerRow}>
+        <Text style={styles.sectionTitle}>Exercises</Text>
+        <Button
+          title="Create"
           onPress={() => setShowExerciseForm(true)}
-        >
-          <Text style={styles.buttonText}>Create Exercise</Text>
-        </TouchableOpacity>
+          variant="primary"
+          style={styles.createButton}
+        />
       </View>
 
+      <Input
+        placeholder="Search exercises..."
+        value={searchQuery}
+        onChangeText={setSearchQuery}
+        icon={
+          <MaterialCommunityIcons
+            name="magnify"
+            size={20}
+            color={colors.textSecondary}
+          />
+        }
+        style={styles.searchInput}
+      />
+
       <Modal visible={showExerciseForm} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={20} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <ExerciseForm
               onSuccess={() => {
@@ -60,21 +83,33 @@ export default function ExercisesSection({ onExercisesUpdate }: ExercisesSection
               onCancel={() => setShowExerciseForm(false)}
             />
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       <FlatList
         data={filteredExercises}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.id || ""}
         numColumns={2}
+        scrollEnabled={false}
         renderItem={({ item }) => (
-          <View style={styles.exerciseCard}>
-            <Text style={styles.exerciseName}>{item.name}</Text>
-            <Text style={styles.exerciseType}>{item.type}</Text>
-            {item.muscle_group && (
-              <Text style={styles.muscleGroup}>{item.muscle_group}</Text>
-            )}
-          </View>
+          <Card style={styles.exerciseCard}>
+            <View style={styles.exerciseCardContent}>
+              <View style={styles.exerciseIconContainer}>
+                <MaterialCommunityIcons
+                  name="dumbbell"
+                  size={24}
+                  color={colors.accentPrimary}
+                />
+              </View>
+              <Text style={styles.exerciseName}>{item.name}</Text>
+              <Text style={styles.exerciseType}>{item.type}</Text>
+              {item.muscle_group && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{item.muscle_group}</Text>
+                </View>
+              )}
+            </View>
+          </Card>
         )}
         contentContainerStyle={styles.listContent}
       />
@@ -84,75 +119,80 @@ export default function ExercisesSection({ onExercisesUpdate }: ExercisesSection
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
+    padding: spacing.md,
+  },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: spacing.sm,
   },
   sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    marginBottom: 16,
-    color: '#111827',
+    fontSize: 24,
+    fontWeight: "700",
+    color: colors.textPrimary,
   },
-  searchRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
+  createButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
   searchInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-  },
-  button: {
-    backgroundColor: '#2563eb',
-    borderRadius: 8,
-    padding: 12,
-    justifyContent: 'center',
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
+    marginBottom: spacing.md,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    padding: 20,
+    justifyContent: "center",
+    padding: spacing.md,
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 8,
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.xl,
+    maxHeight: "90%",
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   listContent: {
-    gap: 12,
+    gap: spacing.sm,
   },
   exerciseCard: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 16,
     flex: 1,
-    margin: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    margin: spacing.xs,
+    minHeight: 120,
+  },
+  exerciseCardContent: {
+    alignItems: "center",
+  },
+  exerciseIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.accentPrimary + "20",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: spacing.sm,
   },
   exerciseName: {
     fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 4,
+    fontWeight: "600",
+    color: colors.textPrimary,
+    marginBottom: spacing.xs,
+    textAlign: "center",
   },
   exerciseType: {
-    fontSize: 14,
-    color: '#6b7280',
-  },
-  muscleGroup: {
     fontSize: 12,
-    color: '#9ca3af',
-    marginTop: 4,
+    color: colors.textSecondary,
+    marginBottom: spacing.xs,
+  },
+  badge: {
+    backgroundColor: colors.accentPrimary + "20",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+    marginTop: spacing.xs,
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: colors.accentPrimary,
   },
 });
