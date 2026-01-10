@@ -11,7 +11,7 @@ type TabType = "exercises" | "splits" | "sessions";
 
 export default function WorkoutsPage() {
   const [searchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<TabType>("exercises");
+  const [activeTab, setActiveTab] = useState<TabType>("sessions");
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [splits, setSplits] = useState<Split[]>([]);
   const [editSessionId, setEditSessionId] = useState<string | null>(null);
@@ -51,9 +51,9 @@ export default function WorkoutsPage() {
   };
 
   const tabs = [
+    { id: "sessions" as TabType, label: "Sessions", icon: MdCalendarToday },
     { id: "exercises" as TabType, label: "Exercises", icon: MdFitnessCenter },
     { id: "splits" as TabType, label: "Splits", icon: MdViewList },
-    { id: "sessions" as TabType, label: "Sessions", icon: MdCalendarToday },
   ];
 
   return (
@@ -64,9 +64,9 @@ export default function WorkoutsPage() {
 
       <div className="mb-6 sm:mb-8 bg-[#1A1F3A] p-2 rounded-xl border border-[#374151] w-full sm:w-fit">
         {/* Mobile: 2x1 layout with Sessions centered */}
-        <div className="grid grid-cols-2 gap-2 sm:hidden">
+        <div className="flex justify-center sm:hidden mb-2">
           {tabs
-            .filter((tab) => tab.id !== "sessions")
+            .filter((tab) => tab.id === "sessions")
             .map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -86,9 +86,9 @@ export default function WorkoutsPage() {
               );
             })}
         </div>
-        <div className="flex justify-center mt-2 sm:hidden">
+        <div className="grid grid-cols-2 gap-2 sm:hidden">
           {tabs
-            .filter((tab) => tab.id === "sessions")
+            .filter((tab) => tab.id !== "sessions")
             .map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -131,18 +131,18 @@ export default function WorkoutsPage() {
         </div>
       </div>
 
-      {activeTab === "exercises" && (
-        <ExercisesSection onUpdate={fetchExercises} />
-      )}
-      {activeTab === "splits" && (
-        <SplitsSection exercises={exercises} onUpdate={fetchSplits} />
-      )}
       {activeTab === "sessions" && (
         <SessionsSection
           exercises={exercises}
           splits={splits}
           editSessionId={editSessionId}
         />
+      )}
+      {activeTab === "exercises" && (
+        <ExercisesSection onUpdate={fetchExercises} />
+      )}
+      {activeTab === "splits" && (
+        <SplitsSection exercises={exercises} onUpdate={fetchSplits} />
       )}
     </div>
   );
