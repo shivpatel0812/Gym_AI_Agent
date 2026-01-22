@@ -135,9 +135,13 @@ const defaultExercises: DefaultExercise[] = [
   { name: "Pallof Press", category: "CORE / ABS", equipment: "Cable", id: "default-core-cable-pallof" },
   { name: "Weighted Sit-Ups", category: "CORE / ABS", equipment: "Weighted", id: "default-core-weighted-sit-ups" },
   { name: "Ab Rollouts", category: "CORE / ABS", equipment: "Weighted", id: "default-core-weighted-ab-rollouts" },
+  
+  { name: "Incline Walk", category: "CARDIO", equipment: "Treadmill", id: "default-cardio-incline-walk" },
+  { name: "Run", category: "CARDIO", equipment: "Treadmill", id: "default-cardio-run" },
+  { name: "Normal Walk", category: "CARDIO", equipment: "Treadmill", id: "default-cardio-normal-walk" },
 ];
 
-export const categories = ["CHEST", "SHOULDERS", "BICEPS", "TRICEPS", "BACK", "LEGS", "GLUTES", "CALVES", "CORE / ABS"];
+export const categories = ["CHEST", "SHOULDERS", "BICEPS", "TRICEPS", "BACK", "LEGS", "GLUTES", "CALVES", "CORE / ABS", "CARDIO"];
 
 export const categoryToMuscleGroup: Record<string, string> = {
   "CHEST": "Chest",
@@ -149,6 +153,7 @@ export const categoryToMuscleGroup: Record<string, string> = {
   "GLUTES": "Glutes",
   "CALVES": "Calves",
   "CORE / ABS": "Core",
+  "CARDIO": "Cardio",
 };
 
 export function getExercisesByCategory(category: string): DefaultExercise[] {

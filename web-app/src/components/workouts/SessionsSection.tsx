@@ -150,15 +150,25 @@ export default function SessionsSection({
   }, [exercises]);
 
   const handleExerciseChange = (exerciseId: string, exerciseName: string) => {
+    const selectedExercise = allExercises.find((ex) => ex.id === exerciseId);
+    const isCardio = selectedExercise?.category === "CARDIO";
+    
     setFormData({
       ...formData,
       exercises: [
         ...formData.exercises,
-        {
-          exercise_id: exerciseId,
-          exercise_name: exerciseName,
-          sets: [{ set_number: 1, reps: 0, weight: undefined }],
-        },
+        isCardio
+          ? {
+              exercise_id: exerciseId,
+              exercise_name: exerciseName,
+              time: undefined,
+              speed: undefined,
+            }
+          : {
+              exercise_id: exerciseId,
+              exercise_name: exerciseName,
+              sets: [{ set_number: 1, reps: 0, weight: undefined }],
+            },
       ],
     });
     setExerciseSearchQuery("");
@@ -559,6 +569,8 @@ export default function SessionsSection({
               <div className="space-y-4">
                 {formData.exercises.map((ex, idx) => {
                   const exerciseSets = Array.isArray(ex.sets) ? ex.sets : [];
+                  const isCardio = ex.hasOwnProperty("time") || ex.hasOwnProperty("speed");
+                  
                   return (
                     <div
                       key={idx}
@@ -584,103 +596,148 @@ export default function SessionsSection({
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-12 gap-4 mb-2 text-xs font-bold text-[#9CA3AF] uppercase italic">
-                        <div className="col-span-2">Set</div>
-                        <div className="col-span-5">Reps</div>
-                        <div className="col-span-5">Weight (lbs)</div>
-                      </div>
-
-                      <div className="space-y-3 mb-6">
-                        {exerciseSets.map((set, setIdx) => (
-                          <div
-                            key={setIdx}
-                            className="grid grid-cols-12 gap-4 items-center"
-                          >
-                            <div className="col-span-2 text-lg font-bold text-gray-400 italic">
-                              {set.set_number}
-                            </div>
-                            <div className="col-span-5">
-                              <input
-                                type="number"
-                                value={set.reps === 0 ? "" : set.reps}
-                                onChange={(e) => {
-                                  const newExercises = [...formData.exercises];
-                                  const newSets = [...exerciseSets];
-                                  const inputValue = e.target.value;
-                                  const value =
-                                    inputValue === ""
-                                      ? 0
-                                      : parseInt(inputValue) || 0;
-                                  newSets[setIdx] = {
-                                    ...newSets[setIdx],
-                                    reps: value,
-                                  };
-                                  newExercises[idx] = {
-                                    ...newExercises[idx],
-                                    sets: newSets,
-                                  };
-                                  setFormData({
-                                    ...formData,
-                                    exercises: newExercises,
-                                  });
-                                }}
-                                onFocus={(e) => {
-                                  e.target.select();
-                                }}
-                                placeholder="Reps"
-                                className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
-                              />
-                            </div>
-                            <div className="col-span-5">
-                              <input
-                                type="number"
-                                value={set.weight || ""}
-                                onChange={(e) => {
-                                  const newExercises = [...formData.exercises];
-                                  const newSets = [...exerciseSets];
-                                  newSets[setIdx] = {
-                                    ...newSets[setIdx],
-                                    weight: e.target.value
-                                      ? parseFloat(e.target.value)
-                                      : undefined,
-                                  };
-                                  newExercises[idx] = {
-                                    ...newExercises[idx],
-                                    sets: newSets,
-                                  };
-                                  setFormData({
-                                    ...formData,
-                                    exercises: newExercises,
-                                  });
-                                }}
-                                placeholder="Weight (lbs)"
-                                className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
-                              />
-                            </div>
+                      {isCardio ? (
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-xs font-bold text-[#9CA3AF] uppercase italic mb-2">
+                              Time (minutes)
+                            </label>
+                            <input
+                              type="number"
+                              value={ex.time || ""}
+                              onChange={(e) => {
+                                const newExercises = [...formData.exercises];
+                                newExercises[idx] = {
+                                  ...newExercises[idx],
+                                  time: e.target.value ? parseFloat(e.target.value) : undefined,
+                                };
+                                setFormData({ ...formData, exercises: newExercises });
+                              }}
+                              placeholder="Time"
+                              className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+                            />
                           </div>
-                        ))}
-                      </div>
+                          <div>
+                            <label className="block text-xs font-bold text-[#9CA3AF] uppercase italic mb-2">
+                              Speed (mph)
+                            </label>
+                            <input
+                              type="number"
+                              value={ex.speed || ""}
+                              onChange={(e) => {
+                                const newExercises = [...formData.exercises];
+                                newExercises[idx] = {
+                                  ...newExercises[idx],
+                                  speed: e.target.value ? parseFloat(e.target.value) : undefined,
+                                };
+                                setFormData({ ...formData, exercises: newExercises });
+                              }}
+                              placeholder="Speed"
+                              className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="grid grid-cols-12 gap-4 mb-2 text-xs font-bold text-[#9CA3AF] uppercase italic">
+                            <div className="col-span-2">Set</div>
+                            <div className="col-span-5">Reps</div>
+                            <div className="col-span-5">Weight (lbs)</div>
+                          </div>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const newExercises = [...formData.exercises];
-                          const newSets = [...exerciseSets];
-                          newSets.push({
-                            set_number: exerciseSets.length + 1,
-                            reps: 0,
-                            weight: undefined,
-                          });
-                          newExercises[idx] = {
-                            ...newExercises[idx],
-                            sets: newSets,
-                          };
-                          setFormData({ ...formData, exercises: newExercises });
-                        }}
-                        className="w-full py-3 bg-white hover:bg-gray-100 text-[#1a2332] font-bold rounded-lg flex items-center justify-center gap-2 transition-colors mb-4"
-                      >
-                        <MdAdd size={20} /> Add Set
-                      </button>
+                          <div className="space-y-3 mb-6">
+                            {exerciseSets.map((set, setIdx) => (
+                              <div
+                                key={setIdx}
+                                className="grid grid-cols-12 gap-4 items-center"
+                              >
+                                <div className="col-span-2 text-lg font-bold text-gray-400 italic">
+                                  {set.set_number}
+                                </div>
+                                <div className="col-span-5">
+                                  <input
+                                    type="number"
+                                    value={set.reps === 0 ? "" : set.reps}
+                                    onChange={(e) => {
+                                      const newExercises = [...formData.exercises];
+                                      const newSets = [...exerciseSets];
+                                      const inputValue = e.target.value;
+                                      const value =
+                                        inputValue === ""
+                                          ? 0
+                                          : parseInt(inputValue) || 0;
+                                      newSets[setIdx] = {
+                                        ...newSets[setIdx],
+                                        reps: value,
+                                      };
+                                      newExercises[idx] = {
+                                        ...newExercises[idx],
+                                        sets: newSets,
+                                      };
+                                      setFormData({
+                                        ...formData,
+                                        exercises: newExercises,
+                                      });
+                                    }}
+                                    onFocus={(e) => {
+                                      e.target.select();
+                                    }}
+                                    placeholder="Reps"
+                                    className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+                                  />
+                                </div>
+                                <div className="col-span-5">
+                                  <input
+                                    type="number"
+                                    value={set.weight || ""}
+                                    onChange={(e) => {
+                                      const newExercises = [...formData.exercises];
+                                      const newSets = [...exerciseSets];
+                                      newSets[setIdx] = {
+                                        ...newSets[setIdx],
+                                        weight: e.target.value
+                                          ? parseFloat(e.target.value)
+                                          : undefined,
+                                      };
+                                      newExercises[idx] = {
+                                        ...newExercises[idx],
+                                        sets: newSets,
+                                      };
+                                      setFormData({
+                                        ...formData,
+                                        exercises: newExercises,
+                                      });
+                                    }}
+                                    placeholder="Weight (lbs)"
+                                    className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newExercises = [...formData.exercises];
+                              const newSets = [...exerciseSets];
+                              newSets.push({
+                                set_number: exerciseSets.length + 1,
+                                reps: 0,
+                                weight: undefined,
+                              });
+                              newExercises[idx] = {
+                                ...newExercises[idx],
+                                sets: newSets,
+                              };
+                              setFormData({ ...formData, exercises: newExercises });
+                            }}
+                            className="w-full py-3 bg-white hover:bg-gray-100 text-[#1a2332] font-bold rounded-lg flex items-center justify-center gap-2 transition-colors mb-4"
+                          >
+                            <MdAdd size={20} /> Add Set
+                          </button>
+                        </>
+                      )}
                     </div>
                   );
                 })}
