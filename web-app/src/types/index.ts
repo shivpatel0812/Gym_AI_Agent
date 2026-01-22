@@ -28,9 +28,11 @@ export interface WorkoutSet {
 export interface SessionExercise {
   exercise_id: string;
   exercise_name: string;
-  sets: number | WorkoutSet[];
+  sets?: number | WorkoutSet[];
   reps?: number;
   weight?: number;
+  time?: number;
+  speed?: number;
   notes?: string;
   is_custom?: boolean;
 }
