@@ -95,3 +95,94 @@ async def get_last_exercise_session(
     
     return matching_sessions[0]  # Return the most recent one
 
+@router.get("/max-exercise/{exercise_id}")
+async def get_max_exercise_session(
+    exercise_id: str, 
+    user_id: str = Depends(get_user_id)
+):
+    """
+    Get the all-time maximum performance for a specific exercise.
+    For strength: returns max weight, max reps, max volume (weight * reps).
+    For cardio: returns max time, max speed.
+    """
+    sessions_ref = db.collection("users").document(user_id).collection("workout_sessions")
+    all_sessions = list(sessions_ref.stream())
+    
+    # Find all sessions containing this exercise
+    matching_sessions = []
+    for session in all_sessions:
+        session_data = session.to_dict()
+        exercises = session_data.get("exercises", [])
+        
+        # Check if this exercise is in the session
+        for exercise in exercises:
+            if exercise.get("exercise_id") == exercise_id:
+                matching_sessions.append({
+                    "session_id": session.id,
+                    "date": session_data.get("date"),
+                    "created_at": session_data.get("created_at"),
+                    "exercise_data": exercise,
+                })
+                break
+    
+    if not matching_sessions:
+        return None
+    
+    # Calculate max values
+    max_weight = None
+    max_reps = None
+    max_volume = None
+    max_time = None
+    max_speed = None
+    max_session = None
+    
+    for session_info in matching_sessions:
+        exercise_data = session_info["exercise_data"]
+        
+        # Check if it's cardio
+        if exercise_data.get("time") is not None or exercise_data.get("speed") is not None:
+            time = exercise_data.get("time")
+            speed = exercise_data.get("speed")
+            
+            if time is not None and (max_time is None or time > max_time):
+                max_time = time
+                max_session = session_info
+            
+            if speed is not None and (max_speed is None or speed > max_speed):
+                max_speed = speed
+                if max_session is None:
+                    max_session = session_info
+        else:
+            # Strength exercise
+            sets = exercise_data.get("sets", [])
+            if isinstance(sets, list):
+                for set_data in sets:
+                    weight = set_data.get("weight")
+                    reps = set_data.get("reps", 0)
+                    
+                    if weight is not None:
+                        if max_weight is None or weight > max_weight:
+                            max_weight = weight
+                            max_session = session_info
+                        
+                        volume = weight * reps
+                        if max_volume is None or volume > max_volume:
+                            max_volume = volume
+                            if max_session is None:
+                                max_session = session_info
+                    
+                    if reps > 0:
+                        if max_reps is None or reps > max_reps:
+                            max_reps = reps
+                            if max_session is None:
+                                max_session = session_info
+    
+    return {
+        "max_weight": max_weight,
+        "max_reps": max_reps,
+        "max_volume": max_volume,
+        "max_time": max_time,
+        "max_speed": max_speed,
+        "best_session": max_session,  # Session where the max was achieved
+    }
+
