@@ -15,6 +15,7 @@ import {
   MdKeyboardArrowDown,
   MdSearch,
   MdArrowBack,
+  MdAccessTime,
 } from "react-icons/md";
 import defaultExercises, {
   categories,
@@ -59,6 +60,8 @@ export default function SessionsSection({
   );
   const [exerciseTab, setExerciseTab] = useState<"browse" | "search">("browse");
   const exerciseSelectionRef = useRef<HTMLDivElement>(null);
+  const [lastExerciseData, setLastExerciseData] = useState<Record<string, any>>({});
+  const [maxExerciseData, setMaxExerciseData] = useState<Record<string, any>>({});
 
   useEffect(() => {
     fetchSessions();
@@ -149,9 +152,37 @@ export default function SessionsSection({
     return [...defaultExercisesList, ...customExercisesList];
   }, [exercises]);
 
-  const handleExerciseChange = (exerciseId: string, exerciseName: string) => {
+  const handleExerciseChange = async (exerciseId: string, exerciseName: string) => {
     const selectedExercise = allExercises.find((ex) => ex.id === exerciseId);
     const isCardio = selectedExercise?.category === "CARDIO";
+    
+    // Fetch last time this exercise was done
+    try {
+      const response = await apiClient.get(`/api/workout-sessions/last-exercise/${exerciseId}`);
+      if (response.data) {
+        setLastExerciseData(prev => ({
+          ...prev,
+          [exerciseId]: response.data
+        }));
+      }
+    } catch (error) {
+      // Silently fail if no previous data exists
+      console.log("No previous exercise data found");
+    }
+    
+    // Fetch all-time max for this exercise
+    try {
+      const maxResponse = await apiClient.get(`/api/workout-sessions/max-exercise/${exerciseId}`);
+      if (maxResponse.data) {
+        setMaxExerciseData(prev => ({
+          ...prev,
+          [exerciseId]: maxResponse.data
+        }));
+      }
+    } catch (error) {
+      // Silently fail if no max data exists
+      console.log("No max exercise data found");
+    }
     
     setFormData({
       ...formData,
@@ -243,6 +274,30 @@ export default function SessionsSection({
         console.error("Error deleting session:", error);
       }
     }
+  };
+
+  const formatLastTime = (dateString: string) => {
+    const date = new Date(dateString);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const compareDate = new Date(date);
+    compareDate.setHours(0, 0, 0, 0);
+    
+    const diffTime = today.getTime() - compareDate.getTime();
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays} days ago`;
+    if (diffDays < 30) {
+      const weeks = Math.floor(diffDays / 7);
+      return `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+    }
+    return date.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined 
+    });
   };
 
   return (
@@ -595,6 +650,95 @@ export default function SessionsSection({
                           <MdClose size={24} />
                         </button>
                       </div>
+
+                      {/* Last Time Info */}
+                      {lastExerciseData[ex.exercise_id] && (
+                        <div className="bg-[#252f3f] rounded-lg p-3 mb-4 border-l-4 border-[#6366F1]">
+                          <div className="flex items-center gap-2 mb-2">
+                            <MdAccessTime className="text-[#6366F1]" size={16} />
+                            <span className="text-sm font-semibold text-[#6366F1]">
+                              Last time: {formatLastTime(lastExerciseData[ex.exercise_id].date)}
+                            </span>
+                          </div>
+                          {lastExerciseData[ex.exercise_id].exercise_data && (
+                            <div className="ml-6">
+                              {lastExerciseData[ex.exercise_id].exercise_data.time !== undefined ? (
+                                <p className="text-xs text-[#9CA3AF]">
+                                  Time: {lastExerciseData[ex.exercise_id].exercise_data.time} min
+                                  {lastExerciseData[ex.exercise_id].exercise_data.speed && 
+                                    ` | Speed: ${lastExerciseData[ex.exercise_id].exercise_data.speed} mph`}
+                                </p>
+                              ) : lastExerciseData[ex.exercise_id].exercise_data.sets && Array.isArray(lastExerciseData[ex.exercise_id].exercise_data.sets) ? (
+                                <div>
+                                  <p className="text-xs text-[#9CA3AF] mb-1">
+                                    {lastExerciseData[ex.exercise_id].exercise_data.sets.length} set{lastExerciseData[ex.exercise_id].exercise_data.sets.length > 1 ? 's' : ''}
+                                  </p>
+                                  {lastExerciseData[ex.exercise_id].exercise_data.sets.slice(0, 3).map((set: any, setIdx: number) => (
+                                    <p key={setIdx} className="text-xs text-[#9CA3AF] ml-2">
+                                      Set {set.set_number}: {set.reps} reps
+                                      {set.weight && ` @ ${set.weight} lbs`}
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-[#9CA3AF]">
+                                  {lastExerciseData[ex.exercise_id].exercise_data.sets} sets x {lastExerciseData[ex.exercise_id].exercise_data.reps} reps
+                                  {lastExerciseData[ex.exercise_id].exercise_data.weight && 
+                                    ` @ ${lastExerciseData[ex.exercise_id].exercise_data.weight} lbs`}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* All-Time Max Info */}
+                      {maxExerciseData[ex.exercise_id] && (
+                        <div className="bg-[#2a1f1a] rounded-lg p-3 mb-4 border-l-4 border-[#F59E0B]">
+                          <div className="flex items-center gap-2 mb-2">
+                            <MdFitnessCenter className="text-[#F59E0B]" size={16} />
+                            <span className="text-sm font-semibold text-[#F59E0B]">
+                              All-Time Max
+                            </span>
+                          </div>
+                          {maxExerciseData[ex.exercise_id] && (
+                            <div className="ml-6">
+                              {maxExerciseData[ex.exercise_id].max_time !== undefined || maxExerciseData[ex.exercise_id].max_speed !== undefined ? (
+                                <div>
+                                  {maxExerciseData[ex.exercise_id].max_time !== undefined && (
+                                    <p className="text-xs text-[#9CA3AF]">
+                                      Best Time: {maxExerciseData[ex.exercise_id].max_time} min
+                                    </p>
+                                  )}
+                                  {maxExerciseData[ex.exercise_id].max_speed !== undefined && (
+                                    <p className="text-xs text-[#9CA3AF]">
+                                      Best Speed: {maxExerciseData[ex.exercise_id].max_speed} mph
+                                    </p>
+                                  )}
+                                </div>
+                              ) : (
+                                <div>
+                                  {maxExerciseData[ex.exercise_id].max_weight !== undefined && (
+                                    <p className="text-xs text-[#9CA3AF]">
+                                      Max Weight: {maxExerciseData[ex.exercise_id].max_weight} lbs
+                                    </p>
+                                  )}
+                                  {maxExerciseData[ex.exercise_id].max_reps !== undefined && (
+                                    <p className="text-xs text-[#9CA3AF]">
+                                      Max Reps: {maxExerciseData[ex.exercise_id].max_reps}
+                                    </p>
+                                  )}
+                                  {maxExerciseData[ex.exercise_id].max_volume !== undefined && (
+                                    <p className="text-xs text-[#9CA3AF]">
+                                      Max Volume: {Math.round(maxExerciseData[ex.exercise_id].max_volume)} lbs
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {isCardio ? (
                         <div className="space-y-4">
