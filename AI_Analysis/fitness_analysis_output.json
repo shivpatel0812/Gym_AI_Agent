@@ -1,0 +1,1201 @@
+{
+  "user_id": "demo_user_12345",
+  "analysis_timestamp": "2026-01-02T22:04:15.682136",
+  "months_analyzed": [
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December"
+  ],
+  "monthly_results": {
+    "July": {
+      "month": 7,
+      "year": 2024,
+      "summary": {
+        "user_id": "demo_user_12345",
+        "analysis_period": "July 2024",
+        "training": {
+          "time_window": "July 2024",
+          "start_date": "2024-07-01",
+          "end_date": "2024-07-31",
+          "total_sessions": 19,
+          "sessions_per_week": 4.3,
+          "split_distribution": {
+            "Pull Day": 8,
+            "Push Day": 5,
+            "Leg Day": 6
+          },
+          "total_sets": 404,
+          "total_reps": 4542,
+          "avg_sets_per_session": 21.3,
+          "progression": "increasing",
+          "missed_sessions": 0,
+          "compound_lifts": {
+            "Deadlift": [
+              {
+                "date": "2024-07-02",
+                "max_weight": 225,
+                "total_reps": 17
+              },
+              {
+                "date": "2024-07-08",
+                "max_weight": 225,
+                "total_reps": 20
+              },
+              {
+                "date": "2024-07-16",
+                "max_weight": 225,
+                "total_reps": 22
+              },
+              {
+                "date": "2024-07-18",
+                "max_weight": 225,
+                "total_reps": 17
+              },
+              {
+                "date": "2024-07-21",
+                "max_weight": 225,
+                "total_reps": 19
+              },
+              {
+                "date": "2024-07-24",
+                "max_weight": 225,
+                "total_reps": 18
+              },
+              {
+                "date": "2024-07-27",
+                "max_weight": 225,
+                "total_reps": 15
+              },
+              {
+                "date": "2024-07-30",
+                "max_weight": 230,
+                "total_reps": 21
+              }
+            ],
+            "Barbell Bench Press": [
+              {
+                "date": "2024-07-04",
+                "max_weight": 135,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-07-07",
+                "max_weight": 135,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-07-10",
+                "max_weight": 135,
+                "total_reps": 39
+              },
+              {
+                "date": "2024-07-11",
+                "max_weight": 135,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-07-17",
+                "max_weight": 135,
+                "total_reps": 37
+              }
+            ],
+            "Barbell Squat": [
+              {
+                "date": "2024-07-06",
+                "max_weight": 185,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-07-14",
+                "max_weight": 185,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-07-20",
+                "max_weight": 185,
+                "total_reps": 35
+              },
+              {
+                "date": "2024-07-25",
+                "max_weight": 185,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-07-26",
+                "max_weight": 185,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-07-29",
+                "max_weight": 190,
+                "total_reps": 36
+              }
+            ],
+            "Romanian Deadlift": [
+              {
+                "date": "2024-07-06",
+                "max_weight": 135,
+                "total_reps": 32
+              },
+              {
+                "date": "2024-07-14",
+                "max_weight": 135,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-07-20",
+                "max_weight": 135,
+                "total_reps": 31
+              },
+              {
+                "date": "2024-07-25",
+                "max_weight": 135,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-07-26",
+                "max_weight": 135,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-07-29",
+                "max_weight": 140,
+                "total_reps": 32
+              }
+            ]
+          }
+        },
+        "nutrition": {
+          "time_window": "July 2024",
+          "days_logged": 31,
+          "avg_calories": 1918,
+          "calories_range": [
+            1660,
+            2220
+          ],
+          "avg_protein": 150,
+          "avg_carbs": 184,
+          "avg_fats": 65,
+          "consistency": "excellent",
+          "protein_ratio": 31.3
+        },
+        "recovery": {
+          "time_window": "July 2024",
+          "avg_sleep_hours": 7.4,
+          "sleep_range": [
+            6.0,
+            8.8
+          ],
+          "avg_sleep_quality": 7.2,
+          "sleep_trend": "stable",
+          "avg_fatigue": 4.2,
+          "fatigue_trend": "stable",
+          "avg_energy": 6.6,
+          "avg_body_aches": 3.3
+        },
+        "lifestyle": {
+          "time_window": "July 2024",
+          "avg_stress": 4.8,
+          "high_stress_days": 5,
+          "avg_steps": 10703,
+          "active_days": 31
+        }
+      },
+      "analysis": "**1. TRAINING**\n\nYour training frequency remains consistent at 4.3 sessions per week, aligning perfectly with your goal of 4-5 sessions. The progression in your Deadlift, now at 230 pounds, is commendable, showing continued strength gains. However, the Barbell Bench Press still shows a plateau at 135 pounds. This indicates a need for strategic changes, such as varying your rep schemes or adding accessory exercises, to stimulate progress.\n\n**2. NUTRITION**\n\nYour average daily calorie intake is still 1918, unchanged from last month, and likely below optimal for muscle building. Protein intake remains solid at 150 grams, which supports your goals well. Consistency in logging is excellent, but a modest increase in calories, focusing on protein-rich foods, is recommended to better support muscle growth.\n\n**3. RECOVERY**\n\nYour average sleep of 7.4 hours is steady, but aiming closer to 8 hours could improve your average fatigue level, which remains at 4.2. Your sleep quality appears stable; however, addressing fatigue through more rest and managing body aches could enhance recovery.\n\n**4. LIFESTYLE**\n\nYour average stress level is stable at 4.8 with five high-stress days, indicating that stress remains a significant factor. Your activity level is high and beneficial, with an average of 10,703 steps per day, which supports overall health and stress management. Implementing stress management techniques during exam periods could further enhance recovery and performance.\n\n**5. WHAT TO CHANGE**\n\n1. **Increase Caloric Intake**: Add an additional 200 calories daily, focusing on lean protein sources, to support muscle building.\n2. **Bench Press Variation**: Introduce variations like incline bench or dumbbell presses to break through the current plateau.\n3. **Stress Management**: Incorporate short, daily stress-relief practices like deep breathing or meditation, particularly during exam periods.\n\n**6. WHAT TO KEEP**\n\n1. **Consistent Workout Routine**: Your dedication to not missing sessions is crucial for long-term progress.\n2. **Daily Nutrition Logging**: Continue your excellent consistency in logging nutrition, which is vital for making informed adjustments.\n3. **High Activity Levels**: Maintain your impressive daily step count, which aids in stress reduction and overall health.\n\n**7. PRIORITY FOCUS (Next 1-2 Weeks)**\n\n**Increase Daily Caloric Intake by 200 Calories**\n\nEnsuring adequate caloric intake remains crucial for muscle growth and overcoming plateaus like the one in your Bench Press. Focusing on this change will better align your nutrition with your training demands, supporting both strength gains and recovery. This adjustment is straightforward and realistic, given your current consistency with logging nutrition.",
+      "tokens_used": 2934
+    },
+    "August": {
+      "month": 8,
+      "year": 2024,
+      "summary": {
+        "user_id": "demo_user_12345",
+        "analysis_period": "August 2024",
+        "training": {
+          "time_window": "August 2024",
+          "start_date": "2024-08-01",
+          "end_date": "2024-08-31",
+          "total_sessions": 19,
+          "sessions_per_week": 4.3,
+          "split_distribution": {
+            "Pull Day": 10,
+            "Leg Day": 7,
+            "Push Day": 2
+          },
+          "total_sets": 410,
+          "total_reps": 4632,
+          "avg_sets_per_session": 21.6,
+          "progression": "increasing",
+          "missed_sessions": 0,
+          "compound_lifts": {
+            "Deadlift": [
+              {
+                "date": "2024-08-01",
+                "max_weight": 230,
+                "total_reps": 19
+              },
+              {
+                "date": "2024-08-02",
+                "max_weight": 230,
+                "total_reps": 18
+              },
+              {
+                "date": "2024-08-07",
+                "max_weight": 230,
+                "total_reps": 20
+              },
+              {
+                "date": "2024-08-13",
+                "max_weight": 230,
+                "total_reps": 20
+              },
+              {
+                "date": "2024-08-14",
+                "max_weight": 230,
+                "total_reps": 18
+              },
+              {
+                "date": "2024-08-18",
+                "max_weight": 230,
+                "total_reps": 18
+              },
+              {
+                "date": "2024-08-19",
+                "max_weight": 230,
+                "total_reps": 21
+              },
+              {
+                "date": "2024-08-20",
+                "max_weight": 230,
+                "total_reps": 20
+              },
+              {
+                "date": "2024-08-21",
+                "max_weight": 230,
+                "total_reps": 19
+              },
+              {
+                "date": "2024-08-26",
+                "max_weight": 235,
+                "total_reps": 19
+              }
+            ],
+            "Barbell Squat": [
+              {
+                "date": "2024-08-03",
+                "max_weight": 190,
+                "total_reps": 40
+              },
+              {
+                "date": "2024-08-09",
+                "max_weight": 190,
+                "total_reps": 38
+              },
+              {
+                "date": "2024-08-16",
+                "max_weight": 190,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-08-22",
+                "max_weight": 190,
+                "total_reps": 39
+              },
+              {
+                "date": "2024-08-23",
+                "max_weight": 190,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-08-25",
+                "max_weight": 190,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-08-29",
+                "max_weight": 195,
+                "total_reps": 36
+              }
+            ],
+            "Romanian Deadlift": [
+              {
+                "date": "2024-08-03",
+                "max_weight": 140,
+                "total_reps": 32
+              },
+              {
+                "date": "2024-08-09",
+                "max_weight": 140,
+                "total_reps": 30
+              },
+              {
+                "date": "2024-08-16",
+                "max_weight": 140,
+                "total_reps": 34
+              },
+              {
+                "date": "2024-08-22",
+                "max_weight": 140,
+                "total_reps": 30
+              },
+              {
+                "date": "2024-08-23",
+                "max_weight": 140,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-08-25",
+                "max_weight": 140,
+                "total_reps": 32
+              },
+              {
+                "date": "2024-08-29",
+                "max_weight": 145,
+                "total_reps": 32
+              }
+            ],
+            "Barbell Bench Press": [
+              {
+                "date": "2024-08-10",
+                "max_weight": 140,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-08-27",
+                "max_weight": 145,
+                "total_reps": 35
+              }
+            ]
+          }
+        },
+        "nutrition": {
+          "time_window": "August 2024",
+          "days_logged": 31,
+          "avg_calories": 1927,
+          "calories_range": [
+            1600,
+            2200
+          ],
+          "avg_protein": 149,
+          "avg_carbs": 185,
+          "avg_fats": 66,
+          "consistency": "good",
+          "protein_ratio": 30.9
+        },
+        "recovery": {
+          "time_window": "August 2024",
+          "avg_sleep_hours": 7.5,
+          "sleep_range": [
+            6.5,
+            8.9
+          ],
+          "avg_sleep_quality": 7.2,
+          "sleep_trend": "stable",
+          "avg_fatigue": 3.9,
+          "fatigue_trend": "stable",
+          "avg_energy": 6.8,
+          "avg_body_aches": 3.2
+        },
+        "lifestyle": {
+          "time_window": "August 2024",
+          "avg_stress": 4.6,
+          "high_stress_days": 2,
+          "avg_steps": 9992,
+          "active_days": 31
+        }
+      },
+      "analysis": "**1. TRAINING**\n\nYour training frequency is consistent at 4.3 sessions per week, aligning well with your goal of 4-5 sessions. Volume is balanced with an average of 21.6 sets per session, and progression is evident with your Deadlift increasing to 235 pounds, surpassing your previous month's plateau. The increase in your Barbell Bench Press to 145 pounds is a positive trend, indicating that the variation strategies are starting to pay off.\n\n**2. NUTRITION**\n\nYour average daily calorie intake has slightly increased to 1927, a step in the right direction toward supporting muscle growth. Protein intake remains steady at 149 grams per day, which is excellent for your goals. Consistency in logging is commendable, maintaining a good range between 1600 and 2200 calories.\n\n**3. RECOVERY**\n\nYour average sleep has improved to 7.5 hours, which is beneficial for recovery, though still slightly below the optimal target of 8 hours. Fatigue levels have decreased to 3.9, showing progress in managing recovery. Energy levels are moderately high at 6.8, but addressing body aches (average 3.2) could further enhance recovery.\n\n**4. LIFESTYLE**\n\nStress levels have decreased slightly to an average of 4.6, with only two high-stress days, which is an improvement. Your activity level is still strong with an average of 9,992 steps per day, supporting stress reduction and overall health, though slightly lower than last month.\n\n**5. WHAT TO CHANGE**\n\n1. **Increase Caloric Intake**: Aim to further increase your daily caloric intake by 100-150 calories, focusing on complex carbohydrates and healthy fats to enhance energy levels and support training demands.\n2. **Balance Workout Split**: Increase focus on Push Day workouts to ensure balanced development and avoid over-emphasizing Pull Days.\n3. **Address Body Aches**: Incorporate more mobility and stretching exercises post-workout to reduce body aches and improve overall recovery.\n\n**6. WHAT TO KEEP**\n\n1. **Consistent Training Routine**: Your commitment to not missing sessions is excellent for maintaining long-term progress.\n2. **Nutrition Logging**: Continue your diligent logging, as it provides valuable insights for making necessary adjustments.\n3. **Improved Stress Management**: Keep up with effective stress management techniques, especially during demanding periods like exams.\n\n**7. PRIORITY FOCUS (Next 1-2 Weeks)**\n\n**Increase Caloric Intake by 100-150 Calories**\n\nFocusing on increasing your caloric intake will support your muscle-building efforts and help sustain energy levels for your demanding schedule. This adjustment is both manageable and crucial given your current training demands and recovery needs, ensuring alignment with your long-term goals.",
+      "tokens_used": 2952
+    },
+    "September": {
+      "month": 9,
+      "year": 2024,
+      "summary": {
+        "user_id": "demo_user_12345",
+        "analysis_period": "September 2024",
+        "training": {
+          "time_window": "September 2024",
+          "start_date": "2024-09-01",
+          "end_date": "2024-09-30",
+          "total_sessions": 20,
+          "sessions_per_week": 4.7,
+          "split_distribution": {
+            "Pull Day": 6,
+            "Push Day": 6,
+            "Leg Day": 8
+          },
+          "total_sets": 418,
+          "total_reps": 4851,
+          "avg_sets_per_session": 20.9,
+          "progression": "stable",
+          "missed_sessions": 0,
+          "compound_lifts": {
+            "Deadlift": [
+              {
+                "date": "2024-09-02",
+                "max_weight": 235,
+                "total_reps": 20
+              },
+              {
+                "date": "2024-09-03",
+                "max_weight": 235,
+                "total_reps": 24
+              },
+              {
+                "date": "2024-09-12",
+                "max_weight": 235,
+                "total_reps": 19
+              },
+              {
+                "date": "2024-09-20",
+                "max_weight": 235,
+                "total_reps": 20
+              },
+              {
+                "date": "2024-09-22",
+                "max_weight": 235,
+                "total_reps": 17
+              },
+              {
+                "date": "2024-09-23",
+                "max_weight": 240,
+                "total_reps": 19
+              }
+            ],
+            "Barbell Bench Press": [
+              {
+                "date": "2024-09-05",
+                "max_weight": 145,
+                "total_reps": 35
+              },
+              {
+                "date": "2024-09-11",
+                "max_weight": 145,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-09-14",
+                "max_weight": 145,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-09-21",
+                "max_weight": 145,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-09-25",
+                "max_weight": 150,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-09-28",
+                "max_weight": 150,
+                "total_reps": 37
+              }
+            ],
+            "Barbell Squat": [
+              {
+                "date": "2024-09-07",
+                "max_weight": 195,
+                "total_reps": 38
+              },
+              {
+                "date": "2024-09-09",
+                "max_weight": 195,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-09-15",
+                "max_weight": 195,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-09-16",
+                "max_weight": 195,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-09-17",
+                "max_weight": 195,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-09-18",
+                "max_weight": 195,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-09-19",
+                "max_weight": 195,
+                "total_reps": 39
+              },
+              {
+                "date": "2024-09-24",
+                "max_weight": 200,
+                "total_reps": 36
+              }
+            ],
+            "Romanian Deadlift": [
+              {
+                "date": "2024-09-07",
+                "max_weight": 145,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-09-09",
+                "max_weight": 145,
+                "total_reps": 31
+              },
+              {
+                "date": "2024-09-15",
+                "max_weight": 145,
+                "total_reps": 32
+              },
+              {
+                "date": "2024-09-16",
+                "max_weight": 145,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-09-17",
+                "max_weight": 145,
+                "total_reps": 35
+              },
+              {
+                "date": "2024-09-18",
+                "max_weight": 145,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-09-19",
+                "max_weight": 145,
+                "total_reps": 32
+              },
+              {
+                "date": "2024-09-24",
+                "max_weight": 150,
+                "total_reps": 36
+              }
+            ]
+          }
+        },
+        "nutrition": {
+          "time_window": "September 2024",
+          "days_logged": 30,
+          "avg_calories": 1886,
+          "calories_range": [
+            1610,
+            2130
+          ],
+          "avg_protein": 145,
+          "avg_carbs": 184,
+          "avg_fats": 65,
+          "consistency": "good",
+          "protein_ratio": 30.8
+        },
+        "recovery": {
+          "time_window": "September 2024",
+          "avg_sleep_hours": 7.5,
+          "sleep_range": [
+            6.1,
+            8.8
+          ],
+          "avg_sleep_quality": 7.1,
+          "sleep_trend": "stable",
+          "avg_fatigue": 4.4,
+          "fatigue_trend": "stable",
+          "avg_energy": 7.2,
+          "avg_body_aches": 3.1
+        },
+        "lifestyle": {
+          "time_window": "September 2024",
+          "avg_stress": 4.1,
+          "high_stress_days": 2,
+          "avg_steps": 11798,
+          "active_days": 30
+        }
+      },
+      "analysis": "**1. TRAINING**\n\nYour training frequency increased to 4.7 sessions per week, which is excellent and firmly within your target range of 4-5 sessions. The split distribution is balanced, with an even focus on Pull, Push, and Leg Days, addressing last month's suggestion to enhance Push Day emphasis. Total volume at 418 sets demonstrates consistent effort, although progression in compound lifts is stable with a slight improvement in Deadlift and Barbell Bench Press, indicating room for further overload opportunities.\n\n**2. NUTRITION**\n\nYour average daily calorie intake is slightly lower at 1886 compared to last month, which is below the recommended increase, but still within a reasonable range. Protein intake remains strong at 145 grams per day, supporting your muscle-building goals. Consistency in tracking continues to be a strong point, with all 30 days logged, maintaining a good range between 1610 and 2130 calories.\n\n**3. RECOVERY**\n\nSleep duration is stable at 7.5 hours, which is beneficial though still not reaching the optimal 8 hours. Sleep quality has slightly improved to 7.1, reflecting good recovery practices. Fatigue levels are steady at 4.4, and energy levels have increased to 7.2, indicating effective recovery strategies. However, body aches remain slightly elevated at 3.1, suggesting a need for increased focus on recovery techniques.\n\n**4. LIFESTYLE**\n\nStress levels have improved, with an average of 4.1 and only two high-stress days, aligning well with your academic demands. Your average daily steps have increased to 11,798, showcasing excellent overall activity and contributing positively to stress management and cardiovascular health.\n\n**5. WHAT TO CHANGE**\n\n1. **Increase Caloric Intake**: Aim to increase your daily caloric intake by another 100-150 calories, focusing particularly on complex carbohydrates and healthy fats to support muscle growth and energy levels.\n2. **Enhance Recovery Practices**: Introduce more targeted post-workout stretching and possibly a weekly yoga session to address persistent body aches and improve flexibility.\n3. **Optimize Sleep Routine**: Try to increase your sleep duration towards 8 hours by establishing a more consistent bedtime routine, especially during high-stress periods like exams.\n\n**6. WHAT TO KEEP**\n\n1. **Training Consistency**: Your commitment to regular sessions without any missed workouts is commendable and crucial for long-term progress.\n2. **Nutrition Logging**: Continue your excellent habit of logging nutrition, which is essential for making informed dietary adjustments.\n3. **Stress Management**: Keep employing effective stress management techniques, as evidenced by your reduced stress levels, which is vital during exam periods.\n\n**7. PRIORITY FOCUS (Next 1-2 Weeks)**\n\n**Increase Caloric Intake by 100-150 Calories**\n\nThis remains the priority focus to ensure your body receives adequate energy to support muscle growth and maintain high energy levels throughout your busy schedule. Incrementally increasing your intake with nutrient-dense foods will help sustain your training demands and aid in overall recovery, aligning with your long-term goals.",
+      "tokens_used": 3092
+    },
+    "October": {
+      "month": 10,
+      "year": 2024,
+      "summary": {
+        "user_id": "demo_user_12345",
+        "analysis_period": "October 2024",
+        "training": {
+          "time_window": "October 2024",
+          "start_date": "2024-10-01",
+          "end_date": "2024-10-31",
+          "total_sessions": 20,
+          "sessions_per_week": 4.5,
+          "split_distribution": {
+            "Leg Day": 2,
+            "Push Day": 7,
+            "Pull Day": 11
+          },
+          "total_sets": 433,
+          "total_reps": 4667,
+          "avg_sets_per_session": 21.6,
+          "progression": "stable",
+          "missed_sessions": 0,
+          "compound_lifts": {
+            "Barbell Squat": [
+              {
+                "date": "2024-10-03",
+                "max_weight": 200,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-10-07",
+                "max_weight": 200,
+                "total_reps": 36
+              }
+            ],
+            "Romanian Deadlift": [
+              {
+                "date": "2024-10-03",
+                "max_weight": 150,
+                "total_reps": 34
+              },
+              {
+                "date": "2024-10-07",
+                "max_weight": 150,
+                "total_reps": 34
+              }
+            ],
+            "Barbell Bench Press": [
+              {
+                "date": "2024-10-04",
+                "max_weight": 150,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-10-06",
+                "max_weight": 150,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-10-11",
+                "max_weight": 150,
+                "total_reps": 39
+              },
+              {
+                "date": "2024-10-20",
+                "max_weight": 150,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-10-21",
+                "max_weight": 155,
+                "total_reps": 35
+              },
+              {
+                "date": "2024-10-26",
+                "max_weight": 155,
+                "total_reps": 34
+              },
+              {
+                "date": "2024-10-31",
+                "max_weight": 155,
+                "total_reps": 40
+              }
+            ],
+            "Deadlift": [
+              {
+                "date": "2024-10-05",
+                "max_weight": 240,
+                "total_reps": 19
+              },
+              {
+                "date": "2024-10-08",
+                "max_weight": 240,
+                "total_reps": 17
+              },
+              {
+                "date": "2024-10-12",
+                "max_weight": 240,
+                "total_reps": 19
+              },
+              {
+                "date": "2024-10-13",
+                "max_weight": 240,
+                "total_reps": 23
+              },
+              {
+                "date": "2024-10-14",
+                "max_weight": 240,
+                "total_reps": 21
+              },
+              {
+                "date": "2024-10-16",
+                "max_weight": 240,
+                "total_reps": 20
+              },
+              {
+                "date": "2024-10-19",
+                "max_weight": 240,
+                "total_reps": 20
+              },
+              {
+                "date": "2024-10-22",
+                "max_weight": 245,
+                "total_reps": 18
+              },
+              {
+                "date": "2024-10-23",
+                "max_weight": 245,
+                "total_reps": 18
+              },
+              {
+                "date": "2024-10-24",
+                "max_weight": 245,
+                "total_reps": 19
+              },
+              {
+                "date": "2024-10-27",
+                "max_weight": 245,
+                "total_reps": 19
+              }
+            ]
+          }
+        },
+        "nutrition": {
+          "time_window": "October 2024",
+          "days_logged": 31,
+          "avg_calories": 1904,
+          "calories_range": [
+            1580,
+            2280
+          ],
+          "avg_protein": 142,
+          "avg_carbs": 184,
+          "avg_fats": 68,
+          "consistency": "good",
+          "protein_ratio": 29.8
+        },
+        "recovery": {
+          "time_window": "October 2024",
+          "avg_sleep_hours": 7.3,
+          "sleep_range": [
+            6.0,
+            8.8
+          ],
+          "avg_sleep_quality": 6.8,
+          "sleep_trend": "stable",
+          "avg_fatigue": 4,
+          "fatigue_trend": "stable",
+          "avg_energy": 7.1,
+          "avg_body_aches": 3.6
+        },
+        "lifestyle": {
+          "time_window": "October 2024",
+          "avg_stress": 4.9,
+          "high_stress_days": 6,
+          "avg_steps": 10890,
+          "active_days": 31
+        }
+      },
+      "analysis": "**1. TRAINING**\n\nYour training frequency was consistent at 4.5 sessions per week, maintaining your target range. The total volume increased to 433 sets, showing a positive trend in overall effort and commitment. However, progression in compound lifts like the Barbell Squat and Romanian Deadlift remained stable, with no increase in max weights, which suggests a plateau that might benefit from strategic overload techniques.\n\n**2. NUTRITION**\n\nCaloric intake averaged 1904 calories, a slight increase from last month, aligning more closely with your muscle-building goals. Protein intake remains robust at 142 grams per day, supporting your strength and muscle development. Consistency is strong with all 31 days logged, indicating excellent dietary discipline.\n\n**3. RECOVERY**\n\nAverage sleep reduced slightly to 7.3 hours, and sleep quality decreased slightly to 6.8, which may affect recovery negatively. Fatigue levels are stable, but body aches have increased to 3.6, indicating a need for enhanced recovery strategies. Energy levels remain high, reflecting good overall recovery practices despite these challenges.\n\n**4. LIFESTYLE**\n\nStress levels have increased to an average of 4.9, with six high-stress days, likely due to academic pressures, which could impact recovery and training intensity. Average daily steps decreased slightly to 10,890, but your consistency in staying active is commendable with 31 active days.\n\n**5. WHAT TO CHANGE**\n\n1. **Incorporate Strategic Overload**: Introduce small weight increases or additional reps in your compound lifts to break through current plateaus.\n2. **Enhance Recovery Practices**: Include more consistent post-workout stretching and consider adding a weekly yoga or mobility session to address increased body aches.\n3. **Manage Stress**: Implement short daily mindfulness or meditation sessions to mitigate stress and its impact on recovery and energy levels.\n\n**6. WHAT TO KEEP**\n\n1. **Training Consistency**: Your dedication to maintaining regular workout sessions without missing any is excellent and key to long-term progress.\n2. **Nutrition Logging**: Continue your disciplined approach to logging nutrition, ensuring adjustments can be made based on accurate data.\n3. **Energy Management**: Keep leveraging effective recovery strategies that maintain your high energy levels despite increased stress.\n\n**7. PRIORITY FOCUS (Next 1-2 Weeks)**\n\n**Implement Strategic Overload in Compound Lifts**\n\nFocusing on breaking through your current plateau in compound lifts by slightly increasing weights or reps will enhance muscle growth and strength, aligning with your long-term goal of building muscle. This focus will also keep your training challenging and prevent adaptation, crucial for continued progress as an intermediate lifter.",
+      "tokens_used": 2869
+    },
+    "November": {
+      "month": 11,
+      "year": 2024,
+      "summary": {
+        "user_id": "demo_user_12345",
+        "analysis_period": "November 2024",
+        "training": {
+          "time_window": "November 2024",
+          "start_date": "2024-11-01",
+          "end_date": "2024-11-30",
+          "total_sessions": 19,
+          "sessions_per_week": 4.4,
+          "split_distribution": {
+            "Leg Day": 4,
+            "Pull Day": 12,
+            "Push Day": 3
+          },
+          "total_sets": 416,
+          "total_reps": 4574,
+          "avg_sets_per_session": 21.9,
+          "progression": "increasing",
+          "missed_sessions": 0,
+          "compound_lifts": {
+            "Barbell Squat": [
+              {
+                "date": "2024-11-03",
+                "max_weight": 205,
+                "total_reps": 35
+              },
+              {
+                "date": "2024-11-04",
+                "max_weight": 205,
+                "total_reps": 35
+              },
+              {
+                "date": "2024-11-18",
+                "max_weight": 210,
+                "total_reps": 32
+              },
+              {
+                "date": "2024-11-23",
+                "max_weight": 210,
+                "total_reps": 37
+              }
+            ],
+            "Romanian Deadlift": [
+              {
+                "date": "2024-11-03",
+                "max_weight": 155,
+                "total_reps": 31
+              },
+              {
+                "date": "2024-11-04",
+                "max_weight": 155,
+                "total_reps": 31
+              },
+              {
+                "date": "2024-11-18",
+                "max_weight": 160,
+                "total_reps": 32
+              },
+              {
+                "date": "2024-11-23",
+                "max_weight": 160,
+                "total_reps": 33
+              }
+            ],
+            "Deadlift": [
+              {
+                "date": "2024-11-05",
+                "max_weight": 245,
+                "total_reps": 21
+              },
+              {
+                "date": "2024-11-07",
+                "max_weight": 245,
+                "total_reps": 18
+              },
+              {
+                "date": "2024-11-08",
+                "max_weight": 245,
+                "total_reps": 18
+              },
+              {
+                "date": "2024-11-09",
+                "max_weight": 245,
+                "total_reps": 22
+              },
+              {
+                "date": "2024-11-13",
+                "max_weight": 245,
+                "total_reps": 18
+              },
+              {
+                "date": "2024-11-16",
+                "max_weight": 245,
+                "total_reps": 21
+              },
+              {
+                "date": "2024-11-19",
+                "max_weight": 250,
+                "total_reps": 21
+              },
+              {
+                "date": "2024-11-20",
+                "max_weight": 250,
+                "total_reps": 19
+              },
+              {
+                "date": "2024-11-21",
+                "max_weight": 250,
+                "total_reps": 18
+              },
+              {
+                "date": "2024-11-24",
+                "max_weight": 250,
+                "total_reps": 21
+              },
+              {
+                "date": "2024-11-27",
+                "max_weight": 250,
+                "total_reps": 21
+              },
+              {
+                "date": "2024-11-29",
+                "max_weight": 250,
+                "total_reps": 18
+              }
+            ],
+            "Barbell Bench Press": [
+              {
+                "date": "2024-11-11",
+                "max_weight": 155,
+                "total_reps": 34
+              },
+              {
+                "date": "2024-11-15",
+                "max_weight": 155,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-11-26",
+                "max_weight": 160,
+                "total_reps": 40
+              }
+            ]
+          }
+        },
+        "nutrition": {
+          "time_window": "November 2024",
+          "days_logged": 30,
+          "avg_calories": 1924,
+          "calories_range": [
+            1670,
+            2130
+          ],
+          "avg_protein": 144,
+          "avg_carbs": 188,
+          "avg_fats": 68,
+          "consistency": "excellent",
+          "protein_ratio": 30.0
+        },
+        "recovery": {
+          "time_window": "November 2024",
+          "avg_sleep_hours": 7.6,
+          "sleep_range": [
+            6.6,
+            9.0
+          ],
+          "avg_sleep_quality": 7.5,
+          "sleep_trend": "stable",
+          "avg_fatigue": 4.0,
+          "fatigue_trend": "stable",
+          "avg_energy": 7.3,
+          "avg_body_aches": 2.7
+        },
+        "lifestyle": {
+          "time_window": "November 2024",
+          "avg_stress": 4.7,
+          "high_stress_days": 4,
+          "avg_steps": 10306,
+          "active_days": 30
+        }
+      },
+      "analysis": "**1. TRAINING**\n\nYour training frequency maintained a solid average of 4.4 sessions per week, which is commendable given your busy schedule. The total volume slightly decreased to 416 sets from 433 sets last month, but your progression in compound lifts shows improvement. Notably, you've increased your max weights in key lifts like the Barbell Squat and Romanian Deadlift, indicating successful application of strategic overload techniques. Keep monitoring your split distribution to ensure balanced development.\n\n**2. NUTRITION**\n\nYour average caloric intake increased to 1924 calories, which is a positive step towards supporting muscle growth. Protein consumption remains strong at an average of 144 grams per day, aligning well with your muscle-building goals. Consistency is excellent with 30 days logged, demonstrating disciplined nutritional habits.\n\n**3. RECOVERY**\n\nAverage sleep improved to 7.6 hours with quality stabilizing at 7.5, contributing positively to your recovery. Fatigue levels are stable, and body aches have decreased to 2.7, reflecting enhanced recovery practices. Maintain these habits to ensure continued progress and to counterbalance any stress-related impacts.\n\n**4. LIFESTYLE**\n\nStress levels decreased slightly to an average of 4.7, showing some improvement in managing academic pressures. Your average daily steps remained consistent at 10,306, and you maintained 30 active days, indicating a strong commitment to staying active despite external pressures.\n\n**5. WHAT TO CHANGE**\n\n1. **Balanced Workout Split**: Adjust your training split to ensure more balanced attention across all muscle groups, particularly increasing the frequency of leg and push days.\n2. **Stress Management**: Continue integrating mindfulness or meditation practices to further reduce stress, especially during high-pressure periods.\n3. **Increase Caloric Intake**: Slightly increase your caloric intake by around 100-150 calories on training days to better fuel muscle growth and recovery.\n\n**6. WHAT TO KEEP**\n\n1. **Progressive Overload**: Continue implementing strategic overload in your compound lifts, which has shown effective results in breaking through plateaus.\n2. **Nutritional Consistency**: Maintain your disciplined approach to logging your nutrition, which supports informed adjustments and progress tracking.\n3. **Active Lifestyle**: Keep up your commitment to staying active with daily steps and consistent workout attendance, which supports overall health and fitness.\n\n**7. PRIORITY FOCUS (Next 1-2 Weeks)**\n\n**Balanced Workout Split**\n\nFocusing on a more balanced workout split will ensure comprehensive development and prevent overemphasizing any particular muscle group. This adjustment will support your long-term goal of building strength and muscle across the board, while also keeping your training sessions efficient and aligned with your busy schedule.",
+      "tokens_used": 2829
+    },
+    "December": {
+      "month": 12,
+      "year": 2024,
+      "summary": {
+        "user_id": "demo_user_12345",
+        "analysis_period": "December 2024",
+        "training": {
+          "time_window": "December 2024",
+          "start_date": "2024-12-01",
+          "end_date": "2024-12-31",
+          "total_sessions": 18,
+          "sessions_per_week": 4.1,
+          "split_distribution": {
+            "Leg Day": 9,
+            "Push Day": 6,
+            "Pull Day": 3
+          },
+          "total_sets": 369,
+          "total_reps": 4407,
+          "avg_sets_per_session": 20.5,
+          "progression": "stable",
+          "missed_sessions": 1,
+          "compound_lifts": {
+            "Barbell Squat": [
+              {
+                "date": "2024-12-01",
+                "max_weight": 210,
+                "total_reps": 35
+              },
+              {
+                "date": "2024-12-05",
+                "max_weight": 210,
+                "total_reps": 35
+              },
+              {
+                "date": "2024-12-10",
+                "max_weight": 210,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-12-12",
+                "max_weight": 210,
+                "total_reps": 37
+              },
+              {
+                "date": "2024-12-13",
+                "max_weight": 210,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-12-18",
+                "max_weight": 215,
+                "total_reps": 40
+              },
+              {
+                "date": "2024-12-20",
+                "max_weight": 215,
+                "total_reps": 38
+              },
+              {
+                "date": "2024-12-21",
+                "max_weight": 215,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-12-23",
+                "max_weight": 215,
+                "total_reps": 39
+              }
+            ],
+            "Romanian Deadlift": [
+              {
+                "date": "2024-12-01",
+                "max_weight": 160,
+                "total_reps": 32
+              },
+              {
+                "date": "2024-12-05",
+                "max_weight": 160,
+                "total_reps": 30
+              },
+              {
+                "date": "2024-12-10",
+                "max_weight": 160,
+                "total_reps": 34
+              },
+              {
+                "date": "2024-12-12",
+                "max_weight": 160,
+                "total_reps": 31
+              },
+              {
+                "date": "2024-12-13",
+                "max_weight": 160,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-12-18",
+                "max_weight": 165,
+                "total_reps": 31
+              },
+              {
+                "date": "2024-12-20",
+                "max_weight": 165,
+                "total_reps": 31
+              },
+              {
+                "date": "2024-12-21",
+                "max_weight": 165,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-12-23",
+                "max_weight": 165,
+                "total_reps": 33
+              }
+            ],
+            "Barbell Bench Press": [
+              {
+                "date": "2024-12-02",
+                "max_weight": 160,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-12-03",
+                "max_weight": 160,
+                "total_reps": 33
+              },
+              {
+                "date": "2024-12-07",
+                "max_weight": 160,
+                "total_reps": 39
+              },
+              {
+                "date": "2024-12-08",
+                "max_weight": 160,
+                "total_reps": 36
+              },
+              {
+                "date": "2024-12-14",
+                "max_weight": 160,
+                "total_reps": 35
+              },
+              {
+                "date": "2024-12-16",
+                "max_weight": 165,
+                "total_reps": 35
+              }
+            ],
+            "Deadlift": [
+              {
+                "date": "2024-12-09",
+                "max_weight": 250,
+                "total_reps": 23
+              },
+              {
+                "date": "2024-12-19",
+                "max_weight": 255,
+                "total_reps": 20
+              },
+              {
+                "date": "2024-12-27",
+                "max_weight": 255,
+                "total_reps": 19
+              }
+            ]
+          }
+        },
+        "nutrition": {
+          "time_window": "December 2024",
+          "days_logged": 27,
+          "avg_calories": 1900,
+          "calories_range": [
+            1620,
+            2140
+          ],
+          "avg_protein": 144,
+          "avg_carbs": 180,
+          "avg_fats": 67,
+          "consistency": "excellent",
+          "protein_ratio": 30.4
+        },
+        "recovery": {
+          "time_window": "December 2024",
+          "avg_sleep_hours": 7.5,
+          "sleep_range": [
+            6.5,
+            8.9
+          ],
+          "avg_sleep_quality": 6.9,
+          "sleep_trend": "stable",
+          "avg_fatigue": 4.3,
+          "fatigue_trend": "stable",
+          "avg_energy": 7.1,
+          "avg_body_aches": 3.2
+        },
+        "lifestyle": {
+          "time_window": "December 2024",
+          "avg_stress": 4.9,
+          "high_stress_days": 7,
+          "avg_steps": 11439,
+          "active_days": 27
+        }
+      },
+      "analysis": "**1. TRAINING**\n\nYour training frequency this month was 4.1 sessions per week, slightly lower than previous months but still within your target range. The total volume decreased to 369 sets, and progression in compound lifts shows stability, with slight improvements in weights, especially in Deadlifts and Bench Press. The split distribution is heavily skewed towards Leg Days, with less emphasis on Pull Days, which may lead to imbalance if not addressed.\n\n**2. NUTRITION**\n\nCaloric intake averaged 1900 calories, slightly below optimal for muscle growth but consistent with previous months. Protein intake remains strong at 144 grams, effectively supporting your muscle-building goal. Consistency in logging remains excellent, though aligning calorie intake more closely with your energy expenditure could enhance results.\n\n**3. RECOVERY**\n\nAverage sleep was 7.5 hours with stable quality at 6.9, slightly below optimal but consistent. Fatigue levels remain stable at 4.3, and energy levels are high at 7.1, indicating good recovery practices despite minor body aches averaging 3.2. Enhancing sleep quality and quantity could further improve recovery.\n\n**4. LIFESTYLE**\n\nStress levels increased to an average of 4.9, with seven high-stress days, likely due to academic pressures affecting training and recovery. Your average steps increased to 11,439, showcasing excellent activity levels, which support stress management and overall health.\n\n**5. WHAT TO CHANGE**\n\n1. **Balance Workout Split**: Increase focus on Pull Days to ensure balanced muscle development and prevent overtraining specific areas.\n2. **Increase Sleep Quality**: Aim for a more consistent sleep routine, potentially adding a pre-bed relaxation practice to enhance sleep quality.\n3. **Manage Stress**: Incorporate daily mindfulness or meditation sessions to better handle academic pressures and their impact on your training.\n\n**6. WHAT TO KEEP**\n\n1. **Training Consistency**: Despite a busy schedule, maintaining regular workout sessions is commendable and crucial for progress.\n2. **Nutritional Consistency**: Continue your disciplined approach to logging nutrition, which provides valuable insights for necessary adjustments.\n3. **Active Lifestyle**: Your high step count and active days are beneficial for stress management and overall health, so keep this up.\n\n**7. PRIORITY FOCUS (Next 1-2 Weeks)**\n\n**Balance Workout Split**\n\nFocusing on a balanced workout split by increasing Pull Day sessions will ensure comprehensive muscle development and prevent imbalances. This adjustment is crucial given the current tendency to favor Leg Days, and it supports your long-term goal of building strength and muscle efficiency even with a busy schedule.",
+      "tokens_used": 5302
+    }
+  }
+}

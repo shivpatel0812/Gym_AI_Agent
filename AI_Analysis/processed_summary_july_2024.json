@@ -1,0 +1,191 @@
+{
+  "user_id": "demo_user_12345",
+  "analysis_period": "July 2024",
+  "training": {
+    "time_window": "July 2024",
+    "start_date": "2024-07-01",
+    "end_date": "2024-07-31",
+    "total_sessions": 19,
+    "sessions_per_week": 4.3,
+    "split_distribution": {
+      "Pull Day": 8,
+      "Push Day": 5,
+      "Leg Day": 6
+    },
+    "total_sets": 404,
+    "total_reps": 4542,
+    "avg_sets_per_session": 21.3,
+    "progression": "increasing",
+    "missed_sessions": 0,
+    "compound_lifts": {
+      "Deadlift": [
+        {
+          "date": "2024-07-02",
+          "max_weight": 225,
+          "total_reps": 17
+        },
+        {
+          "date": "2024-07-08",
+          "max_weight": 225,
+          "total_reps": 20
+        },
+        {
+          "date": "2024-07-16",
+          "max_weight": 225,
+          "total_reps": 22
+        },
+        {
+          "date": "2024-07-18",
+          "max_weight": 225,
+          "total_reps": 17
+        },
+        {
+          "date": "2024-07-21",
+          "max_weight": 225,
+          "total_reps": 19
+        },
+        {
+          "date": "2024-07-24",
+          "max_weight": 225,
+          "total_reps": 18
+        },
+        {
+          "date": "2024-07-27",
+          "max_weight": 225,
+          "total_reps": 15
+        },
+        {
+          "date": "2024-07-30",
+          "max_weight": 230,
+          "total_reps": 21
+        }
+      ],
+      "Barbell Bench Press": [
+        {
+          "date": "2024-07-04",
+          "max_weight": 135,
+          "total_reps": 36
+        },
+        {
+          "date": "2024-07-07",
+          "max_weight": 135,
+          "total_reps": 37
+        },
+        {
+          "date": "2024-07-10",
+          "max_weight": 135,
+          "total_reps": 39
+        },
+        {
+          "date": "2024-07-11",
+          "max_weight": 135,
+          "total_reps": 36
+        },
+        {
+          "date": "2024-07-17",
+          "max_weight": 135,
+          "total_reps": 37
+        }
+      ],
+      "Barbell Squat": [
+        {
+          "date": "2024-07-06",
+          "max_weight": 185,
+          "total_reps": 36
+        },
+        {
+          "date": "2024-07-14",
+          "max_weight": 185,
+          "total_reps": 33
+        },
+        {
+          "date": "2024-07-20",
+          "max_weight": 185,
+          "total_reps": 35
+        },
+        {
+          "date": "2024-07-25",
+          "max_weight": 185,
+          "total_reps": 36
+        },
+        {
+          "date": "2024-07-26",
+          "max_weight": 185,
+          "total_reps": 37
+        },
+        {
+          "date": "2024-07-29",
+          "max_weight": 190,
+          "total_reps": 36
+        }
+      ],
+      "Romanian Deadlift": [
+        {
+          "date": "2024-07-06",
+          "max_weight": 135,
+          "total_reps": 32
+        },
+        {
+          "date": "2024-07-14",
+          "max_weight": 135,
+          "total_reps": 33
+        },
+        {
+          "date": "2024-07-20",
+          "max_weight": 135,
+          "total_reps": 31
+        },
+        {
+          "date": "2024-07-25",
+          "max_weight": 135,
+          "total_reps": 33
+        },
+        {
+          "date": "2024-07-26",
+          "max_weight": 135,
+          "total_reps": 33
+        },
+        {
+          "date": "2024-07-29",
+          "max_weight": 140,
+          "total_reps": 32
+        }
+      ]
+    }
+  },
+  "nutrition": {
+    "time_window": "July 2024",
+    "days_logged": 31,
+    "avg_calories": 1918,
+    "calories_range": [
+      1660,
+      2220
+    ],
+    "avg_protein": 150,
+    "avg_carbs": 184,
+    "avg_fats": 65,
+    "consistency": "excellent",
+    "protein_ratio": 31.3
+  },
+  "recovery": {
+    "time_window": "July 2024",
+    "avg_sleep_hours": 7.4,
+    "sleep_range": [
+      6.0,
+      8.8
+    ],
+    "avg_sleep_quality": 7.2,
+    "sleep_trend": "stable",
+    "avg_fatigue": 4.2,
+    "fatigue_trend": "stable",
+    "avg_energy": 6.6,
+    "avg_body_aches": 3.3
+  },
+  "lifestyle": {
+    "time_window": "July 2024",
+    "avg_stress": 4.8,
+    "high_stress_days": 5,
+    "avg_steps": 10703,
+    "active_days": 31
+  }
+}

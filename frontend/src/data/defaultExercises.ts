@@ -49,10 +49,13 @@ const defaultExercises: DefaultExercise[] = [
   { name: "Hammer Curls", category: "BICEPS", equipment: "Dumbbell", id: "default-biceps-db-hammer" },
   { name: "Incline Dumbbell Curls", category: "BICEPS", equipment: "Dumbbell", id: "default-biceps-db-incline" },
   { name: "Concentration Curls", category: "BICEPS", equipment: "Dumbbell", id: "default-biceps-db-concentration" },
+  { name: "Preacher Curl", category: "BICEPS", equipment: "Dumbbell", id: "default-biceps-db-preacher" },
   { name: "Barbell Curls", category: "BICEPS", equipment: "Barbell", id: "default-biceps-bb-curls" },
   { name: "EZ-Bar Curls", category: "BICEPS", equipment: "Barbell", id: "default-biceps-bb-ez-bar" },
   { name: "Preacher Curls (EZ or Barbell)", category: "BICEPS", equipment: "Barbell", id: "default-biceps-bb-preacher" },
   { name: "Cable Curls", category: "BICEPS", equipment: "Cable", id: "default-biceps-cable-curls" },
+  { name: "Front Bicep Cable Curl", category: "BICEPS", equipment: "Cable", id: "default-biceps-cable-front" },
+  { name: "Cable Reverse Curl", category: "BICEPS", equipment: "Cable", id: "default-biceps-cable-reverse" },
   { name: "Rope Hammer Curls", category: "BICEPS", equipment: "Cable", id: "default-biceps-cable-rope-hammer" },
   { name: "Single-Arm Cable Curls", category: "BICEPS", equipment: "Cable", id: "default-biceps-cable-single-arm" },
   { name: "Bicep Curl Machine", category: "BICEPS", equipment: "Machine", id: "default-biceps-machine-curls" },
@@ -135,9 +138,13 @@ const defaultExercises: DefaultExercise[] = [
   { name: "Pallof Press", category: "CORE / ABS", equipment: "Cable", id: "default-core-cable-pallof" },
   { name: "Weighted Sit-Ups", category: "CORE / ABS", equipment: "Weighted", id: "default-core-weighted-sit-ups" },
   { name: "Ab Rollouts", category: "CORE / ABS", equipment: "Weighted", id: "default-core-weighted-ab-rollouts" },
+  
+  { name: "Incline Walk", category: "CARDIO", equipment: "Treadmill", id: "default-cardio-incline-walk" },
+  { name: "Run", category: "CARDIO", equipment: "Treadmill", id: "default-cardio-run" },
+  { name: "Normal Walk", category: "CARDIO", equipment: "Treadmill", id: "default-cardio-normal-walk" },
 ];
 
-export const categories = ["CHEST", "SHOULDERS", "BICEPS", "TRICEPS", "BACK", "LEGS", "GLUTES", "CALVES", "CORE / ABS"];
+export const categories = ["CHEST", "SHOULDERS", "BICEPS", "TRICEPS", "BACK", "LEGS", "GLUTES", "CALVES", "CORE / ABS", "CARDIO"];
 
 export const categoryToMuscleGroup: Record<string, string> = {
   "CHEST": "Chest",
@@ -149,6 +156,7 @@ export const categoryToMuscleGroup: Record<string, string> = {
   "GLUTES": "Glutes",
   "CALVES": "Calves",
   "CORE / ABS": "Core",
+  "CARDIO": "Cardio",
 };
 
 export function getExercisesByCategory(category: string): DefaultExercise[] {

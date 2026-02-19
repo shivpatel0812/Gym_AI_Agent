@@ -9,10 +9,12 @@ load_dotenv()
 
 app = FastAPI()
 
-cors_origins = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")
+cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "*")
+# Parse CORS origins - strip whitespace and filter empty strings
+cors_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
 # Use cors_origins if specified, otherwise allow all origins
 # Note: allow_credentials cannot be True when allow_origins=["*"]
-allow_all_origins = "*" in cors_origins or len(cors_origins) == 1 and cors_origins[0] == "*"
+allow_all_origins = "*" in cors_origins or (len(cors_origins) == 1 and cors_origins[0] == "*")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins if not allow_all_origins else ["*"],

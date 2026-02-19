@@ -1,11 +1,183 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional
+from typing import Optional, List, Dict
 from datetime import datetime
+from pydantic import BaseModel
+import os
+
 from models import WorkoutSession
 from auth import get_user_id
 from db import db
+from ai_analysis.workout_recommender import WorkoutRecommender
 
 router = APIRouter(prefix="/api/workout-sessions", tags=["workout-sessions"])
+
+
+class ExerciseRecommendationRequest(BaseModel):
+    exercise_name: str
+    split_name: Optional[str] = None
+    split_day: Optional[str] = None
+    position_in_workout: Optional[int] = None
+    current_workout_exercises: Optional[List[Dict]] = None  # Exercises already done in this workout
+
+# ============== AI RECOMMENDATION ENDPOINTS (Must come before parameterized routes) ==============
+
+def _get_recommender(user_id: str) -> WorkoutRecommender:
+    """Helper to create WorkoutRecommender instance."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    return WorkoutRecommender(db, user_id, api_key)
+
+
+@router.get("/ai-summary")
+async def get_workout_ai_summary(
+    user_id: str = Depends(get_user_id),
+    force_refresh: bool = Query(False, description="Force regeneration of summary")
+):
+    """
+    Get the workout AI summary for the user.
+    This summary is used to generate per-exercise recommendations.
+    Auto-generates on first call or when refresh is needed (weekly).
+    """
+    try:
+        recommender = _get_recommender(user_id)
+        summary = recommender.get_or_create_summary(force_refresh=force_refresh)
+        return summary
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Error generating summary: {error_trace}")
+        raise HTTPException(status_code=500, detail=f"Error generating summary: {str(e)}")
+
+
+@router.post("/ai-summary/refresh")
+async def refresh_workout_ai_summary(user_id: str = Depends(get_user_id)):
+    """
+    Force refresh the workout AI summary.
+    Use this when you want to regenerate the summary before the weekly refresh.
+    Note: This triggers the expensive full analysis call.
+    """
+    try:
+        recommender = _get_recommender(user_id)
+        summary = recommender.get_or_create_summary(force_refresh=True)
+        return summary
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error refreshing summary: {str(e)}")
+
+
+@router.post("/ai-recommendation/{exercise_id}")
+async def get_exercise_ai_recommendation(
+    exercise_id: str,
+    request: ExerciseRecommendationRequest,
+    user_id: str = Depends(get_user_id)
+):
+    """
+    Get AI-powered recommendation for a specific exercise.
+    Returns suggested sets, reps, and weight based on:
+    - User's workout history for this exercise
+    - User's fitness goals
+    - Progressive overload principles
+    - Position in workout (if provided)
+    
+    This endpoint is cheap to call (uses mini model) after the initial summary is created.
+    """
+    try:
+        recommender = _get_recommender(user_id)
+        recommendation = recommender.get_exercise_recommendation(
+            exercise_id=exercise_id,
+            exercise_name=request.exercise_name,
+            split_name=request.split_name,
+            split_day=request.split_day,
+            position_in_workout=request.position_in_workout,
+            current_workout_exercises=request.current_workout_exercises
+        )
+        return recommendation
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Error generating recommendation: {error_trace}")
+        raise HTTPException(status_code=500, detail=f"Error generating recommendation: {str(e)}")
+
+
+@router.get("/suggested-order/{split_name}")
+async def get_suggested_exercise_order(
+    split_name: str,
+    split_day: Optional[str] = Query(None, description="Specific day within the split"),
+    user_id: str = Depends(get_user_id)
+):
+    """
+    Get the suggested exercise order for a split based on historical patterns.
+    Returns list of exercise IDs in the typical order the user performs them.
+    """
+    try:
+        recommender = _get_recommender(user_id)
+        exercise_order = recommender.get_suggested_exercise_order(
+            split_name=split_name,
+            split_day=split_day or ""
+        )
+        return {"split_name": split_name, "split_day": split_day, "exercise_order": exercise_order}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting exercise order: {str(e)}")
+
+
+@router.get("/ai-recommendation-check")
+async def check_ai_recommendation_status(user_id: str = Depends(get_user_id)):
+    """
+    Check the status of AI recommendations for this user.
+    Returns whether the summary exists, when it was last updated, and if it needs refresh.
+    Use this to determine if the first-time setup is needed.
+    """
+    try:
+        summary_ref = db.collection("users").document(user_id).collection("workout_ai_summary").document("current")
+        summary_doc = summary_ref.get()
+        
+        if not summary_doc.exists:
+            # Check how many workout sessions exist
+            sessions_ref = db.collection("users").document(user_id).collection("workout_sessions")
+            sessions_count = len(list(sessions_ref.stream()))
+            
+            return {
+                "has_summary": False,
+                "needs_initial_setup": sessions_count >= 1,
+                "sessions_logged": sessions_count,
+                "sessions_needed": 1,
+                "message": "Need at least 1 workout session before recommendations can be generated" if sessions_count < 1 else "Ready to generate recommendations"
+            }
+        
+        summary_data = summary_doc.to_dict()
+        last_updated = summary_data.get("last_updated")
+        next_refresh = summary_data.get("next_refresh")
+        
+        from datetime import datetime
+        needs_refresh = False
+        if next_refresh:
+            try:
+                refresh_date = datetime.fromisoformat(next_refresh)
+                needs_refresh = datetime.now() >= refresh_date
+            except:
+                needs_refresh = True
+        
+        return {
+            "has_summary": True,
+            "needs_initial_setup": False,
+            "last_updated": last_updated,
+            "next_refresh": next_refresh,
+            "needs_refresh": needs_refresh,
+            "total_sessions_analyzed": summary_data.get("total_sessions_analyzed", 0)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error checking recommendation status: {str(e)}")
+
+
+# ============== STANDARD WORKOUT SESSION ENDPOINTS ==============
 
 @router.get("")
 async def get_workout_sessions(user_id: str = Depends(get_user_id), date_filter: Optional[str] = Query(None)):
@@ -136,6 +308,9 @@ async def get_max_exercise_session(
     max_speed = None
     max_session = None
     
+    # Track max per set number: {set_number: {weight, reps, volume, session}}
+    max_per_set: dict = {}
+    
     for session_info in matching_sessions:
         exercise_data = session_info["exercise_data"]
         
@@ -157,6 +332,7 @@ async def get_max_exercise_session(
             sets = exercise_data.get("sets", [])
             if isinstance(sets, list):
                 for set_data in sets:
+                    set_number = set_data.get("set_number")
                     weight = set_data.get("weight")
                     reps = set_data.get("reps", 0)
                     
@@ -176,6 +352,38 @@ async def get_max_exercise_session(
                             max_reps = reps
                             if max_session is None:
                                 max_session = session_info
+                    
+                    # Track max per set number
+                    if set_number is not None:
+                        if set_number not in max_per_set:
+                            max_per_set[set_number] = {
+                                "weight": weight,
+                                "reps": reps,
+                                "volume": weight * reps if weight and reps else None,
+                                "session": session_info
+                            }
+                        else:
+                            current = max_per_set[set_number]
+                            # Update if this set has better volume (weight * reps)
+                            current_volume = current.get("volume") or 0
+                            new_volume = (weight * reps) if weight and reps else 0
+                            
+                            if new_volume > current_volume:
+                                max_per_set[set_number] = {
+                                    "weight": weight,
+                                    "reps": reps,
+                                    "volume": new_volume,
+                                    "session": session_info
+                                }
+    
+    # Format max_per_set for response
+    max_per_set_formatted = {}
+    for set_num, data in max_per_set.items():
+        max_per_set_formatted[set_num] = {
+            "weight": data.get("weight"),
+            "reps": data.get("reps"),
+            "volume": data.get("volume"),
+        }
     
     return {
         "max_weight": max_weight,
@@ -184,5 +392,5 @@ async def get_max_exercise_session(
         "max_time": max_time,
         "max_speed": max_speed,
         "best_session": max_session,  # Session where the max was achieved
+        "max_per_set": max_per_set_formatted,  # Max for each set number
     }
-

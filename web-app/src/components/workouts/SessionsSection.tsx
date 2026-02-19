@@ -40,17 +40,21 @@ export default function SessionsSection({
     date: string;
     split_id: string;
     split_name: string;
+    split_day: string;
     exercises: SessionExercise[];
     notes: string;
   }>({
     date: new Date().toISOString().split("T")[0],
     split_id: "",
     split_name: "",
+    split_day: "",
     exercises: [],
     notes: "",
   });
   const [showSplitDropdown, setShowSplitDropdown] = useState(false);
+  const [showDayDropdown, setShowDayDropdown] = useState(false);
   const splitDropdownRef = useRef<HTMLDivElement>(null);
+  const dayDropdownRef = useRef<HTMLDivElement>(null);
   const [showExerciseDropdown, setShowExerciseDropdown] = useState(false);
   const [exerciseSearchQuery, setExerciseSearchQuery] = useState("");
   const exerciseDropdownRef = useRef<HTMLDivElement>(null);
@@ -62,10 +66,202 @@ export default function SessionsSection({
   const exerciseSelectionRef = useRef<HTMLDivElement>(null);
   const [lastExerciseData, setLastExerciseData] = useState<Record<string, any>>({});
   const [maxExerciseData, setMaxExerciseData] = useState<Record<string, any>>({});
+  const [aiRecommendations, setAiRecommendations] = useState<Record<string, any>>({});
+  const [aiRecommendationLoading, setAiRecommendationLoading] = useState<Record<string, boolean>>({});
+  const [expandedRecommendations, setExpandedRecommendations] = useState<Record<string, boolean>>({});
+  const [isAutoSaving, setIsAutoSaving] = useState(false);
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [aiSummaryStatus, setAiSummaryStatus] = useState<{
+    hasSetup: boolean;
+    needsSetup: boolean;
+    isGenerating: boolean;
+    sessionsLogged: number;
+    sessionsNeeded: number;
+  }>({ hasSetup: false, needsSetup: false, isGenerating: false, sessionsLogged: 0, sessionsNeeded: 3 });
 
   useEffect(() => {
     fetchSessions();
+    checkAiSummaryStatus();
   }, []);
+
+  // Auto-save functionality
+  useEffect(() => {
+    // Only auto-save if there are exercises and form is visible
+    if (!showForm || formData.exercises.length === 0) {
+      return;
+    }
+
+    // Clear existing timeout
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+
+    // Set new timeout for auto-save (2 seconds after last change)
+    autoSaveTimeoutRef.current = setTimeout(async () => {
+      await performAutoSave();
+    }, 2000);
+
+    // Cleanup on unmount
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.exercises, formData.date, formData.split_name, formData.split_day, formData.notes, showForm, editingSessionId]);
+
+  const performAutoSave = async () => {
+    // Don't auto-save if no exercises
+    if (formData.exercises.length === 0) {
+      return;
+    }
+
+    setIsAutoSaving(true);
+    try {
+      // Filter out empty sets (0 reps and no weight) before saving
+      const filteredExercises = formData.exercises.map(ex => {
+        if (ex.sets && Array.isArray(ex.sets)) {
+          // Filter out sets with 0 reps and no weight
+          const validSets = ex.sets.filter(set => {
+            const reps = set.reps || 0;
+            const weight = set.weight;
+            // Keep sets that have at least reps > 0 OR weight > 0
+            return reps > 0 || (weight !== undefined && weight !== null && weight > 0);
+          });
+          
+          // Only include exercise if it has valid sets (or is cardio)
+          if (validSets.length > 0 || ex.time !== undefined || ex.speed !== undefined) {
+            return { ...ex, sets: validSets };
+          }
+          return null; // Exclude exercises with no valid sets
+        }
+        return ex; // Keep cardio exercises or exercises without sets array
+      }).filter(ex => ex !== null); // Remove null entries
+      
+      // Don't save if no exercises have valid data
+      if (filteredExercises.length === 0) {
+        setIsAutoSaving(false);
+        return;
+      }
+      
+      const payload = {
+        date: formData.date,
+        split_name: formData.split_name || undefined,
+        split_day: formData.split_day || undefined,
+        exercises: filteredExercises,
+        notes: formData.notes || undefined,
+      };
+
+      if (editingSessionId) {
+        await apiClient.put(
+          `/api/workout-sessions/${editingSessionId}`,
+          payload
+        );
+      } else {
+        // For new sessions, create it and store the ID for future auto-saves
+        const response = await apiClient.post("/api/workout-sessions", payload);
+        if (response.data && response.data.id) {
+          setEditingSessionId(response.data.id);
+        }
+      }
+
+      setLastSaved(new Date());
+      // Refresh sessions list to show updates
+      fetchSessions();
+    } catch (error) {
+      console.error("Error auto-saving session:", error);
+    } finally {
+      setIsAutoSaving(false);
+    }
+  };
+
+  // Check AI recommendation status and auto-trigger if needed
+  const checkAiSummaryStatus = async () => {
+    try {
+      const response = await apiClient.get("/api/workout-sessions/ai-recommendation-check");
+      const data = response.data;
+      
+      setAiSummaryStatus({
+        hasSetup: data.has_summary || false,
+        needsSetup: data.needs_initial_setup || false,
+        isGenerating: false,
+        sessionsLogged: data.sessions_logged || 0,
+        sessionsNeeded: data.sessions_needed || 3,
+      });
+      
+      // Auto-trigger first-time setup if ready
+      if (data.needs_initial_setup && !data.has_summary) {
+        generateAiSummary();
+      }
+    } catch (error) {
+      console.log("AI recommendations not available:", error);
+    }
+  };
+
+  // Generate AI summary (first-time setup or manual refresh)
+  const generateAiSummary = async () => {
+    setAiSummaryStatus(prev => ({ ...prev, isGenerating: true }));
+    try {
+      await apiClient.get("/api/workout-sessions/ai-summary");
+      setAiSummaryStatus(prev => ({ 
+        ...prev, 
+        hasSetup: true, 
+        needsSetup: false, 
+        isGenerating: false 
+      }));
+    } catch (error) {
+      console.error("Error generating AI summary:", error);
+      setAiSummaryStatus(prev => ({ ...prev, isGenerating: false }));
+    }
+  };
+
+  // Fetch AI recommendation for an exercise
+  const fetchAiRecommendation = async (
+    exerciseId: string, 
+    exerciseName: string, 
+    positionInWorkout: number
+  ) => {
+    // Don't fetch if AI isn't set up
+    if (!aiSummaryStatus.hasSetup && !aiSummaryStatus.needsSetup) {
+      return;
+    }
+    
+    setAiRecommendationLoading(prev => ({ ...prev, [exerciseId]: true }));
+    
+    try {
+      // Send exercises already done in current workout (for fatigue consideration)
+      const currentExercises = formData.exercises.map(ex => ({
+        exercise_id: ex.exercise_id,
+        exercise_name: ex.exercise_name,
+        sets: ex.sets || []
+      }));
+      
+      const response = await apiClient.post(`/api/workout-sessions/ai-recommendation/${exerciseId}`, {
+        exercise_name: exerciseName,
+        split_name: formData.split_name || undefined,
+        split_day: undefined,
+        position_in_workout: positionInWorkout,
+        current_workout_exercises: currentExercises
+      });
+      
+      if (response.data && response.data.status === "success") {
+        setAiRecommendations(prev => ({
+          ...prev,
+          [exerciseId]: response.data.recommendation
+        }));
+        // Auto-expand when recommendation is first loaded
+        setExpandedRecommendations(prev => ({
+          ...prev,
+          [exerciseId]: true
+        }));
+      }
+    } catch (error) {
+      console.log("No AI recommendation available for this exercise");
+    } finally {
+      setAiRecommendationLoading(prev => ({ ...prev, [exerciseId]: false }));
+    }
+  };
 
   useEffect(() => {
     if (propEditSessionId && sessions.length > 0) {
@@ -75,6 +271,7 @@ export default function SessionsSection({
           date: sessionToEdit.date,
           split_id: sessionToEdit.split_id || "",
           split_name: sessionToEdit.split_name || "",
+          split_day: (sessionToEdit as any).split_day || "",
           exercises: sessionToEdit.exercises || [],
           notes: sessionToEdit.notes || "",
         });
@@ -93,6 +290,12 @@ export default function SessionsSection({
         setShowSplitDropdown(false);
       }
       if (
+        dayDropdownRef.current &&
+        !dayDropdownRef.current.contains(event.target as Node)
+      ) {
+        setShowDayDropdown(false);
+      }
+      if (
         exerciseDropdownRef.current &&
         !exerciseDropdownRef.current.contains(event.target as Node)
       ) {
@@ -100,14 +303,14 @@ export default function SessionsSection({
       }
     };
 
-    if (showSplitDropdown || showExerciseDropdown) {
+    if (showSplitDropdown || showDayDropdown || showExerciseDropdown) {
       document.addEventListener("mousedown", handleClickOutside);
     }
 
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
     };
-  }, [showSplitDropdown, showExerciseDropdown]);
+  }, [showSplitDropdown, showDayDropdown, showExerciseDropdown]);
 
   const fetchSessions = async () => {
     try {
@@ -155,6 +358,7 @@ export default function SessionsSection({
   const handleExerciseChange = async (exerciseId: string, exerciseName: string) => {
     const selectedExercise = allExercises.find((ex) => ex.id === exerciseId);
     const isCardio = selectedExercise?.category === "CARDIO";
+    const positionInWorkout = formData.exercises.length; // Position is the current length (0-indexed)
     
     // Fetch last time this exercise was done
     try {
@@ -184,6 +388,9 @@ export default function SessionsSection({
       console.log("No max exercise data found");
     }
     
+    // Fetch AI recommendation for this exercise
+    fetchAiRecommendation(exerciseId, exerciseName, positionInWorkout);
+    
     setFormData({
       ...formData,
       exercises: [
@@ -210,10 +417,31 @@ export default function SessionsSection({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      // Filter out empty sets (0 reps and no weight) before saving
+      const filteredExercises = formData.exercises.map(ex => {
+        if (ex.sets && Array.isArray(ex.sets)) {
+          // Filter out sets with 0 reps and no weight
+          const validSets = ex.sets.filter(set => {
+            const reps = set.reps || 0;
+            const weight = set.weight;
+            // Keep sets that have at least reps > 0 OR weight > 0
+            return reps > 0 || (weight !== undefined && weight !== null && weight > 0);
+          });
+          
+          // Only include exercise if it has valid sets (or is cardio)
+          if (validSets.length > 0 || ex.time !== undefined || ex.speed !== undefined) {
+            return { ...ex, sets: validSets };
+          }
+          return null; // Exclude exercises with no valid sets
+        }
+        return ex; // Keep cardio exercises or exercises without sets array
+      }).filter(ex => ex !== null); // Remove null entries
+      
       const payload = {
         date: formData.date,
         split_name: formData.split_name || undefined,
-        exercises: formData.exercises,
+        split_day: formData.split_day || undefined,
+        exercises: filteredExercises,
         notes: formData.notes || undefined,
       };
 
@@ -225,6 +453,9 @@ export default function SessionsSection({
       } else {
         await apiClient.post("/api/workout-sessions", payload);
       }
+
+      // Keep recommendations but collapse them after saving
+      setExpandedRecommendations({});
 
       resetForm();
       fetchSessions();
@@ -238,6 +469,7 @@ export default function SessionsSection({
       date: new Date().toISOString().split("T")[0],
       split_id: "",
       split_name: "",
+      split_day: "",
       exercises: [],
       notes: "",
     });
@@ -247,6 +479,18 @@ export default function SessionsSection({
     setExerciseSearchQuery("");
     setSelectedCategory(null);
     setSelectedEquipment(null);
+    setLastExerciseData({});
+    setMaxExerciseData({});
+    // Don't clear recommendations - keep them visible but collapsed
+    setAiRecommendationLoading({});
+    // Collapse all recommendations when starting a new workout or after saving
+    setExpandedRecommendations({});
+    // Clear auto-save state
+    setLastSaved(null);
+    setIsAutoSaving(false);
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
   };
 
   const handleCancel = () => {
@@ -258,6 +502,7 @@ export default function SessionsSection({
       date: session.date,
       split_id: session.split_id || "",
       split_name: session.split_name || "",
+      split_day: (session as any).split_day || "",
       exercises: session.exercises || [],
       notes: session.notes || "",
     });
@@ -328,6 +573,21 @@ export default function SessionsSection({
             </div>
           </div>
           <form onSubmit={handleSubmit} className="space-y-6 sm:space-y-8">
+            {/* Auto-save indicator */}
+            {isAutoSaving && (
+              <div className="flex items-center gap-2 text-sm text-[#10B981] mb-2">
+                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span>Auto-saving...</span>
+              </div>
+            )}
+            {lastSaved && !isAutoSaving && (
+              <div className="text-xs text-[#9CA3AF] mb-2">
+                Last saved: {lastSaved.toLocaleTimeString()}
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Input
                 label="Workout Name (Optional)"
@@ -377,7 +637,12 @@ export default function SessionsSection({
                       <button
                         type="button"
                         onClick={() => {
-                          setFormData({ ...formData, split_id: "" });
+                          setFormData({ 
+                            ...formData, 
+                            split_id: "",
+                            split_name: "",
+                            split_day: "",
+                          });
                           setShowSplitDropdown(false);
                         }}
                         className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-white hover:bg-[#374151] transition-colors ${
@@ -394,6 +659,8 @@ export default function SessionsSection({
                             setFormData({
                               ...formData,
                               split_id: split.id || "",
+                              split_name: split.name,
+                              split_day: "", // Reset day when split changes
                             });
                             setShowSplitDropdown(false);
                           }}
@@ -410,6 +677,67 @@ export default function SessionsSection({
                   )}
                 </div>
               </div>
+
+              {/* Split Day Dropdown - Only show if a split is selected */}
+              {formData.split_id && (() => {
+                const selectedSplit = splits.find((s) => s.id === formData.split_id);
+                return selectedSplit && selectedSplit.days && selectedSplit.days.length > 0 ? (
+                  <div className="flex flex-col">
+                    <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
+                      Split Day (Optional)
+                    </label>
+                    <div className="relative z-20 flex-1" ref={dayDropdownRef}>
+                      <button
+                        type="button"
+                        onClick={() => setShowDayDropdown(!showDayDropdown)}
+                        className="w-full h-[46px] px-3 sm:px-4 text-base rounded-lg bg-[#2d3b4e] text-left text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1] cursor-pointer transition-all flex items-center justify-between"
+                      >
+                        <span className="truncate">
+                          {formData.split_day || "Select Day"}
+                        </span>
+                        <MdKeyboardArrowDown
+                          className={`text-gray-400 text-lg sm:text-xl flex-shrink-0 transition-transform ${
+                            showDayDropdown ? "rotate-180" : ""
+                          }`}
+                        />
+                      </button>
+                      {showDayDropdown && (
+                        <div className="absolute z-[100] w-full mt-1 bg-[#1A1F3A] border border-[#374151] rounded-lg shadow-lg overflow-hidden">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFormData({ ...formData, split_day: "" });
+                              setShowDayDropdown(false);
+                            }}
+                            className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-white hover:bg-[#374151] transition-colors ${
+                              !formData.split_day ? "bg-[#6366F1]/20" : ""
+                            }`}
+                          >
+                            No Specific Day
+                          </button>
+                          {selectedSplit.days.map((day, index) => (
+                            <button
+                              key={index}
+                              type="button"
+                              onClick={() => {
+                                setFormData({ ...formData, split_day: day });
+                                setShowDayDropdown(false);
+                              }}
+                              className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-white hover:bg-[#374151] transition-colors ${
+                                formData.split_day === day
+                                  ? "bg-[#6366F1]/20"
+                                  : ""
+                              }`}
+                            >
+                              {day}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : null;
+              })()}
             </div>
 
             <div>
@@ -692,6 +1020,109 @@ export default function SessionsSection({
                         </div>
                       )}
 
+                      {/* AI Recommendation */}
+                      {aiRecommendationLoading[ex.exercise_id] ? (
+                        <div className="bg-[#1a2a1f] rounded-lg p-3 mb-4 border-l-4 border-[#10B981]">
+                          <div className="flex items-center gap-2">
+                            <svg className="animate-spin h-4 w-4 text-[#10B981]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span className="text-sm font-semibold text-[#10B981]">
+                              Getting AI recommendation...
+                            </span>
+                          </div>
+                        </div>
+                      ) : aiRecommendations[ex.exercise_id] && (
+                        <div className="bg-[#1a2a1f] rounded-lg p-3 mb-4 border-l-4 border-[#10B981]">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-[#10B981]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                              </svg>
+                              <span className="text-sm font-semibold text-[#10B981]">
+                                AI Recommendation
+                              </span>
+                              {aiRecommendations[ex.exercise_id].confidence && (
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                  aiRecommendations[ex.exercise_id].confidence === 'high' 
+                                    ? 'bg-[#10B981]/20 text-[#10B981]' 
+                                    : aiRecommendations[ex.exercise_id].confidence === 'medium'
+                                    ? 'bg-yellow-500/20 text-yellow-500'
+                                    : 'bg-gray-500/20 text-gray-400'
+                                }`}>
+                                  {aiRecommendations[ex.exercise_id].confidence}
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => setExpandedRecommendations(prev => ({
+                                ...prev,
+                                [ex.exercise_id]: !(prev[ex.exercise_id] ?? true)
+                              }))}
+                              className="text-[#10B981] hover:text-[#10B981]/80 transition-colors"
+                            >
+                              <MdKeyboardArrowDown 
+                                className={`h-5 w-5 transition-transform ${
+                                  (expandedRecommendations[ex.exercise_id] ?? true) ? '' : 'rotate-180'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                          {(expandedRecommendations[ex.exercise_id] ?? true) && (
+                          <div className="ml-6">
+                            {/* Cardio recommendation */}
+                            {aiRecommendations[ex.exercise_id].time !== undefined ? (
+                              <div>
+                                <p className="text-xs text-[#9CA3AF]">
+                                  Target: {aiRecommendations[ex.exercise_id].time} min
+                                  {aiRecommendations[ex.exercise_id].speed && 
+                                    ` @ ${aiRecommendations[ex.exercise_id].speed} mph`}
+                                </p>
+                              </div>
+                            ) : aiRecommendations[ex.exercise_id].sets && Array.isArray(aiRecommendations[ex.exercise_id].sets) ? (
+                              /* Strength recommendation with sets array */
+                              <div>
+                                <p className="text-xs text-[#9CA3AF] mb-1 font-semibold">
+                                  Target: {aiRecommendations[ex.exercise_id].sets.length} set{aiRecommendations[ex.exercise_id].sets.length > 1 ? 's' : ''}
+                                </p>
+                                {aiRecommendations[ex.exercise_id].sets.map((set: any, setIdx: number) => (
+                                  <p key={setIdx} className="text-xs text-[#9CA3AF] ml-2">
+                                    Set {set.set_number || setIdx + 1}: {set.reps} reps
+                                    {set.weight && ` @ ${set.weight} lbs`}
+                                  </p>
+                                ))}
+                              </div>
+                            ) : null}
+                            
+                            {/* Progression type badge */}
+                            {aiRecommendations[ex.exercise_id].progression_type && (
+                              <div className="mt-2">
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                  aiRecommendations[ex.exercise_id].progression_type === 'increase_weight'
+                                    ? 'bg-green-500/20 text-green-400'
+                                    : aiRecommendations[ex.exercise_id].progression_type === 'increase_reps'
+                                    ? 'bg-blue-500/20 text-blue-400'
+                                    : aiRecommendations[ex.exercise_id].progression_type === 'deload'
+                                    ? 'bg-yellow-500/20 text-yellow-400'
+                                    : 'bg-gray-500/20 text-gray-400'
+                                }`}>
+                                  {aiRecommendations[ex.exercise_id].progression_type.replace('_', ' ')}
+                                </span>
+                              </div>
+                            )}
+                            
+                            {/* Reasoning */}
+                            {aiRecommendations[ex.exercise_id].reasoning && (
+                              <p className="text-xs text-[#6B7280] mt-2 italic">
+                                {aiRecommendations[ex.exercise_id].reasoning}
+                              </p>
+                            )}
+                          </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* All-Time Max Info */}
                       {maxExerciseData[ex.exercise_id] && (
                         <div className="bg-[#2a1f1a] rounded-lg p-3 mb-4 border-l-4 border-[#F59E0B]">
@@ -703,14 +1134,14 @@ export default function SessionsSection({
                           </div>
                           {maxExerciseData[ex.exercise_id] && (
                             <div className="ml-6">
-                              {maxExerciseData[ex.exercise_id].max_time !== undefined || maxExerciseData[ex.exercise_id].max_speed !== undefined ? (
+                              {(maxExerciseData[ex.exercise_id].max_time != null || maxExerciseData[ex.exercise_id].max_speed != null) ? (
                                 <div>
-                                  {maxExerciseData[ex.exercise_id].max_time !== undefined && (
+                                  {maxExerciseData[ex.exercise_id].max_time != null && (
                                     <p className="text-xs text-[#9CA3AF]">
                                       Best Time: {maxExerciseData[ex.exercise_id].max_time} min
                                     </p>
                                   )}
-                                  {maxExerciseData[ex.exercise_id].max_speed !== undefined && (
+                                  {maxExerciseData[ex.exercise_id].max_speed != null && (
                                     <p className="text-xs text-[#9CA3AF]">
                                       Best Speed: {maxExerciseData[ex.exercise_id].max_speed} mph
                                     </p>
@@ -718,21 +1149,52 @@ export default function SessionsSection({
                                 </div>
                               ) : (
                                 <div>
-                                  {maxExerciseData[ex.exercise_id].max_weight !== undefined && (
-                                    <p className="text-xs text-[#9CA3AF]">
-                                      Max Weight: {maxExerciseData[ex.exercise_id].max_weight} lbs
-                                    </p>
+                                  {/* Primary: Max Weight - Most Prominent */}
+                                  {maxExerciseData[ex.exercise_id].max_weight != null && (
+                                    <div className="mb-2">
+                                      <p className="text-sm font-bold text-white">
+                                        Personal Best: {maxExerciseData[ex.exercise_id].max_weight} lbs
+                                      </p>
+                                      {/* Calculate estimated 1RM if we have max weight and reps */}
+                                      {maxExerciseData[ex.exercise_id].max_weight != null && maxExerciseData[ex.exercise_id].max_reps != null && maxExerciseData[ex.exercise_id].max_reps > 0 && (
+                                        <p className="text-xs text-[#9CA3AF] mt-0.5">
+                                          Est. 1RM: {Math.round(maxExerciseData[ex.exercise_id].max_weight * (1 + maxExerciseData[ex.exercise_id].max_reps / 30))} lbs
+                                        </p>
+                                      )}
+                                    </div>
                                   )}
-                                  {maxExerciseData[ex.exercise_id].max_reps !== undefined && (
-                                    <p className="text-xs text-[#9CA3AF]">
-                                      Max Reps: {maxExerciseData[ex.exercise_id].max_reps}
-                                    </p>
+                                  
+                                  {/* Heaviest Sets - Weight-focused */}
+                                  {maxExerciseData[ex.exercise_id].max_per_set && Object.keys(maxExerciseData[ex.exercise_id].max_per_set).length > 0 && (
+                                    <div className="mt-3 pt-3 border-t border-[#374151]">
+                                      <p className="text-xs font-semibold text-[#F59E0B] mb-1">
+                                        Heaviest Sets:
+                                      </p>
+                                      {Object.entries(maxExerciseData[ex.exercise_id].max_per_set)
+                                        .sort(([a, aData], [b, bData]) => {
+                                          // Sort by weight (descending), then by set number
+                                          const weightA = (aData as any).weight || 0;
+                                          const weightB = (bData as any).weight || 0;
+                                          if (weightB !== weightA) return weightB - weightA;
+                                          return parseInt(a) - parseInt(b);
+                                        })
+                                        .map(([setNum, setData]: [string, any]) => (
+                                          <p key={setNum} className="text-xs text-[#9CA3AF] ml-2">
+                                            Set {setNum}: {setData.weight != null ? `${setData.weight} lbs` : ''}
+                                            {setData.reps != null && setData.reps > 0 && ` × ${setData.reps} reps`}
+                                          </p>
+                                        ))}
+                                    </div>
                                   )}
-                                  {maxExerciseData[ex.exercise_id].max_volume !== undefined && (
-                                    <p className="text-xs text-[#9CA3AF]">
-                                      Max Volume: {Math.round(maxExerciseData[ex.exercise_id].max_volume)} lbs
-                                    </p>
-                                  )}
+                                  
+                                  {/* Secondary metrics - smaller, less prominent */}
+                                  <div className="mt-2 pt-2 border-t border-[#374151]">
+                                    {maxExerciseData[ex.exercise_id].max_volume != null && (
+                                      <p className="text-xs text-[#6B7280]">
+                                        Max Volume: {Math.round(maxExerciseData[ex.exercise_id].max_volume)} lbs
+                                      </p>
+                                    )}
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -925,7 +1387,7 @@ export default function SessionsSection({
                 onClick={handleCancel}
                 className="flex-1 py-4 text-lg font-bold bg-white text-[#1a2332] hover:bg-gray-100 border-none"
               >
-                Cancel
+                {editingSessionId ? "Close" : "Cancel"}
               </Button>
             </div>
           </form>
@@ -962,9 +1424,28 @@ export default function SessionsSection({
                   </div>
                 </div>
                 <p className="text-sm text-[#9CA3AF] mb-2">{session.date}</p>
-                <p className="text-sm text-[#9CA3AF]">
+                <p className="text-sm text-[#9CA3AF] mb-2">
                   {session.exercises?.length || 0} exercises
                 </p>
+                {session.exercises && session.exercises.length > 0 && (
+                  <div className="space-y-1 mb-2">
+                    {session.exercises.slice(0, 3).map((ex: any, idx: number) => (
+                      <div key={idx} className="text-xs text-[#9CA3AF]">
+                        • {ex.exercise_name || ex.exercise_id}
+                        {ex.sets && ex.sets.length > 0 && (
+                          <span className="text-[#6B7280] ml-1">
+                            ({ex.sets.length} set{ex.sets.length > 1 ? 's' : ''})
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                    {session.exercises.length > 3 && (
+                      <div className="text-xs text-[#6B7280]">
+                        +{session.exercises.length - 3} more
+                      </div>
+                    )}
+                  </div>
+                )}
                 {session.notes && (
                   <p className="text-sm text-[#F9FAFB] mt-2 italic">
                     {session.notes}

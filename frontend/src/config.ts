@@ -16,7 +16,7 @@ const getConfig = () => {
         extra: {
           apiBaseUrl: getEnvVar(
             "EXPO_PUBLIC_API_BASE_URL",
-            "https://gymaiagent-production.up.railway.app"
+            "http://localhost:8000"
           ),
           firebaseApiKey: getEnvVar("EXPO_PUBLIC_FIREBASE_API_KEY"),
           firebaseAuthDomain: getEnvVar("EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN"),
@@ -37,14 +37,11 @@ const getConfig = () => {
     const Constants = require("expo-constants");
     const config = Constants.default || Constants;
 
-    // Ensure API URL is not localhost - force Railway URL if localhost detected
-    if (config?.expoConfig?.extra?.apiBaseUrl?.includes("localhost")) {
-      console.warn(
-        "Detected localhost in API URL, overriding with Railway URL"
-      );
+    // Use localhost for local development
+    if (!config?.expoConfig?.extra?.apiBaseUrl) {
       config.expoConfig.extra.apiBaseUrl =
         process.env.EXPO_PUBLIC_API_BASE_URL ||
-        "https://gymaiagent-production.up.railway.app";
+        "http://localhost:8000";
     }
 
     return config;
@@ -55,7 +52,7 @@ const getConfig = () => {
         extra: {
           apiBaseUrl: getEnvVar(
             "EXPO_PUBLIC_API_BASE_URL",
-            "https://gymaiagent-production.up.railway.app"
+            "http://localhost:8000"
           ),
           firebaseApiKey: getEnvVar("EXPO_PUBLIC_FIREBASE_API_KEY"),
           firebaseAuthDomain: getEnvVar("EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN"),

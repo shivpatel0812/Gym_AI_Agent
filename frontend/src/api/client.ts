@@ -2,11 +2,9 @@ import axios from "axios";
 import { auth } from "../firebase";
 import { expoConfig } from "../config";
 
-// Get API base URL from config, with Railway URL as fallback
+// Get API base URL from config, with localhost as fallback
 const configApiUrl = expoConfig?.extra?.apiBaseUrl;
-const API_BASE_URL = configApiUrl && configApiUrl !== "http://localhost:8000" 
-  ? configApiUrl 
-  : "https://gymaiagent-production.up.railway.app";
+const API_BASE_URL = configApiUrl || "http://localhost:8000";
 
 // Log the API URL being used for debugging
 console.log('API Base URL configured:', API_BASE_URL);

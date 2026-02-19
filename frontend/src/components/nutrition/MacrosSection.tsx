@@ -7,8 +7,12 @@ import {
   StyleSheet,
   ScrollView,
   Switch,
+  Image,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import apiClient from "../../api/client";
 import Button from "../shared/Button";
 import Card from "../shared/Card";
@@ -51,9 +55,22 @@ export default function MacrosSection() {
     fats: undefined,
     sodium: undefined,
   });
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchEntries();
+    // Request camera/media library permissions
+    (async () => {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Required",
+          "We need access to your photos to analyze food images."
+        );
+      }
+    })();
   }, []);
 
   const fetchEntries = async () => {
@@ -137,6 +154,8 @@ export default function MacrosSection() {
       fats: undefined,
       sodium: undefined,
     });
+    setImageUri(null);
+    setAnalysisError(null);
   };
 
   const handleEdit = (entry: MacroEntry) => {
@@ -185,6 +204,124 @@ export default function MacrosSection() {
       carbs: currentEntry.total_carbs || 0,
       fats: currentEntry.total_fats || 0,
     };
+  };
+
+  const pickImage = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        setImageUri(result.assets[0].uri);
+        setAnalysisError(null);
+      }
+    } catch (error) {
+      console.error("Error picking image:", error);
+      Alert.alert("Error", "Failed to pick image. Please try again.");
+    }
+  };
+
+  const takePhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Required",
+          "We need access to your camera to take photos."
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        setImageUri(result.assets[0].uri);
+        setAnalysisError(null);
+      }
+    } catch (error) {
+      console.error("Error taking photo:", error);
+      Alert.alert("Error", "Failed to take photo. Please try again.");
+    }
+  };
+
+  const showImagePickerOptions = () => {
+    Alert.alert(
+      "Select Image",
+      "Choose an option",
+      [
+        { text: "Camera", onPress: takePhoto },
+        { text: "Photo Library", onPress: pickImage },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
+
+  const analyzeImage = async () => {
+    if (!imageUri) return;
+
+    setAnalyzing(true);
+    setAnalysisError(null);
+
+    try {
+      // Create FormData for file upload
+      const formData = new FormData();
+      
+      // Get filename from URI
+      const filename = imageUri.split("/").pop() || "photo.jpg";
+      const match = /\.(\w+)$/.exec(filename);
+      const type = match ? `image/${match[1]}` : "image/jpeg";
+
+      formData.append("file", {
+        uri: imageUri,
+        name: filename,
+        type: type,
+      } as any);
+
+      const response = await apiClient.post("/api/macros/analyze-image", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
+
+      const { food_items, message } = response.data;
+
+      if (food_items && food_items.length > 0) {
+        // Add detected foods to current entry
+        setCurrentEntry({
+          ...currentEntry,
+          food_items: [...currentEntry.food_items, ...food_items],
+        });
+        setLogMode("foods");
+        // Clear image
+        setImageUri(null);
+        Alert.alert("Success", `Detected ${food_items.length} food item(s)!`);
+      } else {
+        setAnalysisError(message || "No food items detected. Try a clearer image.");
+      }
+    } catch (error: any) {
+      console.error("Error analyzing image:", error);
+      const errorMessage =
+        error.response?.data?.detail ||
+        error.message ||
+        "Failed to analyze image. Please try again.";
+      setAnalysisError(errorMessage);
+      Alert.alert("Error", errorMessage);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const clearImage = () => {
+    setImageUri(null);
+    setAnalysisError(null);
   };
 
   return (
@@ -253,6 +390,94 @@ export default function MacrosSection() {
 
             {logMode === "foods" ? (
               <>
+                {/* Image Upload Section */}
+                <Card style={styles.imageUploadCard}>
+                  <View style={styles.imageUploadHeader}>
+                    <MaterialCommunityIcons
+                      name="camera"
+                      size={24}
+                      color={colors.accentPrimary}
+                    />
+                    <Text style={styles.imageUploadTitle}>Analyze Food from Image</Text>
+                  </View>
+                  <Text style={styles.imageUploadDescription}>
+                    Upload a photo of your meal to automatically detect foods and their macros
+                  </Text>
+
+                  {!imageUri ? (
+                    <View style={styles.imagePickerButtons}>
+                      <Button
+                        title="Take Photo"
+                        onPress={takePhoto}
+                        variant="secondary"
+                        icon={
+                          <MaterialCommunityIcons
+                            name="camera"
+                            size={20}
+                            color={colors.textPrimary}
+                          />
+                        }
+                        style={styles.imagePickerButton}
+                      />
+                      <Button
+                        title="Choose from Library"
+                        onPress={pickImage}
+                        variant="secondary"
+                        icon={
+                          <MaterialCommunityIcons
+                            name="image"
+                            size={20}
+                            color={colors.textPrimary}
+                          />
+                        }
+                        style={styles.imagePickerButton}
+                      />
+                    </View>
+                  ) : (
+                    <View>
+                      <Image source={{ uri: imageUri }} style={styles.imagePreview} />
+                      <View style={styles.imageActions}>
+                        <Button
+                          title={analyzing ? "Analyzing..." : "Analyze Image"}
+                          onPress={analyzeImage}
+                          disabled={analyzing}
+                          variant="primary"
+                          icon={
+                            analyzing ? (
+                              <ActivityIndicator size="small" color={colors.textPrimary} />
+                            ) : (
+                              <MaterialCommunityIcons
+                                name="magnify"
+                                size={20}
+                                color={colors.textPrimary}
+                              />
+                            )
+                          }
+                          style={styles.analyzeButton}
+                        />
+                        <Button
+                          title="Remove"
+                          onPress={clearImage}
+                          variant="secondary"
+                          icon={
+                            <MaterialCommunityIcons
+                              name="close"
+                              size={20}
+                              color={colors.textPrimary}
+                            />
+                          }
+                          style={styles.removeButton}
+                        />
+                      </View>
+                      {analysisError && (
+                        <Card style={styles.errorCard}>
+                          <Text style={styles.errorText}>{analysisError}</Text>
+                        </Card>
+                      )}
+                    </View>
+                  )}
+                </Card>
+
                 <Text style={styles.subsectionTitle}>Add Food Item</Text>
                 <Input
                   label="Food Name"
@@ -826,5 +1051,58 @@ const styles = StyleSheet.create({
   },
   entriesContainer: {
     paddingBottom: spacing.xl,
+  },
+  imageUploadCard: {
+    marginBottom: spacing.lg,
+    padding: spacing.md,
+  },
+  imageUploadHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  imageUploadTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  imageUploadDescription: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginBottom: spacing.md,
+  },
+  imagePickerButtons: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  imagePickerButton: {
+    flex: 1,
+  },
+  imagePreview: {
+    width: "100%",
+    height: 200,
+    borderRadius: borderRadius.md,
+    marginBottom: spacing.md,
+    backgroundColor: colors.border,
+  },
+  imageActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  analyzeButton: {
+    flex: 1,
+  },
+  removeButton: {
+    flex: 1,
+  },
+  errorCard: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.danger + "20",
+    borderColor: colors.danger + "40",
+  },
+  errorText: {
+    fontSize: 12,
+    color: colors.danger,
   },
 });

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -7,11 +7,13 @@ import {
   StyleSheet,
   ScrollView,
   FlatList,
+  ActivityIndicator,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { Exercise, Split, WorkoutSession } from "../types";
 import defaultExercises, { categories, categoryToMuscleGroup } from "../../../data/defaultExercises";
 import { colors, spacing, borderRadius } from "../../../theme";
+import apiClient from "../../../api/client";
 
 interface SessionFormProps {
   exercises: Exercise[];
@@ -59,6 +61,92 @@ export default function SessionForm({
   const [selectedEquipment, setSelectedEquipment] = useState<string | null>(null);
   const [exerciseTab, setExerciseTab] = useState<"browse" | "search">("browse");
   const [exerciseSearchQuery, setExerciseSearchQuery] = useState("");
+  const [lastExerciseData, setLastExerciseData] = useState<Record<string, any>>({});
+  const [maxExerciseData, setMaxExerciseData] = useState<Record<string, any>>({});
+  const [aiRecommendations, setAiRecommendations] = useState<Record<string, any>>({});
+  const [aiRecommendationLoading, setAiRecommendationLoading] = useState<Record<string, boolean>>({});
+  const [aiSummaryStatus, setAiSummaryStatus] = useState<{
+    hasSetup: boolean;
+    needsSetup: boolean;
+    isGenerating: boolean;
+  }>({ hasSetup: false, needsSetup: false, isGenerating: false });
+
+  // Check AI summary status on mount
+  useEffect(() => {
+    checkAiSummaryStatus();
+  }, []);
+
+  // Check AI recommendation status and auto-trigger if needed
+  const checkAiSummaryStatus = async () => {
+    try {
+      const response = await apiClient.get("/api/workout-sessions/ai-recommendation-check");
+      const data = response.data;
+      
+      setAiSummaryStatus({
+        hasSetup: data.has_summary || false,
+        needsSetup: data.needs_initial_setup || false,
+        isGenerating: false,
+      });
+      
+      // Auto-trigger first-time setup if ready
+      if (data.needs_initial_setup && !data.has_summary) {
+        generateAiSummary();
+      }
+    } catch (error) {
+      console.log("AI recommendations not available:", error);
+    }
+  };
+
+  // Generate AI summary (first-time setup or manual refresh)
+  const generateAiSummary = async () => {
+    setAiSummaryStatus(prev => ({ ...prev, isGenerating: true }));
+    try {
+      await apiClient.get("/api/workout-sessions/ai-summary");
+      setAiSummaryStatus(prev => ({ 
+        ...prev, 
+        hasSetup: true, 
+        needsSetup: false, 
+        isGenerating: false 
+      }));
+    } catch (error) {
+      console.error("Error generating AI summary:", error);
+      setAiSummaryStatus(prev => ({ ...prev, isGenerating: false }));
+    }
+  };
+
+  // Fetch AI recommendation for an exercise
+  const fetchAiRecommendation = async (
+    exerciseId: string, 
+    exerciseName: string, 
+    positionInWorkout: number
+  ) => {
+    // Don't fetch if AI isn't set up
+    if (!aiSummaryStatus.hasSetup && !aiSummaryStatus.needsSetup) {
+      return;
+    }
+    
+    setAiRecommendationLoading(prev => ({ ...prev, [exerciseId]: true }));
+    
+    try {
+      const response = await apiClient.post(`/api/workout-sessions/ai-recommendation/${exerciseId}`, {
+        exercise_name: exerciseName,
+        split_name: formData.split_name || undefined,
+        split_day: formData.split_day || undefined,
+        position_in_workout: positionInWorkout
+      });
+      
+      if (response.data && response.data.status === "success") {
+        setAiRecommendations(prev => ({
+          ...prev,
+          [exerciseId]: response.data.recommendation
+        }));
+      }
+    } catch (error) {
+      console.log("No AI recommendation available for this exercise");
+    } finally {
+      setAiRecommendationLoading(prev => ({ ...prev, [exerciseId]: false }));
+    }
+  };
 
   const allExercises = useMemo(() => {
     const defaultExercisesList = (defaultExercises || []).map((ex) => ({
@@ -94,16 +182,78 @@ export default function SessionForm({
     return [...defaultExercisesList, ...customExercisesList];
   }, [exercises]);
 
-  const handleExerciseChange = (exerciseId: string, exerciseName: string) => {
+  const formatLastTime = (dateString: string) => {
+    const date = new Date(dateString);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const compareDate = new Date(date);
+    compareDate.setHours(0, 0, 0, 0);
+    
+    const diffTime = today.getTime() - compareDate.getTime();
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays} days ago`;
+    if (diffDays < 30) {
+      const weeks = Math.floor(diffDays / 7);
+      return `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+    }
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined });
+  };
+
+  const handleExerciseChange = async (exerciseId: string, exerciseName: string) => {
+    const selectedExercise = allExercises.find((ex) => ex.id === exerciseId);
+    const isCardio = selectedExercise?.category === "CARDIO";
+    const positionInWorkout = formData.exercises.length; // Position is the current length (0-indexed)
+    
+    // Fetch last time this exercise was done
+    try {
+      const response = await apiClient.get(`/api/workout-sessions/last-exercise/${exerciseId}`);
+      if (response.data) {
+        setLastExerciseData(prev => ({
+          ...prev,
+          [exerciseId]: response.data
+        }));
+      }
+    } catch (error) {
+      // Silently fail if no previous data exists
+      console.log("No previous exercise data found");
+    }
+    
+    // Fetch all-time max for this exercise
+    try {
+      const maxResponse = await apiClient.get(`/api/workout-sessions/max-exercise/${exerciseId}`);
+      if (maxResponse.data) {
+        setMaxExerciseData(prev => ({
+          ...prev,
+          [exerciseId]: maxResponse.data
+        }));
+      }
+    } catch (error) {
+      // Silently fail if no max data exists
+      console.log("No max exercise data found");
+    }
+    
+    // Fetch AI recommendation for this exercise
+    fetchAiRecommendation(exerciseId, exerciseName, positionInWorkout);
+    
     setFormData({
       ...formData,
       exercises: [
         ...formData.exercises,
-        {
-          exercise_id: exerciseId,
-          exercise_name: exerciseName,
-          sets: [{ set_number: 1, reps: 0, weight: undefined }],
-        },
+        isCardio
+          ? {
+              exercise_id: exerciseId,
+              exercise_name: exerciseName,
+              time: undefined,
+              speed: undefined,
+            }
+          : {
+              exercise_id: exerciseId,
+              exercise_name: exerciseName,
+              sets: [{ set_number: 1, reps: 0, weight: undefined }],
+            },
       ],
     });
     setExerciseSearchQuery("");
@@ -464,6 +614,8 @@ export default function SessionForm({
         {/* List of Added Exercises */}
         {formData.exercises.map((ex, idx) => {
           const exerciseSets = Array.isArray(ex.sets) ? ex.sets : [];
+          const isCardio = ex.hasOwnProperty("time") || ex.hasOwnProperty("speed");
+          
           return (
             <View key={idx} style={styles.exerciseCard}>
               <View style={styles.exerciseCardHeader}>
@@ -484,82 +636,358 @@ export default function SessionForm({
                 </TouchableOpacity>
               </View>
 
-              <View style={styles.setsHeader}>
-                <Text style={styles.setHeaderText}>Set</Text>
-                <Text style={styles.setHeaderText}>Reps</Text>
-                <Text style={styles.setHeaderText}>Weight (lbs)</Text>
-              </View>
-
-              <View style={styles.setsContainer}>
-                {exerciseSets.map((set: any, setIdx: number) => (
-                  <View key={setIdx} style={styles.setRow}>
-                    <Text style={styles.setNumber}>{set.set_number}</Text>
-                    <TextInput
-                      style={styles.setInput}
-                      value={set.reps === 0 ? "" : String(set.reps)}
-                      onChangeText={(text) => {
-                        const newExercises = [...formData.exercises];
-                        const newSets = [...exerciseSets];
-                        const value = text === "" ? 0 : parseInt(text) || 0;
-                        newSets[setIdx] = { ...newSets[setIdx], reps: value };
-                        newExercises[idx] = {
-                          ...newExercises[idx],
-                          sets: newSets,
-                        };
-                        setFormData({ ...formData, exercises: newExercises });
-                      }}
-                      placeholder="Reps"
-                      placeholderTextColor={colors.textSecondary}
-                      keyboardType="number-pad"
+              {/* Last Time Info */}
+              {lastExerciseData[ex.exercise_id] && (
+                <View style={styles.lastTimeContainer}>
+                  <View style={styles.lastTimeHeader}>
+                    <MaterialCommunityIcons
+                      name="clock-outline"
+                      size={16}
+                      color={colors.accentPrimary}
                     />
+                    <Text style={styles.lastTimeLabel}>
+                      Last time: {formatLastTime(lastExerciseData[ex.exercise_id].date)}
+                    </Text>
+                  </View>
+                  {lastExerciseData[ex.exercise_id].exercise_data && (
+                    <View style={styles.lastTimeDetails}>
+                      {lastExerciseData[ex.exercise_id].exercise_data.time !== undefined ? (
+                        <Text style={styles.lastTimeText}>
+                          Time: {lastExerciseData[ex.exercise_id].exercise_data.time} min
+                          {lastExerciseData[ex.exercise_id].exercise_data.speed && 
+                            ` | Speed: ${lastExerciseData[ex.exercise_id].exercise_data.speed} mph`}
+                        </Text>
+                      ) : lastExerciseData[ex.exercise_id].exercise_data.sets && Array.isArray(lastExerciseData[ex.exercise_id].exercise_data.sets) ? (
+                        <View>
+                          <Text style={styles.lastTimeText}>
+                            {lastExerciseData[ex.exercise_id].exercise_data.sets.length} set{lastExerciseData[ex.exercise_id].exercise_data.sets.length > 1 ? 's' : ''}
+                          </Text>
+                          {lastExerciseData[ex.exercise_id].exercise_data.sets.slice(0, 3).map((set: any, setIdx: number) => (
+                            <Text key={setIdx} style={styles.lastTimeSetText}>
+                              Set {set.set_number}: {set.reps} reps
+                              {set.weight && ` @ ${set.weight} lbs`}
+                            </Text>
+                          ))}
+                        </View>
+                      ) : (
+                        <Text style={styles.lastTimeText}>
+                          {lastExerciseData[ex.exercise_id].exercise_data.sets} sets x {lastExerciseData[ex.exercise_id].exercise_data.reps} reps
+                          {lastExerciseData[ex.exercise_id].exercise_data.weight && 
+                            ` @ ${lastExerciseData[ex.exercise_id].exercise_data.weight} lbs`}
+                        </Text>
+                      )}
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* AI Recommendation */}
+              {aiRecommendationLoading[ex.exercise_id] ? (
+                <View style={styles.aiRecommendationContainer}>
+                  <View style={styles.aiRecommendationHeader}>
+                    <ActivityIndicator size="small" color="#10B981" />
+                    <Text style={styles.aiRecommendationLabel}>
+                      Getting AI recommendation...
+                    </Text>
+                  </View>
+                </View>
+              ) : aiRecommendations[ex.exercise_id] && (
+                <View style={styles.aiRecommendationContainer}>
+                  <View style={styles.aiRecommendationHeader}>
+                    <MaterialCommunityIcons
+                      name="lightbulb-on"
+                      size={16}
+                      color="#10B981"
+                    />
+                    <Text style={styles.aiRecommendationLabel}>
+                      AI Recommendation
+                    </Text>
+                    {aiRecommendations[ex.exercise_id].confidence && (
+                      <View style={[
+                        styles.confidenceBadge,
+                        { backgroundColor: aiRecommendations[ex.exercise_id].confidence === 'high' 
+                          ? 'rgba(16, 185, 129, 0.2)' 
+                          : aiRecommendations[ex.exercise_id].confidence === 'medium'
+                          ? 'rgba(245, 158, 11, 0.2)'
+                          : 'rgba(107, 114, 128, 0.2)' 
+                        }
+                      ]}>
+                        <Text style={[
+                          styles.confidenceText,
+                          { color: aiRecommendations[ex.exercise_id].confidence === 'high' 
+                            ? '#10B981' 
+                            : aiRecommendations[ex.exercise_id].confidence === 'medium'
+                            ? '#F59E0B'
+                            : '#6B7280' 
+                          }
+                        ]}>
+                          {aiRecommendations[ex.exercise_id].confidence}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.aiRecommendationDetails}>
+                    {/* Cardio recommendation */}
+                    {aiRecommendations[ex.exercise_id].time !== undefined ? (
+                      <Text style={styles.aiRecommendationText}>
+                        Target: {aiRecommendations[ex.exercise_id].time} min
+                        {aiRecommendations[ex.exercise_id].speed && 
+                          ` @ ${aiRecommendations[ex.exercise_id].speed} mph`}
+                      </Text>
+                    ) : aiRecommendations[ex.exercise_id].sets && Array.isArray(aiRecommendations[ex.exercise_id].sets) ? (
+                      /* Strength recommendation with sets array */
+                      <View>
+                        <Text style={styles.aiRecommendationText}>
+                          Target: {aiRecommendations[ex.exercise_id].sets.length} set{aiRecommendations[ex.exercise_id].sets.length > 1 ? 's' : ''}
+                        </Text>
+                        {aiRecommendations[ex.exercise_id].sets.map((set: any, setIdx: number) => (
+                          <Text key={setIdx} style={styles.aiRecommendationSetText}>
+                            Set {set.set_number || setIdx + 1}: {set.reps} reps
+                            {set.weight && ` @ ${set.weight} lbs`}
+                          </Text>
+                        ))}
+                      </View>
+                    ) : null}
+                    
+                    {/* Progression type badge */}
+                    {aiRecommendations[ex.exercise_id].progression_type && (
+                      <View style={[
+                        styles.progressionBadge,
+                        { backgroundColor: aiRecommendations[ex.exercise_id].progression_type === 'increase_weight'
+                          ? 'rgba(34, 197, 94, 0.2)'
+                          : aiRecommendations[ex.exercise_id].progression_type === 'increase_reps'
+                          ? 'rgba(59, 130, 246, 0.2)'
+                          : aiRecommendations[ex.exercise_id].progression_type === 'deload'
+                          ? 'rgba(245, 158, 11, 0.2)'
+                          : 'rgba(107, 114, 128, 0.2)'
+                        }
+                      ]}>
+                        <Text style={[
+                          styles.progressionText,
+                          { color: aiRecommendations[ex.exercise_id].progression_type === 'increase_weight'
+                            ? '#22C55E'
+                            : aiRecommendations[ex.exercise_id].progression_type === 'increase_reps'
+                            ? '#3B82F6'
+                            : aiRecommendations[ex.exercise_id].progression_type === 'deload'
+                            ? '#F59E0B'
+                            : '#6B7280'
+                          }
+                        ]}>
+                          {aiRecommendations[ex.exercise_id].progression_type.replace('_', ' ')}
+                        </Text>
+                      </View>
+                    )}
+                    
+                    {/* Reasoning */}
+                    {aiRecommendations[ex.exercise_id].reasoning && (
+                      <Text style={styles.aiReasoningText}>
+                        {aiRecommendations[ex.exercise_id].reasoning}
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              )}
+
+              {/* All-Time Max Info */}
+              {maxExerciseData[ex.exercise_id] && (
+                <View style={styles.maxContainer}>
+                  <View style={styles.maxHeader}>
+                    <MaterialCommunityIcons
+                      name="trophy"
+                      size={16}
+                      color={colors.warning}
+                    />
+                    <Text style={styles.maxLabel}>
+                      All-Time Max
+                    </Text>
+                  </View>
+                  {maxExerciseData[ex.exercise_id] && (
+                    <View style={styles.maxDetails}>
+                      {(maxExerciseData[ex.exercise_id].max_time != null || maxExerciseData[ex.exercise_id].max_speed != null) ? (
+                        <View>
+                          {maxExerciseData[ex.exercise_id].max_time != null && (
+                            <Text style={styles.maxText}>
+                              Best Time: {maxExerciseData[ex.exercise_id].max_time} min
+                            </Text>
+                          )}
+                          {maxExerciseData[ex.exercise_id].max_speed != null && (
+                            <Text style={styles.maxText}>
+                              Best Speed: {maxExerciseData[ex.exercise_id].max_speed} mph
+                            </Text>
+                          )}
+                        </View>
+                      ) : (
+                        <View>
+                          {/* Primary: Max Weight - Most Prominent */}
+                          {maxExerciseData[ex.exercise_id].max_weight != null && (
+                            <View style={{ marginBottom: spacing.xs }}>
+                              <Text style={styles.maxWeightPrimary}>
+                                Personal Best: {maxExerciseData[ex.exercise_id].max_weight} lbs
+                              </Text>
+                              {/* Calculate estimated 1RM if we have max weight and reps */}
+                              {maxExerciseData[ex.exercise_id].max_weight != null && maxExerciseData[ex.exercise_id].max_reps != null && maxExerciseData[ex.exercise_id].max_reps > 0 && (
+                                <Text style={styles.maxText}>
+                                  Est. 1RM: {Math.round(maxExerciseData[ex.exercise_id].max_weight * (1 + maxExerciseData[ex.exercise_id].max_reps / 30))} lbs
+                                </Text>
+                              )}
+                            </View>
+                          )}
+                          
+                          {/* Heaviest Sets - Weight-focused */}
+                          {maxExerciseData[ex.exercise_id].max_per_set && Object.keys(maxExerciseData[ex.exercise_id].max_per_set).length > 0 && (
+                            <View style={styles.maxPerSetContainer}>
+                              <Text style={styles.maxPerSetTitle}>Heaviest Sets:</Text>
+                              {Object.entries(maxExerciseData[ex.exercise_id].max_per_set)
+                                .sort(([a, aData], [b, bData]) => {
+                                  // Sort by weight (descending), then by set number
+                                  const weightA = (aData as any).weight || 0;
+                                  const weightB = (bData as any).weight || 0;
+                                  if (weightB !== weightA) return weightB - weightA;
+                                  return parseInt(a) - parseInt(b);
+                                })
+                                .map(([setNum, setData]: [string, any]) => (
+                                  <Text key={setNum} style={styles.maxPerSetText}>
+                                    Set {setNum}: {setData.weight != null ? `${setData.weight} lbs` : ''}
+                                    {setData.reps != null && setData.reps > 0 && ` × ${setData.reps} reps`}
+                                  </Text>
+                                ))}
+                            </View>
+                          )}
+                          
+                          {/* Secondary metrics - smaller, less prominent */}
+                          {maxExerciseData[ex.exercise_id].max_volume != null && (
+                            <View style={[styles.maxPerSetContainer, { marginTop: spacing.xs }]}>
+                              <Text style={[styles.maxText, { opacity: 0.7 }]}>
+                                Max Volume: {Math.round(maxExerciseData[ex.exercise_id].max_volume)} lbs
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {isCardio ? (
+                <View style={styles.cardioContainer}>
+                  <View style={styles.inputRow}>
+                    <Text style={styles.cardioLabel}>Time (minutes)</Text>
                     <TextInput
-                      style={styles.setInput}
-                      value={set.weight ? String(set.weight) : ""}
+                      style={styles.cardioInput}
+                      value={ex.time ? String(ex.time) : ""}
                       onChangeText={(text) => {
                         const newExercises = [...formData.exercises];
-                        const newSets = [...exerciseSets];
-                        newSets[setIdx] = {
-                          ...newSets[setIdx],
-                          weight: text ? parseFloat(text) : undefined,
-                        };
                         newExercises[idx] = {
                           ...newExercises[idx],
-                          sets: newSets,
+                          time: text ? parseFloat(text) : undefined,
                         };
                         setFormData({ ...formData, exercises: newExercises });
                       }}
-                      placeholder="Weight"
+                      placeholder="Time"
                       placeholderTextColor={colors.textSecondary}
                       keyboardType="decimal-pad"
                     />
                   </View>
-                ))}
-              </View>
+                  <View style={styles.inputRow}>
+                    <Text style={styles.cardioLabel}>Speed (mph)</Text>
+                    <TextInput
+                      style={styles.cardioInput}
+                      value={ex.speed ? String(ex.speed) : ""}
+                      onChangeText={(text) => {
+                        const newExercises = [...formData.exercises];
+                        newExercises[idx] = {
+                          ...newExercises[idx],
+                          speed: text ? parseFloat(text) : undefined,
+                        };
+                        setFormData({ ...formData, exercises: newExercises });
+                      }}
+                      placeholder="Speed"
+                      placeholderTextColor={colors.textSecondary}
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.setsHeader}>
+                    <Text style={styles.setHeaderText}>Set</Text>
+                    <Text style={styles.setHeaderText}>Reps</Text>
+                    <Text style={styles.setHeaderText}>Weight (lbs)</Text>
+                  </View>
 
-              <TouchableOpacity
-                style={styles.addSetButton}
-                onPress={() => {
-                  const newExercises = [...formData.exercises];
-                  const newSets = [...exerciseSets];
-                  newSets.push({
-                    set_number: exerciseSets.length + 1,
-                    reps: 0,
-                    weight: undefined,
-                  });
-                  newExercises[idx] = {
-                    ...newExercises[idx],
-                    sets: newSets,
-                  };
-                  setFormData({ ...formData, exercises: newExercises });
-                }}
-              >
-                <MaterialCommunityIcons
-                  name="plus"
-                  size={20}
-                  color={colors.background}
-                />
-                <Text style={styles.addSetButtonText}>Add Set</Text>
-              </TouchableOpacity>
+                  <View style={styles.setsContainer}>
+                    {exerciseSets.map((set: any, setIdx: number) => (
+                      <View key={setIdx} style={styles.setRow}>
+                        <Text style={styles.setNumber}>{set.set_number}</Text>
+                        <TextInput
+                          style={styles.setInput}
+                          value={set.reps === 0 ? "" : String(set.reps)}
+                          onChangeText={(text) => {
+                            const newExercises = [...formData.exercises];
+                            const newSets = [...exerciseSets];
+                            const value = text === "" ? 0 : parseInt(text) || 0;
+                            newSets[setIdx] = { ...newSets[setIdx], reps: value };
+                            newExercises[idx] = {
+                              ...newExercises[idx],
+                              sets: newSets,
+                            };
+                            setFormData({ ...formData, exercises: newExercises });
+                          }}
+                          placeholder="Reps"
+                          placeholderTextColor={colors.textSecondary}
+                          keyboardType="number-pad"
+                        />
+                        <TextInput
+                          style={styles.setInput}
+                          value={set.weight ? String(set.weight) : ""}
+                          onChangeText={(text) => {
+                            const newExercises = [...formData.exercises];
+                            const newSets = [...exerciseSets];
+                            newSets[setIdx] = {
+                              ...newSets[setIdx],
+                              weight: text ? parseFloat(text) : undefined,
+                            };
+                            newExercises[idx] = {
+                              ...newExercises[idx],
+                              sets: newSets,
+                            };
+                            setFormData({ ...formData, exercises: newExercises });
+                          }}
+                          placeholder="Weight"
+                          placeholderTextColor={colors.textSecondary}
+                          keyboardType="decimal-pad"
+                        />
+                      </View>
+                    ))}
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.addSetButton}
+                    onPress={() => {
+                      const newExercises = [...formData.exercises];
+                      const newSets = [...exerciseSets];
+                      newSets.push({
+                        set_number: exerciseSets.length + 1,
+                        reps: 0,
+                        weight: undefined,
+                      });
+                      newExercises[idx] = {
+                        ...newExercises[idx],
+                        sets: newSets,
+                      };
+                      setFormData({ ...formData, exercises: newExercises });
+                    }}
+                  >
+                    <MaterialCommunityIcons
+                      name="plus"
+                      size={20}
+                      color={colors.background}
+                    />
+                    <Text style={styles.addSetButtonText}>Add Set</Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           );
         })}
@@ -887,6 +1315,152 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     flex: 1,
   },
+  lastTimeContainer: {
+    backgroundColor: "#252f3f",
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accentPrimary,
+  },
+  lastTimeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  lastTimeLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.accentPrimary,
+  },
+  lastTimeDetails: {
+    marginTop: spacing.xs,
+  },
+  lastTimeText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginTop: spacing.xs / 2,
+  },
+  lastTimeSetText: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    marginTop: spacing.xs / 2,
+    marginLeft: spacing.sm,
+  },
+  aiRecommendationContainer: {
+    backgroundColor: "#1a2a1f",
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: "#10B981",
+  },
+  aiRecommendationHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  aiRecommendationLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#10B981",
+  },
+  aiRecommendationDetails: {
+    marginTop: spacing.xs,
+  },
+  aiRecommendationText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginTop: spacing.xs / 2,
+    fontWeight: "600",
+  },
+  aiRecommendationSetText: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    marginTop: spacing.xs / 2,
+    marginLeft: spacing.sm,
+  },
+  aiReasoningText: {
+    fontSize: 11,
+    color: "#6B7280",
+    marginTop: spacing.sm,
+    fontStyle: "italic",
+  },
+  confidenceBadge: {
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginLeft: "auto",
+  },
+  confidenceText: {
+    fontSize: 10,
+    fontWeight: "600",
+  },
+  progressionBadge: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: 12,
+    marginTop: spacing.sm,
+    alignSelf: "flex-start",
+  },
+  progressionText: {
+    fontSize: 10,
+    fontWeight: "600",
+    textTransform: "capitalize",
+  },
+  maxContainer: {
+    backgroundColor: "#2a1f1a",
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.warning,
+  },
+  maxHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  maxLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.warning,
+  },
+  maxDetails: {
+    marginTop: spacing.xs,
+  },
+  maxText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginTop: spacing.xs / 2,
+  },
+  maxWeightPrimary: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.xs / 2,
+  },
+  maxPerSetContainer: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  maxPerSetTitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.warning,
+    marginBottom: spacing.xs / 2,
+  },
+  maxPerSetText: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    marginTop: spacing.xs / 2,
+    marginLeft: spacing.sm,
+  },
   setsHeader: {
     flexDirection: "row",
     marginBottom: spacing.sm,
@@ -916,6 +1490,27 @@ const styles = StyleSheet.create({
   },
   setInput: {
     flex: 1,
+    backgroundColor: "#2d3b4e",
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    color: colors.textPrimary,
+    fontSize: 16,
+  },
+  cardioContainer: {
+    marginBottom: spacing.lg,
+  },
+  inputRow: {
+    marginBottom: spacing.md,
+  },
+  cardioLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.textSecondary,
+    textTransform: "uppercase",
+    fontStyle: "italic",
+    marginBottom: spacing.sm,
+  },
+  cardioInput: {
     backgroundColor: "#2d3b4e",
     borderRadius: borderRadius.lg,
     padding: spacing.md,

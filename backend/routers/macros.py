@@ -1,9 +1,13 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional
+from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File
+from typing import Optional, List, Dict
 from datetime import datetime
+import shutil
+import tempfile
+import os
 from models import MacroEntry
 from auth import get_user_id
 from db import db
+from nutrition import analyze_food_image
 
 router = APIRouter(prefix="/api/macros", tags=["macros"])
 
@@ -63,3 +67,38 @@ async def delete_macro_entry(macro_id: str, user_id: str = Depends(get_user_id))
     doc_ref.delete()
     return {"message": "Macro entry deleted"}
 
+@router.post("/analyze-image")
+async def analyze_food_image_endpoint(
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_user_id)
+):
+    """
+    Analyze food image using YOLO detection, USDA API lookup, and GPT fallback.
+    Returns detected foods with their macro information.
+    """
+    # Save uploaded file temporarily
+    temp_file = None
+    try:
+        # Create temporary file
+        suffix = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            temp_file = tmp.name
+            shutil.copyfileobj(file.file, tmp)
+        
+        # Use the nutrition analyzer module
+        result = analyze_food_image(temp_file)
+        return result
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error analyzing image: {str(e)}"
+        )
+    
+    finally:
+        # Clean up temporary file
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except:
+                pass

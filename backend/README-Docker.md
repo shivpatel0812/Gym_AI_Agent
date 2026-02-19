@@ -28,6 +28,8 @@ Set these in your `.env` file or as environment variables:
 - `PORT`: Server port (default: 8000)
 - `CORS_ALLOWED_ORIGINS`: Comma-separated list of allowed origins
 - `GOOGLE_APPLICATION_CREDENTIALS`: Path to Firebase service account JSON file
+- `USDA_API_KEY`: (Optional) USDA FoodData Central API key for nutrition lookup. Get one at https://fdc.nal.usda.gov/api-guide.html
+- `OPENAI_API_KEY`: (Optional) OpenAI API key for GPT fallback when USDA lookup fails
 
 ## Deployment
 
@@ -48,6 +50,8 @@ Set these in your `.env` file or as environment variables:
 - The Firebase service account file is mounted as read-only in docker-compose
 - For production, you may want to use environment variables instead of mounting files
 - The Dockerfile uses Python 3.11 slim image for smaller size
+
+
 
 
 

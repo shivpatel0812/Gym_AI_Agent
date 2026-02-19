@@ -16,7 +16,7 @@ export interface SplitDay {
 export interface Split {
   id?: string;
   name: string;
-  days: SplitDay[];
+  days: string[]; // Backend returns List[str], so days are just strings
 }
 
 export interface WorkoutSet {
@@ -127,4 +127,32 @@ export interface DashboardStats {
   activities: number;
   macros: number;
   stress: number;
+}
+
+// AI Recommendation types
+export interface AIRecommendationSet {
+  set_number: number;
+  reps: number;
+  weight?: number;
+}
+
+export interface AIExerciseRecommendation {
+  sets?: AIRecommendationSet[];
+  time?: number;
+  speed?: number;
+  reasoning?: string;
+  progression_type?: 'increase_weight' | 'increase_reps' | 'maintain' | 'deload';
+  confidence?: 'high' | 'medium' | 'low';
+}
+
+export interface AISummaryStatus {
+  has_summary: boolean;
+  needs_initial_setup: boolean;
+  last_updated?: string;
+  next_refresh?: string;
+  needs_refresh?: boolean;
+  sessions_logged?: number;
+  sessions_needed?: number;
+  total_sessions_analyzed?: number;
+  message?: string;
 }

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "project-files": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/shivpatel/gymaiAgent"
+      ],
+      "env": {}
+    }
+  }
+}

@@ -14,11 +14,20 @@ module.exports = {
     assetBundlePatterns: ["**/*"],
     ios: {
       supportsTablet: true,
+      infoPlist: {
+        NSCameraUsageDescription: "This app needs access to your camera to take photos of food for nutrition analysis.",
+        NSPhotoLibraryUsageDescription: "This app needs access to your photo library to select food images for nutrition analysis.",
+      },
     },
     android: {
       adaptiveIcon: {
         backgroundColor: "#ffffff",
       },
+      permissions: [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+      ],
     },
     web: {},
     plugins: ["expo-font"],

@@ -1,0 +1,126 @@
+{
+  "user_id": "demo_user_12345",
+  "analysis_period": "14 days",
+  "training": {
+    "time_window": "last_14_days",
+    "start_date": "2024-12-14",
+    "end_date": "2024-12-27",
+    "total_sessions": 8,
+    "sessions_per_week": 4.0,
+    "split_distribution": {
+      "Push Day": 2,
+      "Leg Day": 4,
+      "Pull Day": 2
+    },
+    "total_sets": 166,
+    "total_reps": 1962,
+    "avg_sets_per_session": 20.8,
+    "progression": "stable",
+    "missed_sessions": 1,
+    "compound_lifts": {
+      "Barbell Bench Press": [
+        {
+          "date": "2024-12-14",
+          "max_weight": 160,
+          "total_reps": 35
+        },
+        {
+          "date": "2024-12-16",
+          "max_weight": 165,
+          "total_reps": 35
+        }
+      ],
+      "Barbell Squat": [
+        {
+          "date": "2024-12-18",
+          "max_weight": 215,
+          "total_reps": 40
+        },
+        {
+          "date": "2024-12-20",
+          "max_weight": 215,
+          "total_reps": 38
+        },
+        {
+          "date": "2024-12-21",
+          "max_weight": 215,
+          "total_reps": 36
+        },
+        {
+          "date": "2024-12-23",
+          "max_weight": 215,
+          "total_reps": 39
+        }
+      ],
+      "Romanian Deadlift": [
+        {
+          "date": "2024-12-18",
+          "max_weight": 165,
+          "total_reps": 31
+        },
+        {
+          "date": "2024-12-20",
+          "max_weight": 165,
+          "total_reps": 31
+        },
+        {
+          "date": "2024-12-21",
+          "max_weight": 165,
+          "total_reps": 33
+        },
+        {
+          "date": "2024-12-23",
+          "max_weight": 165,
+          "total_reps": 33
+        }
+      ],
+      "Deadlift": [
+        {
+          "date": "2024-12-19",
+          "max_weight": 255,
+          "total_reps": 20
+        },
+        {
+          "date": "2024-12-27",
+          "max_weight": 255,
+          "total_reps": 19
+        }
+      ]
+    }
+  },
+  "nutrition": {
+    "time_window": "last_14_days",
+    "days_logged": 14,
+    "avg_calories": 1887,
+    "calories_range": [
+      1620,
+      2130
+    ],
+    "avg_protein": 147,
+    "avg_carbs": 180,
+    "avg_fats": 64,
+    "consistency": "excellent",
+    "protein_ratio": 31.2
+  },
+  "recovery": {
+    "time_window": "last_14_days",
+    "avg_sleep_hours": 7.5,
+    "sleep_range": [
+      6.6,
+      8.5
+    ],
+    "avg_sleep_quality": 7.1,
+    "sleep_trend": "stable",
+    "avg_fatigue": 4.1,
+    "fatigue_trend": "stable",
+    "avg_energy": 7.1,
+    "avg_body_aches": 3.2
+  },
+  "lifestyle": {
+    "time_window": "last_14_days",
+    "avg_stress": 4.9,
+    "high_stress_days": 4,
+    "avg_steps": 11180,
+    "active_days": 14
+  }
+}
