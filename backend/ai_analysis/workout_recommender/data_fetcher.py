@@ -50,7 +50,7 @@ class DataFetcher:
         """
         all_sessions = self.get_all_workout_sessions()
         max_reps_at_weight = {}
-        
+
         for session in all_sessions:
             for ex in session.get("exercises", []):
                 if ex.get("exercise_id") == exercise_id:
@@ -62,7 +62,50 @@ class DataFetcher:
                             if weight is not None and reps > 0:
                                 if weight not in max_reps_at_weight or reps > max_reps_at_weight[weight]:
                                     max_reps_at_weight[weight] = reps
-        
+
         return max_reps_at_weight
+
+    def get_failed_attempts(self, exercise_id: str, lookback_days: int = 60) -> List[Dict[str, Any]]:
+        """
+        Phase 3: Find sets where completed=False (failed attempts).
+        This prevents recommending weights the user recently failed at.
+
+        Returns: List of failed attempts with weight, reps, date, and days_ago
+        """
+        cutoff_date = (datetime.now() - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
+        all_sessions = self.get_all_workout_sessions()
+        failed_attempts = []
+
+        for session in all_sessions:
+            session_date = session.get("date", "")
+            if session_date < cutoff_date:
+                continue
+
+            try:
+                session_date_obj = datetime.strptime(session_date, "%Y-%m-%d")
+                days_ago = (datetime.now() - session_date_obj).days
+            except:
+                continue
+
+            for ex in session.get("exercises", []):
+                if ex.get("exercise_id") == exercise_id:
+                    sets = ex.get("sets", [])
+                    if isinstance(sets, list):
+                        for s in sets:
+                            # Check if set was marked as not completed
+                            if s.get("completed") is False:
+                                weight = s.get("weight")
+                                reps = s.get("reps", 0)
+                                if weight is not None:
+                                    failed_attempts.append({
+                                        "weight": weight,
+                                        "reps_attempted": reps,
+                                        "date": session_date,
+                                        "days_ago": days_ago
+                                    })
+
+        # Sort by most recent first
+        failed_attempts.sort(key=lambda x: x["days_ago"])
+        return failed_attempts
 
 

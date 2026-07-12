@@ -1,9 +1,16 @@
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from "react-native";
+import { useState } from "react";
 
 interface Set {
   set_number: number;
   reps: string;
   weight: string;
+  // Phase 1: Optional enhanced tracking fields
+  rpe?: number;
+  rir?: number;
+  completed?: boolean;
+  form_quality?: string;
+  notes?: string;
 }
 
 interface SetManagerProps {
@@ -25,6 +32,10 @@ export default function SetManager({
   onAddSet,
   onRemoveSet,
 }: SetManagerProps) {
+  const [showEnhancedFields, setShowEnhancedFields] = useState(false);
+  const [currentRPE, setCurrentRPE] = useState("");
+  const [currentCompleted, setCurrentCompleted] = useState(true);
+
   return (
     <View>
       <Text style={styles.subsectionTitle}>Add Sets</Text>
@@ -47,14 +58,54 @@ export default function SetManager({
           <Text style={styles.buttonText}>Add Set</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Phase 1: Optional enhanced tracking fields */}
+      <TouchableOpacity
+        style={styles.toggleButton}
+        onPress={() => setShowEnhancedFields(!showEnhancedFields)}
+      >
+        <Text style={styles.toggleButtonText}>
+          {showEnhancedFields ? "Hide" : "Show"} Advanced Tracking
+        </Text>
+      </TouchableOpacity>
+
+      {showEnhancedFields && (
+        <View style={styles.enhancedFields}>
+          <Text style={styles.fieldLabel}>RPE (1-10, optional):</Text>
+          <TextInput
+            style={[styles.input, styles.smallInput]}
+            placeholder="Rate difficulty (1-10)"
+            value={currentRPE}
+            onChangeText={setCurrentRPE}
+            keyboardType="numeric"
+          />
+
+          <View style={styles.checkboxRow}>
+            <TouchableOpacity
+              style={styles.checkbox}
+              onPress={() => setCurrentCompleted(!currentCompleted)}
+            >
+              <View style={[styles.checkboxInner, currentCompleted && styles.checkboxChecked]}>
+                {currentCompleted && <Text style={styles.checkmark}>✓</Text>}
+              </View>
+              <Text style={styles.checkboxLabel}>Set completed successfully</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {sets.length > 0 && (
         <View style={styles.setsList}>
           {sets.map((set, idx) => (
             <View key={idx} style={styles.setItem}>
-              <Text style={styles.setItemText}>
-                Set {set.set_number}: {set.reps} reps
-                {set.weight && ` @ ${set.weight}lbs`}
-              </Text>
+              <View style={styles.setItemContent}>
+                <Text style={styles.setItemText}>
+                  Set {set.set_number}: {set.reps} reps
+                  {set.weight && ` @ ${set.weight}lbs`}
+                  {set.rpe && ` (RPE: ${set.rpe})`}
+                  {set.completed === false && " ❌"}
+                </Text>
+              </View>
               <TouchableOpacity
                 onPress={() => onRemoveSet(idx)}
                 style={styles.removeSetButton}
@@ -102,6 +153,66 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
   },
+  toggleButton: {
+    backgroundColor: "#f3f4f6",
+    borderRadius: 6,
+    padding: 8,
+    marginBottom: 8,
+    alignItems: "center",
+  },
+  toggleButtonText: {
+    color: "#6b7280",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  enhancedFields: {
+    backgroundColor: "#fefce8",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#fef08a",
+  },
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#374151",
+    marginBottom: 4,
+  },
+  smallInput: {
+    marginBottom: 12,
+  },
+  checkboxRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  checkbox: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  checkboxInner: {
+    width: 20,
+    height: 20,
+    borderWidth: 2,
+    borderColor: "#d1d5db",
+    borderRadius: 4,
+    marginRight: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  checkboxChecked: {
+    backgroundColor: "#2563eb",
+    borderColor: "#2563eb",
+  },
+  checkmark: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "bold",
+  },
+  checkboxLabel: {
+    fontSize: 13,
+    color: "#374151",
+  },
   setsList: {
     marginBottom: 12,
   },
@@ -114,10 +225,12 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
+  setItemContent: {
+    flex: 1,
+  },
   setItemText: {
     fontSize: 14,
     color: "#374151",
-    flex: 1,
   },
   removeSetButton: {
     backgroundColor: "#ef4444",

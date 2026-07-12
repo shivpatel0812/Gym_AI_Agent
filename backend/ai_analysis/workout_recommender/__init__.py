@@ -40,8 +40,10 @@ class WorkoutRecommender:
         self.data_processor = DataProcessor()
         self.storage = StorageManager(db, user_id, self.SUMMARY_REFRESH_DAYS)
         self.summary_generator = SummaryGenerator(self.client, self.data_processor)
-        self.prompt_builder = PromptBuilder()
-        self.recommendation_engine = RecommendationEngine(self.client, self.model, self.prompt_builder)
+        # Initialize recommendation engine first, then prompt builder with engine reference
+        self.recommendation_engine = RecommendationEngine(self.client, self.model, None)
+        self.prompt_builder = PromptBuilder(recommendation_engine=self.recommendation_engine, summary_generator=self.summary_generator)
+        self.recommendation_engine.prompt_builder = self.prompt_builder
         self.simple_progression = SimpleProgression()
         self.exercise_order = ExerciseOrder(self.data_fetcher, self)
     
@@ -160,14 +162,40 @@ class WorkoutRecommender:
         # Get exercise-specific history from summary
         exercise_stats = summary.get("exercise_stats", {}).get(exercise_id, {})
         ai_summary = summary.get("ai_summary", {})
-        
+
+        # Get full exercise history for advanced analysis
+        all_sessions = self.data_fetcher.get_all_workout_sessions()
+        exercise_history = self.data_processor.build_exercise_history(all_sessions)
+        exercise_specific_history = exercise_history.get(exercise_id, [])
+
+        # Phase 2: Calculate time-weighted stats
+        time_weighted_stats = self.data_processor.calculate_time_weighted_stats(exercise_specific_history)
+
+        # Phase 3: Get failed attempts
+        failed_attempts = self.data_fetcher.get_failed_attempts(exercise_id, lookback_days=60)
+
+        # Phase 5: Calculate RPE trends
+        rpe_analysis = self.data_processor.calculate_rpe_trends(exercise_specific_history)
+
+        # Phase 7: Detect plateau
+        plateau_analysis = self.data_processor.detect_plateau(exercise_specific_history, lookback_sessions=6)
+
+        # Phase 8: Detect deload need (for entire user, not just this exercise)
+        deload_analysis = self.summary_generator.detect_deload_need(all_sessions, exercise_history)
+
+        # Add enhanced analysis to exercise_stats
+        exercise_stats["time_weighted_stats"] = time_weighted_stats
+        exercise_stats["rpe_analysis"] = rpe_analysis
+        exercise_stats["plateau_analysis"] = plateau_analysis
+        exercise_stats["deload_analysis"] = deload_analysis
+
         # Calculate max reps at each weight (all-time historical data)
         max_reps_per_weight = self.data_fetcher.calculate_max_reps_per_weight(exercise_id)
-        
+
         # Get user profile for goals
         profile = self.data_fetcher.get_user_profile()
-        
-        # Generate recommendation
+
+        # Generate recommendation with all enhanced context
         result = self.recommendation_engine.generate_recommendation(
             exercise_name=exercise_name,
             exercise_stats=exercise_stats,
@@ -177,7 +205,8 @@ class WorkoutRecommender:
             split_name=split_name,
             position_in_workout=position_in_workout,
             max_reps_per_weight=max_reps_per_weight,
-            current_workout_exercises=current_workout_exercises
+            current_workout_exercises=current_workout_exercises,
+            failed_attempts=failed_attempts
         )
         
         if result["status"] == "error":

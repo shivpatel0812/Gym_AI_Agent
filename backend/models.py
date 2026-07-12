@@ -19,6 +19,17 @@ class WorkoutSplit(BaseModel):
     name: str
     days: List[str]
 
+class WorkoutSet(BaseModel):
+    """Individual set within an exercise - defines optional enhanced tracking fields."""
+    weight: Optional[float] = None
+    reps: Optional[int] = None
+    # Phase 1: Enhanced tracking fields (all optional for backward compatibility)
+    rpe: Optional[int] = None  # Rate of Perceived Exertion (1-10 scale)
+    rir: Optional[int] = None  # Reps In Reserve (0-5)
+    completed: Optional[bool] = None  # Whether the set was successfully completed
+    form_quality: Optional[str] = None  # "excellent", "good", "fair", "poor"
+    notes: Optional[str] = None  # Any additional notes about this specific set
+
 class WorkoutSession(BaseModel):
     id: Optional[str] = None
     date: str

@@ -79,6 +79,8 @@ export default function SessionsSection({
     sessionsLogged: number;
     sessionsNeeded: number;
   }>({ hasSetup: false, needsSetup: false, isGenerating: false, sessionsLogged: 0, sessionsNeeded: 3 });
+  // Phase 1: Enhanced tracking state
+  const [showEnhancedTracking, setShowEnhancedTracking] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     fetchSessions();
@@ -1002,9 +1004,21 @@ export default function SessionsSection({
                                     {lastExerciseData[ex.exercise_id].exercise_data.sets.length} set{lastExerciseData[ex.exercise_id].exercise_data.sets.length > 1 ? 's' : ''}
                                   </p>
                                   {lastExerciseData[ex.exercise_id].exercise_data.sets.slice(0, 3).map((set: any, setIdx: number) => (
-                                    <p key={setIdx} className="text-xs text-[#9CA3AF] ml-2">
-                                      Set {set.set_number}: {set.reps} reps
-                                      {set.weight && ` @ ${set.weight} lbs`}
+                                    <p key={setIdx} className="text-xs text-[#9CA3AF] ml-2 flex items-center gap-2">
+                                      <span>
+                                        Set {set.set_number}: {set.reps} reps
+                                        {set.weight && ` @ ${set.weight} lbs`}
+                                      </span>
+                                      {set.rpe && (
+                                        <span className="text-yellow-400 text-xs" title={`RPE: ${set.rpe}/10`}>
+                                          RPE {set.rpe}
+                                        </span>
+                                      )}
+                                      {set.completed === false && (
+                                        <span className="text-red-400 text-xs" title="Set not completed">
+                                          ❌
+                                        </span>
+                                      )}
                                     </p>
                                   ))}
                                 </div>
@@ -1245,6 +1259,21 @@ export default function SessionsSection({
                         </div>
                       ) : (
                         <>
+                          {/* Phase 1: Enhanced Tracking Toggle */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowEnhancedTracking({
+                                ...showEnhancedTracking,
+                                [idx]: !showEnhancedTracking[idx]
+                              });
+                            }}
+                            className="text-sm text-gray-400 hover:text-white transition-colors mb-3 flex items-center gap-2"
+                          >
+                            {showEnhancedTracking[idx] ? '▼' : '▶'}
+                            {showEnhancedTracking[idx] ? 'Hide' : 'Show'} Advanced Tracking (RPE, Completion)
+                          </button>
+
                           <div className="grid grid-cols-12 gap-4 mb-2 text-xs font-bold text-[#9CA3AF] uppercase italic">
                             <div className="col-span-2">Set</div>
                             <div className="col-span-5">Reps</div>
@@ -1253,71 +1282,139 @@ export default function SessionsSection({
 
                           <div className="space-y-3 mb-6">
                             {exerciseSets.map((set, setIdx) => (
-                              <div
-                                key={setIdx}
-                                className="grid grid-cols-12 gap-4 items-center"
-                              >
-                                <div className="col-span-2 text-lg font-bold text-gray-400 italic">
-                                  {set.set_number}
+                              <div key={setIdx}>
+                                <div className="grid grid-cols-12 gap-4 items-center">
+                                  <div className="col-span-2 text-lg font-bold text-gray-400 italic flex items-center gap-2">
+                                    {set.set_number}
+                                    {set.completed === false && (
+                                      <span className="text-red-400 text-sm" title="Set not completed">❌</span>
+                                    )}
+                                    {set.rpe && set.rpe >= 9 && (
+                                      <span className="text-orange-400 text-sm" title={`RPE: ${set.rpe}/10`}>🔥</span>
+                                    )}
+                                  </div>
+                                  <div className="col-span-5">
+                                    <input
+                                      type="number"
+                                      value={set.reps === 0 ? "" : set.reps}
+                                      onChange={(e) => {
+                                        const newExercises = [...formData.exercises];
+                                        const newSets = [...exerciseSets];
+                                        const inputValue = e.target.value;
+                                        const value =
+                                          inputValue === ""
+                                            ? 0
+                                            : parseInt(inputValue) || 0;
+                                        newSets[setIdx] = {
+                                          ...newSets[setIdx],
+                                          reps: value,
+                                        };
+                                        newExercises[idx] = {
+                                          ...newExercises[idx],
+                                          sets: newSets,
+                                        };
+                                        setFormData({
+                                          ...formData,
+                                          exercises: newExercises,
+                                        });
+                                      }}
+                                      onFocus={(e) => {
+                                        e.target.select();
+                                      }}
+                                      placeholder="Reps"
+                                      className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+                                    />
+                                  </div>
+                                  <div className="col-span-5">
+                                    <input
+                                      type="number"
+                                      value={set.weight || ""}
+                                      onChange={(e) => {
+                                        const newExercises = [...formData.exercises];
+                                        const newSets = [...exerciseSets];
+                                        newSets[setIdx] = {
+                                          ...newSets[setIdx],
+                                          weight: e.target.value
+                                            ? parseFloat(e.target.value)
+                                            : undefined,
+                                        };
+                                        newExercises[idx] = {
+                                          ...newExercises[idx],
+                                          sets: newSets,
+                                        };
+                                        setFormData({
+                                          ...formData,
+                                          exercises: newExercises,
+                                        });
+                                      }}
+                                      placeholder="Weight (lbs)"
+                                      className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+                                    />
+                                  </div>
                                 </div>
-                                <div className="col-span-5">
-                                  <input
-                                    type="number"
-                                    value={set.reps === 0 ? "" : set.reps}
-                                    onChange={(e) => {
-                                      const newExercises = [...formData.exercises];
-                                      const newSets = [...exerciseSets];
-                                      const inputValue = e.target.value;
-                                      const value =
-                                        inputValue === ""
-                                          ? 0
-                                          : parseInt(inputValue) || 0;
-                                      newSets[setIdx] = {
-                                        ...newSets[setIdx],
-                                        reps: value,
-                                      };
-                                      newExercises[idx] = {
-                                        ...newExercises[idx],
-                                        sets: newSets,
-                                      };
-                                      setFormData({
-                                        ...formData,
-                                        exercises: newExercises,
-                                      });
-                                    }}
-                                    onFocus={(e) => {
-                                      e.target.select();
-                                    }}
-                                    placeholder="Reps"
-                                    className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
-                                  />
-                                </div>
-                                <div className="col-span-5">
-                                  <input
-                                    type="number"
-                                    value={set.weight || ""}
-                                    onChange={(e) => {
-                                      const newExercises = [...formData.exercises];
-                                      const newSets = [...exerciseSets];
-                                      newSets[setIdx] = {
-                                        ...newSets[setIdx],
-                                        weight: e.target.value
-                                          ? parseFloat(e.target.value)
-                                          : undefined,
-                                      };
-                                      newExercises[idx] = {
-                                        ...newExercises[idx],
-                                        sets: newSets,
-                                      };
-                                      setFormData({
-                                        ...formData,
-                                        exercises: newExercises,
-                                      });
-                                    }}
-                                    placeholder="Weight (lbs)"
-                                    className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
-                                  />
-                                </div>
+
+                                {/* Phase 1: Enhanced Tracking Fields */}
+                                {showEnhancedTracking[idx] && (
+                                  <div className="mt-3 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg space-y-3">
+                                    <div className="grid grid-cols-2 gap-4">
+                                      <div>
+                                        <label className="text-xs text-gray-400 mb-1 block">
+                                          RPE (1-10)
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min="1"
+                                          max="10"
+                                          value={set.rpe || ""}
+                                          onChange={(e) => {
+                                            const newExercises = [...formData.exercises];
+                                            const newSets = [...exerciseSets];
+                                            newSets[setIdx] = {
+                                              ...newSets[setIdx],
+                                              rpe: e.target.value ? parseInt(e.target.value) : undefined,
+                                            };
+                                            newExercises[idx] = {
+                                              ...newExercises[idx],
+                                              sets: newSets,
+                                            };
+                                            setFormData({
+                                              ...formData,
+                                              exercises: newExercises,
+                                            });
+                                          }}
+                                          placeholder="Rate difficulty 1-10"
+                                          className="w-full px-3 py-2 rounded bg-[#2d3b4e] border-none text-white text-sm placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                                        />
+                                      </div>
+                                      <div className="flex items-end">
+                                        <label className="flex items-center gap-2 cursor-pointer">
+                                          <input
+                                            type="checkbox"
+                                            checked={set.completed !== false}
+                                            onChange={(e) => {
+                                              const newExercises = [...formData.exercises];
+                                              const newSets = [...exerciseSets];
+                                              newSets[setIdx] = {
+                                                ...newSets[setIdx],
+                                                completed: e.target.checked,
+                                              };
+                                              newExercises[idx] = {
+                                                ...newExercises[idx],
+                                                sets: newSets,
+                                              };
+                                              setFormData({
+                                                ...formData,
+                                                exercises: newExercises,
+                                              });
+                                            }}
+                                            className="w-5 h-5 rounded bg-[#2d3b4e] border-gray-600 text-green-500 focus:ring-green-500"
+                                          />
+                                          <span className="text-sm text-gray-300">Set completed</span>
+                                        </label>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -1429,16 +1526,35 @@ export default function SessionsSection({
                 </p>
                 {session.exercises && session.exercises.length > 0 && (
                   <div className="space-y-1 mb-2">
-                    {session.exercises.slice(0, 3).map((ex: any, idx: number) => (
-                      <div key={idx} className="text-xs text-[#9CA3AF]">
-                        • {ex.exercise_name || ex.exercise_id}
-                        {ex.sets && ex.sets.length > 0 && (
-                          <span className="text-[#6B7280] ml-1">
-                            ({ex.sets.length} set{ex.sets.length > 1 ? 's' : ''})
+                    {session.exercises.slice(0, 3).map((ex: any, idx: number) => {
+                      const hasFailedSets = ex.sets?.some((s: any) => s.completed === false);
+                      const avgRpe = ex.sets?.filter((s: any) => s.rpe).length > 0
+                        ? Math.round(ex.sets.filter((s: any) => s.rpe).reduce((acc: number, s: any) => acc + s.rpe, 0) / ex.sets.filter((s: any) => s.rpe).length)
+                        : null;
+
+                      return (
+                        <div key={idx} className="text-xs text-[#9CA3AF] flex items-center gap-2">
+                          <span>
+                            • {ex.exercise_name || ex.exercise_id}
+                            {ex.sets && ex.sets.length > 0 && (
+                              <span className="text-[#6B7280] ml-1">
+                                ({ex.sets.length} set{ex.sets.length > 1 ? 's' : ''})
+                              </span>
+                            )}
                           </span>
-                        )}
-                      </div>
-                    ))}
+                          {avgRpe && (
+                            <span className="text-yellow-400 text-xs" title={`Average RPE: ${avgRpe}/10`}>
+                              RPE {avgRpe}
+                            </span>
+                          )}
+                          {hasFailedSets && (
+                            <span className="text-red-400 text-xs" title="Some sets not completed">
+                              ⚠️
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
                     {session.exercises.length > 3 && (
                       <div className="text-xs text-[#6B7280]">
                         +{session.exercises.length - 3} more

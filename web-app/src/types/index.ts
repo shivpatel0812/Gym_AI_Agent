@@ -23,6 +23,12 @@ export interface WorkoutSet {
   set_number: number;
   reps: number;
   weight?: number;
+  // Phase 1: Enhanced tracking fields (all optional for backward compatibility)
+  rpe?: number; // Rate of Perceived Exertion (1-10 scale)
+  rir?: number; // Reps In Reserve (0-5)
+  completed?: boolean; // Whether the set was successfully completed
+  form_quality?: string; // "excellent", "good", "fair", "poor"
+  notes?: string; // Any additional notes about this specific set
 }
 
 export interface SessionExercise {

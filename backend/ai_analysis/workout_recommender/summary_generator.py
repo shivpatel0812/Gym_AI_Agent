@@ -6,6 +6,8 @@ Handles AI summary creation and prompt building.
 import json
 from typing import Dict, List, Any
 from openai import OpenAI
+from datetime import datetime, timedelta
+import statistics
 
 
 class SummaryGenerator:
@@ -138,5 +140,174 @@ SPLIT PATTERNS:
 Create a comprehensive training summary for this user."""
         
         return prompt
+
+    def detect_deload_need(self, all_sessions: List[Dict], exercise_history: Dict) -> Dict[str, Any]:
+        """
+        Phase 8: Detect if user needs a deload week.
+
+        Deload indicators:
+        - Volume increased >25% over 3-4 weeks
+        - Average RPE >= 8.5 (working too hard)
+        - Completion rate declining >10%
+        - 4+ weeks without deload
+
+        Returns: {
+            "needs_deload": bool,
+            "urgency": "low"|"medium"|"high",
+            "recommended_reduction": 0.60-0.80,
+            "reasons": list of reasons
+        }
+        """
+        if len(all_sessions) < 8:
+            return {"needs_deload": False}  # Need at least 8 sessions for analysis
+
+        # Sort sessions by date
+        sorted_sessions = sorted(all_sessions, key=lambda x: x.get("date", ""), reverse=True)
+
+        # Get sessions from last 4 weeks
+        now = datetime.now()
+        cutoff_4_weeks = (now - timedelta(days=28)).strftime('%Y-%m-%d')
+
+        recent_sessions = [s for s in sorted_sessions if s.get("date", "") >= cutoff_4_weeks]
+
+        if len(recent_sessions) < 4:
+            return {"needs_deload": False}  # Not enough recent data
+
+        # Calculate indicators
+        deload_indicators = 0
+        reasons = []
+
+        # 1. Calculate weekly volumes
+        weekly_volumes = self._calculate_weekly_volumes(recent_sessions)
+
+        if len(weekly_volumes) >= 3:
+            early_avg = statistics.mean(weekly_volumes[-2:]) if len(weekly_volumes) >= 2 else 0
+            recent_avg = statistics.mean(weekly_volumes[:2])
+
+            if early_avg > 0:
+                volume_change = ((recent_avg - early_avg) / early_avg) * 100
+
+                if volume_change > 25:
+                    deload_indicators += 2
+                    reasons.append(f"Volume increased {volume_change:.1f}% over 3-4 weeks")
+
+        # 2. Calculate average RPE
+        all_rpes = []
+        for session in recent_sessions:
+            for ex in session.get("exercises", []):
+                sets = ex.get("sets", [])
+                if isinstance(sets, list):
+                    for s in sets:
+                        rpe = s.get("rpe")
+                        if rpe is not None:
+                            all_rpes.append(rpe)
+
+        if len(all_rpes) >= 10:  # Need sufficient RPE data
+            avg_rpe = statistics.mean(all_rpes)
+            if avg_rpe >= 8.5:
+                deload_indicators += 2
+                reasons.append(f"High average RPE: {avg_rpe:.1f}/10")
+
+        # 3. Calculate completion rate
+        total_sets = 0
+        completed_sets = 0
+
+        for session in recent_sessions:
+            for ex in session.get("exercises", []):
+                sets = ex.get("sets", [])
+                if isinstance(sets, list):
+                    for s in sets:
+                        total_sets += 1
+                        # If completed is not explicitly False, assume True (backward compatibility)
+                        if s.get("completed", True) is True:
+                            completed_sets += 1
+
+        if total_sets >= 20:  # Need sufficient data
+            completion_rate = (completed_sets / total_sets) * 100
+
+            # Compare to earlier completion rate
+            earlier_sessions = sorted_sessions[len(recent_sessions):len(recent_sessions)*2]
+            earlier_total = 0
+            earlier_completed = 0
+
+            for session in earlier_sessions:
+                for ex in session.get("exercises", []):
+                    sets = ex.get("sets", [])
+                    if isinstance(sets, list):
+                        for s in sets:
+                            earlier_total += 1
+                            if s.get("completed", True) is True:
+                                earlier_completed += 1
+
+            if earlier_total >= 20:
+                earlier_completion_rate = (earlier_completed / earlier_total) * 100
+                completion_decline = earlier_completion_rate - completion_rate
+
+                if completion_decline > 10:
+                    deload_indicators += 1
+                    reasons.append(f"Completion rate declined {completion_decline:.1f}%")
+
+        # 4. Check time since last deload (simplified - look for low volume weeks)
+        # This is a simple heuristic - in production, you'd track deloads explicitly
+        if len(weekly_volumes) >= 4:
+            recent_avg_volume = statistics.mean(weekly_volumes[:4])
+            # If no week in recent 4 had < 70% of average, might need deload
+            had_deload = any(vol < recent_avg_volume * 0.7 for vol in weekly_volumes[:4])
+
+            if not had_deload:
+                deload_indicators += 1
+                reasons.append("No deload week in last 4 weeks")
+
+        # Determine deload need and urgency
+        if deload_indicators >= 4:
+            urgency = "high"
+            reduction = 0.60
+        elif deload_indicators >= 3:
+            urgency = "medium"
+            reduction = 0.70
+        elif deload_indicators >= 2:
+            urgency = "low"
+            reduction = 0.80
+        else:
+            return {"needs_deload": False}
+
+        return {
+            "needs_deload": True,
+            "urgency": urgency,
+            "recommended_reduction": reduction,
+            "reasons": reasons,
+            "deload_indicators": deload_indicators
+        }
+
+    def _calculate_weekly_volumes(self, sessions: List[Dict]) -> List[float]:
+        """Calculate total volume for each week."""
+        # Group sessions by week
+        weekly_data = {}
+
+        for session in sessions:
+            session_date = session.get("date", "")
+            try:
+                date_obj = datetime.strptime(session_date, "%Y-%m-%d")
+                # Get week number (ISO week)
+                week_key = date_obj.strftime("%Y-W%U")
+
+                if week_key not in weekly_data:
+                    weekly_data[week_key] = 0
+
+                # Calculate total volume for this session
+                for ex in session.get("exercises", []):
+                    sets = ex.get("sets", [])
+                    if isinstance(sets, list):
+                        for s in sets:
+                            weight = s.get("weight", 0) or 0
+                            reps = s.get("reps", 0) or 0
+                            if weight > 0 and reps > 0:
+                                weekly_data[week_key] += (weight * reps)
+            except:
+                continue
+
+        # Return volumes sorted by week (most recent first)
+        sorted_weeks = sorted(weekly_data.keys(), reverse=True)
+        return [weekly_data[week] for week in sorted_weeks]
 
 

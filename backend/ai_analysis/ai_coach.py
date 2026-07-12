@@ -4,8 +4,18 @@ Generates personalized fitness insights using OpenAI API.
 """
 
 import json
+import time
 from typing import Dict, List, Any, Optional
 from openai import OpenAI
+
+# #region agent log (debug demo - remove after learning)
+def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = "demo"):
+    try:
+        line = json.dumps({"id": f"log_{int(time.time()*1000)}", "timestamp": int(time.time() * 1000), "location": location, "message": message, "data": data, "hypothesisId": hypothesis_id}) + "\n"
+        open("/Users/shivpatel/gymaiAgent/.cursor/debug.log", "a").write(line)
+    except Exception:
+        pass
+# #endregion
 
 
 def clean_for_json(obj: Any) -> Any:
@@ -197,6 +207,9 @@ Format your response with clear section headers."""
         Returns:
             Dict containing analysis status, text, tokens used, etc.
         """
+        # #region agent log
+        _debug_log("ai_coach.py:generate_general_analysis", "generate_general_analysis called", {"summary_keys": list(summary.keys()) if isinstance(summary, dict) else "not_dict", "has_previous": previous_analyses is not None and len(previous_analyses) > 0}, "A")
+        # #endregion
         if previous_analyses:
             previous_analyses = [str(analysis) for analysis in previous_analyses if analysis and str(analysis).strip()]
         
@@ -247,6 +260,9 @@ Format your response with clear section headers."""
 
             analysis_text = response.choices[0].message.content
 
+            # #region agent log
+            _debug_log("ai_coach.py:generate_general_analysis", "generate_general_analysis success", {"status": "success", "tokens_used": response.usage.total_tokens}, "A")
+            # #endregion
             return {
                 "status": "success",
                 "analysis": analysis_text,
@@ -256,6 +272,9 @@ Format your response with clear section headers."""
             }
 
         except Exception as e:
+            # #region agent log
+            _debug_log("ai_coach.py:generate_general_analysis", "generate_general_analysis error", {"status": "error", "error": str(e)}, "A")
+            # #endregion
             return {
                 "status": "error",
                 "error": str(e)
@@ -293,6 +312,9 @@ Lifestyle: Stress {lifestyle.get('avg_stress', 0)}/10, {lifestyle.get('high_stre
         if conversation_history is None:
             conversation_history = []
 
+        # #region agent log
+        _debug_log("ai_coach.py:chat", "chat called", {"message_len": len(user_message), "history_len": len(conversation_history)}, "B")
+        # #endregion
         context = self._build_chatbot_context(summary)
 
         system_message = f"""You are a personal fitness coach who knows this user's training history and current status.
@@ -317,6 +339,9 @@ Consider their constraints (busy student schedule) in your recommendations."""
 
             assistant_message = response.choices[0].message.content
 
+            # #region agent log
+            _debug_log("ai_coach.py:chat", "chat success", {"status": "success", "tokens_used": response.usage.total_tokens}, "B")
+            # #endregion
             return {
                 "status": "success",
                 "response": assistant_message,
@@ -328,6 +353,9 @@ Consider their constraints (busy student schedule) in your recommendations."""
             }
 
         except Exception as e:
+            # #region agent log
+            _debug_log("ai_coach.py:chat", "chat error", {"status": "error", "error": str(e)}, "B")
+            # #endregion
             return {
                 "status": "error",
                 "error": str(e)
