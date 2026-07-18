@@ -96,13 +96,16 @@ class WorkoutRecommender:
         return summary
     
     def get_exercise_recommendation(
-        self, 
-        exercise_id: str, 
+        self,
+        exercise_id: str,
         exercise_name: str,
         split_name: Optional[str] = None,
         split_day: Optional[str] = None,
         position_in_workout: Optional[int] = None,
-        current_workout_exercises: Optional[List[Dict]] = None
+        current_workout_exercises: Optional[List[Dict]] = None,
+        plan_target_sets: Optional[int] = None,
+        plan_target_reps: Optional[int] = None,
+        plan_notes: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Get AI recommendation for a specific exercise.
@@ -206,7 +209,10 @@ class WorkoutRecommender:
             position_in_workout=position_in_workout,
             max_reps_per_weight=max_reps_per_weight,
             current_workout_exercises=current_workout_exercises,
-            failed_attempts=failed_attempts
+            failed_attempts=failed_attempts,
+            plan_target_sets=plan_target_sets,
+            plan_target_reps=plan_target_reps,
+            plan_notes=plan_notes
         )
         
         if result["status"] == "error":

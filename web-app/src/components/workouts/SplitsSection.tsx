@@ -71,7 +71,7 @@ export default function SplitsSection({
   return (
     <div>
       <div className="flex justify-between items-center mb-8">
-        <h2 className="text-2xl font-bold text-[#F9FAFB]">Workout Splits</h2>
+        <h2 className="text-2xl font-bold text-[#FFFFFF]">Workout Splits</h2>
         <Button onClick={() => setShowForm(true)} icon={<MdAdd />}>
           Create
         </Button>
@@ -80,12 +80,12 @@ export default function SplitsSection({
       {showForm && (
         <Card className="mb-8 p-6">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-[#F9FAFB]">
+            <h3 className="text-lg font-semibold text-[#FFFFFF]">
               Create Split
             </h3>
             <button
               onClick={handleCancel}
-              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors"
+              className="text-[#8E8E93] hover:text-[#FFFFFF] transition-colors"
             >
               <MdClose size={20} />
             </button>
@@ -136,19 +136,19 @@ export default function SplitsSection({
         {splits.map((split) => (
           <Card key={split.id}>
             <div className="flex flex-col items-center text-center">
-              <div className="w-10 h-10 rounded-lg bg-[#8B5CF6]/20 flex items-center justify-center mb-3">
-                <MdCalendarToday className="text-[#8B5CF6] text-xl" />
+              <div className="w-10 h-10 rounded-lg bg-[#E85A2A]/20 flex items-center justify-center mb-3">
+                <MdCalendarToday className="text-[#E85A2A] text-xl" />
               </div>
-              <h3 className="text-base font-semibold text-[#F9FAFB] mb-3">
+              <h3 className="text-base font-semibold text-[#FFFFFF] mb-3">
                 {split.name}
               </h3>
               <div className="flex flex-wrap gap-2 justify-center">
                 {split.days.map((day, idx) => (
                   <span
                     key={idx}
-                    className="px-2 py-1 rounded-lg bg-[#6366F1]/20 text-[#6366F1] text-xs font-semibold"
+                    className="px-2 py-1 rounded-lg bg-[#FF6B35]/20 text-[#FF6B35] text-xs font-semibold"
                   >
-                    {typeof day === "string" ? day : day.day_name}
+                    {typeof day === "string" ? day : (day as { day_name: string }).day_name}
                   </span>
                 ))}
               </div>

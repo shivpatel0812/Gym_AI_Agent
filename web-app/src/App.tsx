@@ -10,6 +10,7 @@ import CalendarPage from './pages/CalendarPage'
 import AboutMyselfPage from './pages/AboutMyselfPage'
 import GeneralAnalysisPage from './pages/GeneralAnalysisPage'
 import ChatbotPage from './pages/ChatbotPage'
+import PlanGeneratorPage from './pages/PlanGeneratorPage'
 import AuthenticatedLayout from './layouts/AuthenticatedLayout'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -17,8 +18,8 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0A0E27] to-[#1A1F3A]">
-        <div className="animate-pulse text-[#6366F1] text-xl">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1A1512] to-[#0B0C10]">
+        <div className="animate-pulse text-[#FF6B35] text-xl">Loading...</div>
       </div>
     )
   }
@@ -41,6 +42,7 @@ function App() {
             <AuthenticatedLayout>
               <Routes>
                 <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/plan-generator" element={<PlanGeneratorPage />} />
                 <Route path="/workouts" element={<WorkoutsPage />} />
                 <Route path="/activity" element={<ActivityPage />} />
                 <Route path="/nutrition" element={<NutritionPage />} />

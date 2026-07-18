@@ -98,12 +98,12 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
       {showForm && (
         <Card className="mb-6 sm:mb-8 p-4 sm:p-5 lg:p-8">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
-            <h3 className="text-base sm:text-lg font-semibold text-[#F9FAFB]">
+            <h3 className="text-base sm:text-lg font-semibold text-[#FFFFFF]">
               {editingEntryId ? 'Edit Body Feeling' : 'Log Body Feeling'}
             </h3>
             <button
               onClick={handleCancel}
-              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors self-start sm:self-auto"
+              className="text-[#8E8E93] hover:text-[#FFFFFF] transition-colors self-start sm:self-auto"
             >
               <MdClose size={18} className="sm:w-5 sm:h-5" />
             </button>
@@ -118,7 +118,7 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
             />
 
             <div>
-              <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
+              <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
                 Description
               </label>
               <textarea
@@ -127,7 +127,7 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
                 placeholder="How does your body feel today?"
                 required
                 rows={3}
-                className="w-full px-3 sm:px-4 py-2.5 sm:py-3 text-sm sm:text-base rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#6366F1] focus:border-transparent transition-all resize-none"
+                className="w-full px-3 sm:px-4 py-2.5 sm:py-3 text-sm sm:text-base rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] placeholder:text-[#8E8E93] focus:outline-none focus:ring-2 focus:ring-[#FF6B35] focus:border-transparent transition-all resize-none"
               />
             </div>
 
@@ -145,15 +145,15 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
 
       {entries.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-[#9CA3AF] text-sm">No body feeling entries yet. Start tracking how your body feels!</p>
+          <p className="text-[#8E8E93] text-sm">No body feeling entries yet. Start tracking how your body feels!</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {entries.map((entry) => (
-            <Card key={entry.id} className="hover:border-[#6366F1]/50 transition-all duration-200">
+            <Card key={entry.id} className="hover:border-[#FF6B35]/50 transition-all duration-200">
               <div className="flex flex-col h-full">
                 <div className="flex items-start justify-between mb-3">
-                  <h3 className="text-base font-semibold text-[#F9FAFB]">{entry.date}</h3>
+                  <h3 className="text-base font-semibold text-[#FFFFFF]">{entry.date}</h3>
                   <button 
                     onClick={() => handleDelete(entry.id!)} 
                     className="text-[#EF4444] hover:text-[#DC2626] hover:bg-[#EF4444]/10 p-1.5 rounded-lg transition-all"
@@ -161,7 +161,7 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
                     <MdDelete size={18} />
                   </button>
                 </div>
-                <p className="text-sm text-[#9CA3AF] leading-relaxed mt-auto">{entry.description}</p>
+                <p className="text-sm text-[#8E8E93] leading-relaxed mt-auto">{entry.description}</p>
               </div>
             </Card>
           ))}

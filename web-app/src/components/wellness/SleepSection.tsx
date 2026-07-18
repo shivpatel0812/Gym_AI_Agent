@@ -87,13 +87,13 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
   const getQualityColor = (quality: number) => {
     if (quality <= 3) return 'bg-[#EF4444]';
     if (quality <= 6) return 'bg-[#F59E0B]';
-    return 'bg-[#10B981]';
+    return 'bg-[#5EEAD4]';
   };
 
   const getQualityTextColor = (quality: number) => {
     if (quality <= 3) return 'text-[#EF4444]';
     if (quality <= 6) return 'text-[#F59E0B]';
-    return 'text-[#10B981]';
+    return 'text-[#5EEAD4]';
   };
 
   const handleCancel = () => {
@@ -122,12 +122,12 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
       {showForm && (
         <Card className="mb-6 sm:mb-8 p-4 sm:p-5 lg:p-8">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
-            <h3 className="text-base sm:text-lg font-semibold text-[#F9FAFB]">
+            <h3 className="text-base sm:text-lg font-semibold text-[#FFFFFF]">
               {editingEntryId ? 'Edit Sleep Entry' : 'Log Sleep'}
             </h3>
             <button
               onClick={handleCancel}
-              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors self-start sm:self-auto"
+              className="text-[#8E8E93] hover:text-[#FFFFFF] transition-colors self-start sm:self-auto"
             >
               <MdClose size={18} className="sm:w-5 sm:h-5" />
             </button>
@@ -153,7 +153,7 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
             />
 
             <div>
-              <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
+              <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
                 Sleep Quality: {formData.quality}
               </label>
               <input
@@ -164,7 +164,7 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
                 onChange={(e) => setFormData({ ...formData, quality: parseInt(e.target.value) })}
                 className="w-full"
               />
-              <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
+              <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
                 <span>Poor (1)</span>
                 <span>Excellent (10)</span>
               </div>
@@ -206,20 +206,20 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
 
       {entries.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-[#9CA3AF] text-sm">No sleep entries yet. Start tracking your sleep!</p>
+          <p className="text-[#8E8E93] text-sm">No sleep entries yet. Start tracking your sleep!</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {entries.map((entry) => (
-            <Card key={entry.id} className="hover:border-[#6366F1]/50 transition-all duration-200">
+            <Card key={entry.id} className="hover:border-[#FF6B35]/50 transition-all duration-200">
               <div className="flex flex-col h-full">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1">
-                    <h3 className="text-base font-semibold text-[#F9FAFB] mb-1">{entry.date}</h3>
+                    <h3 className="text-base font-semibold text-[#FFFFFF] mb-1">{entry.date}</h3>
                     <div className="flex items-center gap-3">
                       <div className="flex items-center gap-2">
-                        <MdBedtime className="text-[#6366F1] text-xl" />
-                        <span className="text-xl font-bold text-[#F9FAFB]">
+                        <MdBedtime className="text-[#FF6B35] text-xl" />
+                        <span className="text-xl font-bold text-[#FFFFFF]">
                           {entry.hours_slept}h
                         </span>
                       </div>
@@ -228,7 +228,7 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
                           <span className={`text-lg font-bold ${getQualityTextColor(entry.quality)}`}>
                             {entry.quality}
                           </span>
-                          <span className="text-sm text-[#9CA3AF]">/10</span>
+                          <span className="text-sm text-[#8E8E93]">/10</span>
                         </div>
                       )}
                     </div>
@@ -242,7 +242,7 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
                 </div>
                 
                 {entry.quality && (
-                  <div className="w-full bg-[#374151] rounded-full h-2.5 mb-3">
+                  <div className="w-full bg-[#2A2D35] rounded-full h-2.5 mb-3">
                     <div
                       className={`${getQualityColor(entry.quality)} h-2.5 rounded-full transition-all duration-300`}
                       style={{ width: `${(entry.quality / 10) * 100}%` }}
@@ -252,19 +252,19 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
                 
                 <div className="space-y-1 mb-3">
                   {entry.bedtime && (
-                    <p className="text-xs text-[#9CA3AF]">
+                    <p className="text-xs text-[#8E8E93]">
                       <span className="font-semibold">Bedtime:</span> {entry.bedtime}
                     </p>
                   )}
                   {entry.wake_time && (
-                    <p className="text-xs text-[#9CA3AF]">
+                    <p className="text-xs text-[#8E8E93]">
                       <span className="font-semibold">Wake:</span> {entry.wake_time}
                     </p>
                   )}
                 </div>
                 
                 {entry.notes && (
-                  <p className="text-sm text-[#9CA3AF] mt-auto pt-2 border-t border-[#374151]">{entry.notes}</p>
+                  <p className="text-sm text-[#8E8E93] mt-auto pt-2 border-t border-[#2A2D35]">{entry.notes}</p>
                 )}
               </div>
             </Card>

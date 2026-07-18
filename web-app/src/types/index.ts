@@ -73,6 +73,8 @@ export interface FoodItem {
   carbs?: number;
   fats?: number;
   sodium?: number;
+  meal?: string;
+  amount?: string;
 }
 
 export interface MacroEntry {
@@ -161,4 +163,74 @@ export interface AISummaryStatus {
   sessions_needed?: number;
   total_sessions_analyzed?: number;
   message?: string;
+}
+
+// Workout Plan types
+export interface PlanExercise {
+  exercise_id: string;
+  exercise_name: string;
+  sets: number;
+  reps: number;
+  rest_seconds?: number;
+  notes?: string;
+  order: number;
+}
+
+export interface WorkoutPlanDay {
+  day_name: string;
+  focus: string;
+  exercises: PlanExercise[];
+  estimated_duration_minutes?: number;
+}
+
+export interface WeeklySchedule {
+  monday?: string;
+  tuesday?: string;
+  wednesday?: string;
+  thursday?: string;
+  friday?: string;
+  saturday?: string;
+  sunday?: string;
+}
+
+export interface WorkoutPlan {
+  id?: string;
+  plan_name: string;
+  plan_description?: string;
+  split_type: string;
+  weekly_schedule: WeeklySchedule;
+  days: WorkoutPlanDay[];
+  progression_notes?: string;
+  deload_schedule?: string;
+  is_active: boolean;
+  linked_split_id?: string;
+  created_at?: string;
+  updated_at?: string;
+  generation_metadata?: Record<string, unknown>;
+}
+
+export interface TodaysWorkout {
+  status: "workout_day" | "rest_day" | "no_plan";
+  day_name?: string;
+  focus?: string;
+  exercises?: PlanExercise[];
+  estimated_duration_minutes?: number;
+  plan_id?: string;
+  plan_name?: string;
+  already_logged?: boolean;
+  existing_session_id?: string;
+  rest_day_message?: string;
+  next_workout_day?: string;
+  next_workout_name?: string;
+}
+
+export interface PlanGenerationRequest {
+  primary_goal: string;
+  experience_level: string;
+  preferred_workout_frequency: string;
+  preferred_session_length: string;
+  available_equipment: string[];
+  preferred_workout_days?: string[];
+  secondary_goals?: string[];
+  coaching_style?: string;
 }

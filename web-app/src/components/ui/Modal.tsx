@@ -26,16 +26,16 @@ export default function Modal({ isOpen, onClose, children, title }: ModalProps) 
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="bg-[#1A1F3A] rounded-xl border border-[#374151] max-h-[90vh] overflow-y-auto w-full max-w-2xl"
+        className="bg-[#161A22] rounded-2xl border border-[#2A2D35] max-h-[90vh] overflow-y-auto w-full max-w-2xl shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         {title && (
-          <div className="p-6 border-b border-[#374151]">
-            <h2 className="text-2xl font-bold text-[#F9FAFB]">{title}</h2>
+          <div className="p-6 border-b border-[#2A2D35]">
+            <h2 className="text-2xl font-bold text-white">{title}</h2>
           </div>
         )}
         <div className="p-6">{children}</div>

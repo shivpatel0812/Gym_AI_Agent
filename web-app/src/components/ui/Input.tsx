@@ -14,23 +14,23 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className="mb-4">
         {label && (
-          <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+          <label className="block text-sm font-semibold text-white mb-2">
             {label}
           </label>
         )}
         <div className="relative">
           {icon && (
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[#9CA3AF]">
+            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8E8E93]">
               {icon}
             </div>
           )}
           <input
             ref={ref}
             className={clsx(
-              "w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 text-[#F9FAFB] placeholder:text-[#9CA3AF]",
-              "focus:outline-none focus:ring-2 focus:ring-[#6366F1] focus:border-transparent",
+              "w-full px-4 py-3 rounded-xl bg-[#1C1C1E] border text-white placeholder:text-[#636366]",
+              "focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/30 focus:border-[#FF6B35]",
               "transition-all",
-              error ? "border-[#EF4444]" : "border-[#374151]",
+              error ? "border-[#EF4444]" : "border-[#2A2D35]",
               icon && "pl-10",
               className
             )}

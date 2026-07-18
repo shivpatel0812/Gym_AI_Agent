@@ -97,7 +97,7 @@ export default function ActivityPage() {
   };
 
   const getIntensityColor = (level: number) => {
-    if (level < 4) return 'bg-[#10B981]';
+    if (level < 4) return 'bg-[#5EEAD4]';
     if (level <= 6) return 'bg-[#F59E0B]';
     return 'bg-[#EF4444]';
   };
@@ -105,8 +105,8 @@ export default function ActivityPage() {
   return (
     <div className="p-6 lg:p-12 max-w-[1600px] mx-auto">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-[#F9FAFB] mb-2">Physical Activity</h1>
-        <p className="text-sm text-[#9CA3AF]">Track your daily physical activities</p>
+        <h1 className="text-3xl font-bold text-[#FFFFFF] mb-2">Physical Activity</h1>
+        <p className="text-sm text-[#8E8E93]">Track your daily physical activities</p>
       </div>
 
       <div className="flex justify-end mb-6">
@@ -120,12 +120,12 @@ export default function ActivityPage() {
       {showForm && (
         <Card className="mb-8 p-6 lg:p-8">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-[#F9FAFB]">
+            <h3 className="text-lg font-semibold text-[#FFFFFF]">
               {editingActivity ? 'Edit Activity' : 'Log Activity'}
             </h3>
             <button
               onClick={handleCancel}
-              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors"
+              className="text-[#8E8E93] hover:text-[#FFFFFF] transition-colors"
             >
               <MdClose size={20} />
             </button>
@@ -155,7 +155,7 @@ export default function ActivityPage() {
             />
 
             <div>
-              <label className="flex items-center gap-2 text-[#F9FAFB]">
+              <label className="flex items-center gap-2 text-[#FFFFFF]">
                 <input
                   type="checkbox"
                   checked={formData.is_whole_day}
@@ -177,7 +177,7 @@ export default function ActivityPage() {
             )}
 
             <div>
-              <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+              <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
                 Intensity Level: {formData.intensity_level}
               </label>
               <input
@@ -188,7 +188,7 @@ export default function ActivityPage() {
                 onChange={(e) => setFormData({ ...formData, intensity_level: parseInt(e.target.value) })}
                 className="w-full"
               />
-              <div className="flex justify-between text-xs text-[#9CA3AF]">
+              <div className="flex justify-between text-xs text-[#8E8E93]">
                 <span>Low</span>
                 <span>High</span>
               </div>
@@ -217,19 +217,19 @@ export default function ActivityPage() {
         {activities.map((activity) => (
           <Card key={activity.id}>
             <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-lg bg-[#10B981]/20 flex items-center justify-center flex-shrink-0">
-                <MdDirectionsRun className="text-[#10B981] text-2xl" />
+              <div className="w-12 h-12 rounded-lg bg-[#5EEAD4]/20 flex items-center justify-center flex-shrink-0">
+                <MdDirectionsRun className="text-[#5EEAD4] text-2xl" />
               </div>
               <div className="flex-1">
                 <div className="flex justify-between items-start mb-2">
                   <div>
-                    <h3 className="text-lg font-semibold text-[#F9FAFB]">
+                    <h3 className="text-lg font-semibold text-[#FFFFFF]">
                       {activity.activity_type || 'Activity'}
                     </h3>
-                    <p className="text-sm text-[#9CA3AF]">{activity.date}</p>
+                    <p className="text-sm text-[#8E8E93]">{activity.date}</p>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={() => handleEdit(activity)} className="text-[#6366F1] hover:text-[#8B5CF6]">
+                    <button onClick={() => handleEdit(activity)} className="text-[#FF6B35] hover:text-[#E85A2A]">
                       <MdEdit size={20} />
                     </button>
                     <button onClick={() => handleDelete(activity.id!)} className="text-[#EF4444] hover:text-[#DC2626]">
@@ -239,18 +239,18 @@ export default function ActivityPage() {
                 </div>
                 <div className="space-y-1">
                   {activity.steps && (
-                    <p className="text-sm text-[#F9FAFB]">Steps: {activity.steps.toLocaleString()}</p>
+                    <p className="text-sm text-[#FFFFFF]">Steps: {activity.steps.toLocaleString()}</p>
                   )}
                   {activity.duration_minutes && (
-                    <p className="text-sm text-[#F9FAFB]">Duration: {activity.duration_minutes} minutes</p>
+                    <p className="text-sm text-[#FFFFFF]">Duration: {activity.duration_minutes} minutes</p>
                   )}
                   {activity.is_whole_day && (
-                    <p className="text-sm text-[#F9FAFB]">Whole Day Activity</p>
+                    <p className="text-sm text-[#FFFFFF]">Whole Day Activity</p>
                   )}
                   {activity.intensity_level !== undefined && (
                     <div>
-                      <p className="text-sm text-[#9CA3AF] mb-1">Intensity: {activity.intensity_level}/10</p>
-                      <div className="w-full bg-[#374151] rounded-full h-2">
+                      <p className="text-sm text-[#8E8E93] mb-1">Intensity: {activity.intensity_level}/10</p>
+                      <div className="w-full bg-[#2A2D35] rounded-full h-2">
                         <div
                           className={`${getIntensityColor(activity.intensity_level)} h-2 rounded-full`}
                           style={{ width: `${(activity.intensity_level / 10) * 100}%` }}
@@ -259,7 +259,7 @@ export default function ActivityPage() {
                     </div>
                   )}
                   {activity.description && (
-                    <p className="text-sm text-[#9CA3AF] italic mt-2">{activity.description}</p>
+                    <p className="text-sm text-[#8E8E93] italic mt-2">{activity.description}</p>
                   )}
                 </div>
               </div>

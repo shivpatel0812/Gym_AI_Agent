@@ -34,6 +34,8 @@ interface UserProfile {
   progress_feeling?: string;
   biggest_blocker?: string;
   open_reflection?: string;
+  available_equipment?: string[];
+  preferred_workout_days?: string[];
 }
 
 export default function AboutMyselfPage() {
@@ -108,7 +110,7 @@ export default function AboutMyselfPage() {
   if (loading) {
     return (
       <div className="p-8 lg:p-12 max-w-[1200px] mx-auto">
-        <div className="text-center text-[#9CA3AF]">Loading...</div>
+        <div className="text-center text-[#8E8E93]">Loading...</div>
       </div>
     );
   }
@@ -116,19 +118,19 @@ export default function AboutMyselfPage() {
   return (
     <div className="p-8 lg:p-12 max-w-[1200px] mx-auto">
       <div className="mb-6">
-        <h1 className="text-4xl font-bold text-[#F9FAFB] mb-2">About Myself</h1>
-        <p className="text-[#9CA3AF]">Tell us about yourself to personalize your fitness journey</p>
+        <h1 className="text-4xl font-bold text-[#FFFFFF] mb-2">About Myself</h1>
+        <p className="text-[#8E8E93]">Tell us about yourself to personalize your fitness journey</p>
       </div>
 
       <Card className="mb-6">
-        <h2 className="text-2xl font-bold text-[#F9FAFB] mb-4">Section 1: Basic Info</h2>
+        <h2 className="text-2xl font-bold text-[#FFFFFF] mb-4">Section 1: Basic Info</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               Height Unit
             </label>
             <div className="flex gap-4 mb-4">
-              <label className="flex items-center gap-2 text-[#F9FAFB] cursor-pointer">
+              <label className="flex items-center gap-2 text-[#FFFFFF] cursor-pointer">
                 <input
                   type="radio"
                   checked={heightUnit === "ftin"}
@@ -137,7 +139,7 @@ export default function AboutMyselfPage() {
                 />
                 Feet/Inches
               </label>
-              <label className="flex items-center gap-2 text-[#F9FAFB] cursor-pointer">
+              <label className="flex items-center gap-2 text-[#FFFFFF] cursor-pointer">
                 <input
                   type="radio"
                   checked={heightUnit === "cm"}
@@ -195,20 +197,20 @@ export default function AboutMyselfPage() {
       </Card>
 
       <Card className="mb-6">
-        <h2 className="text-2xl font-bold text-[#F9FAFB] mb-4">Section 2: Fitness Goals</h2>
+        <h2 className="text-2xl font-bold text-[#FFFFFF] mb-4">Section 2: Fitness Goals</h2>
         <div className="mb-4">
-          <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+          <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
             Primary fitness goal
           </label>
           <textarea
-            className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1] min-h-[120px]"
+            className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35] min-h-[120px]"
             value={profile.primary_goal || ""}
             onChange={(e) => updateField("primary_goal", e.target.value)}
             placeholder="Describe your primary fitness goal..."
           />
         </div>
         <div className="mb-4">
-          <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+          <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
             Secondary goals (multi-select)
           </label>
           {[
@@ -219,7 +221,7 @@ export default function AboutMyselfPage() {
             "Reduce stress",
             "Maintain fitness",
           ].map((goal) => (
-            <label key={goal} className="flex items-center gap-2 mb-2 text-[#F9FAFB] cursor-pointer">
+            <label key={goal} className="flex items-center gap-2 mb-2 text-[#FFFFFF] cursor-pointer">
               <input
                 type="checkbox"
                 checked={(profile.secondary_goals || []).includes(goal)}
@@ -231,11 +233,11 @@ export default function AboutMyselfPage() {
           ))}
         </div>
         <div>
-          <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+          <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
             Time horizon
           </label>
           <select
-            className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+            className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
             value={profile.time_horizon || ""}
             onChange={(e) => updateField("time_horizon", e.target.value)}
           >
@@ -248,13 +250,13 @@ export default function AboutMyselfPage() {
       </Card>
 
       <Card className="mb-6">
-        <h2 className="text-2xl font-bold text-[#F9FAFB] mb-4">Section 3: Fitness Background</h2>
+        <h2 className="text-2xl font-bold text-[#FFFFFF] mb-4">Section 3: Fitness Background</h2>
         <div className="mb-4">
-          <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+          <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
             How long have you been working out?
           </label>
           <select
-            className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+            className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
             value={profile.experience_level || ""}
             onChange={(e) => updateField("experience_level", e.target.value)}
           >
@@ -265,7 +267,7 @@ export default function AboutMyselfPage() {
           </select>
         </div>
         <div className="mb-4">
-          <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+          <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
             Training history style (multi-select)
           </label>
           {[
@@ -275,7 +277,7 @@ export default function AboutMyselfPage() {
             "On-and-off training",
             "Long breaks",
           ].map((style) => (
-            <label key={style} className="flex items-center gap-2 mb-2 text-[#F9FAFB] cursor-pointer">
+            <label key={style} className="flex items-center gap-2 mb-2 text-[#FFFFFF] cursor-pointer">
               <input
                 type="checkbox"
                 checked={(profile.training_history_style || []).includes(style)}
@@ -287,11 +289,11 @@ export default function AboutMyselfPage() {
           ))}
         </div>
         <div>
-          <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+          <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
             Notes about past training (optional)
           </label>
           <textarea
-            className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1] min-h-[100px]"
+            className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35] min-h-[100px]"
             value={profile.training_history_notes || ""}
             onChange={(e) => updateField("training_history_notes", e.target.value)}
           />
@@ -299,7 +301,7 @@ export default function AboutMyselfPage() {
       </Card>
 
       <Card className="mb-6">
-        <h2 className="text-2xl font-bold text-[#F9FAFB] mb-4">Section 4: Lifestyle & Schedule</h2>
+        <h2 className="text-2xl font-bold text-[#FFFFFF] mb-4">Section 4: Lifestyle & Schedule</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <Input
             type="number"
@@ -308,11 +310,11 @@ export default function AboutMyselfPage() {
             onChange={(e) => updateField("work_school_hours", parseFloat(e.target.value) || undefined)}
           />
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               How busy are you most weeks? (1–10 scale)
             </label>
             <select
-              className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+              className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
               value={profile.busy_level || ""}
               onChange={(e) => updateField("busy_level", parseInt(e.target.value) || undefined)}
             >
@@ -326,7 +328,7 @@ export default function AboutMyselfPage() {
           </div>
         </div>
         <div className="mb-4">
-          <label className="flex items-center gap-2 mb-2 text-[#F9FAFB] cursor-pointer">
+          <label className="flex items-center gap-2 mb-2 text-[#FFFFFF] cursor-pointer">
             <input
               type="checkbox"
               checked={profile.family_obligations || false}
@@ -337,7 +339,7 @@ export default function AboutMyselfPage() {
           </label>
           {profile.family_obligations && (
             <textarea
-              className="w-full mt-2 px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1] min-h-[80px]"
+              className="w-full mt-2 px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35] min-h-[80px]"
               placeholder="Optional note"
               value={profile.family_obligations_note || ""}
               onChange={(e) => updateField("family_obligations_note", e.target.value)}
@@ -346,11 +348,11 @@ export default function AboutMyselfPage() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               Typical stress level (1–10 scale)
             </label>
             <select
-              className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+              className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
               value={profile.typical_stress_level || ""}
               onChange={(e) => updateField("typical_stress_level", parseInt(e.target.value) || undefined)}
             >
@@ -363,11 +365,11 @@ export default function AboutMyselfPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               Does stress fluctuate week to week?
             </label>
             <div className="flex gap-4">
-              <label className="flex items-center gap-2 text-[#F9FAFB] cursor-pointer">
+              <label className="flex items-center gap-2 text-[#FFFFFF] cursor-pointer">
                 <input
                   type="radio"
                   name="stress_fluctuates"
@@ -377,7 +379,7 @@ export default function AboutMyselfPage() {
                 />
                 Yes
               </label>
-              <label className="flex items-center gap-2 text-[#F9FAFB] cursor-pointer">
+              <label className="flex items-center gap-2 text-[#FFFFFF] cursor-pointer">
                 <input
                   type="radio"
                   name="stress_fluctuates"
@@ -393,14 +395,14 @@ export default function AboutMyselfPage() {
       </Card>
 
       <Card className="mb-6">
-        <h2 className="text-2xl font-bold text-[#F9FAFB] mb-4">Section 5: Training Preferences</h2>
+        <h2 className="text-2xl font-bold text-[#FFFFFF] mb-4">Section 5: Training Preferences</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               Preferred workout time
             </label>
             <select
-              className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+              className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
               value={profile.preferred_workout_time || ""}
               onChange={(e) => updateField("preferred_workout_time", e.target.value)}
             >
@@ -412,11 +414,11 @@ export default function AboutMyselfPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               Preferred session length
             </label>
             <select
-              className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+              className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
               value={profile.preferred_session_length || ""}
               onChange={(e) => updateField("preferred_session_length", e.target.value)}
             >
@@ -431,11 +433,11 @@ export default function AboutMyselfPage() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               Preferred workout frequency
             </label>
             <select
-              className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+              className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
               value={profile.preferred_workout_frequency || ""}
               onChange={(e) => updateField("preferred_workout_frequency", e.target.value)}
             >
@@ -446,11 +448,11 @@ export default function AboutMyselfPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               Coaching style preference
             </label>
             <select
-              className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+              className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
               value={profile.coaching_style_preference || ""}
               onChange={(e) => updateField("coaching_style_preference", e.target.value)}
             >
@@ -462,17 +464,64 @@ export default function AboutMyselfPage() {
             </select>
           </div>
         </div>
+        <div className="mt-4">
+          <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
+            Available equipment (multi-select)
+          </label>
+          {[
+            "Full Gym",
+            "Dumbbells Only",
+            "Barbell + Rack",
+            "Cable Machine",
+            "Bodyweight Only",
+            "Home Gym (Dumbbells + Bench)",
+          ].map((eq) => (
+            <label key={eq} className="flex items-center gap-2 mb-2 text-[#FFFFFF] cursor-pointer">
+              <input
+                type="checkbox"
+                checked={(profile.available_equipment || []).includes(eq)}
+                onChange={(e) => updateArrayField("available_equipment", eq, e.target.checked)}
+                className="w-4 h-4"
+              />
+              {eq}
+            </label>
+          ))}
+        </div>
+        <div className="mt-4">
+          <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
+            Preferred workout days (multi-select)
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => {
+              const selected = (profile.preferred_workout_days || []).includes(day);
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => updateArrayField("preferred_workout_days", day, !selected)}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                    selected
+                      ? "bg-[#FF6B35]/15 border-2 border-[#FF6B35] text-[#FF6B35]"
+                      : "bg-[#161A22] border-2 border-[#2A2D35] text-[#8E8E93] hover:text-white hover:border-[#3A3A3C]"
+                  }`}
+                >
+                  {day.slice(0, 3)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </Card>
 
       <Card className="mb-6">
-        <h2 className="text-2xl font-bold text-[#F9FAFB] mb-4">Section 6: Nutrition Preferences</h2>
+        <h2 className="text-2xl font-bold text-[#FFFFFF] mb-4">Section 6: Nutrition Preferences</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               Dietary preference
             </label>
             <select
-              className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+              className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
               value={profile.dietary_preference || ""}
               onChange={(e) => updateField("dietary_preference", e.target.value)}
             >
@@ -493,11 +542,11 @@ export default function AboutMyselfPage() {
             )}
           </div>
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               Willingness to track
             </label>
             <select
-              className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+              className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
               value={profile.willingness_to_track || ""}
               onChange={(e) => updateField("willingness_to_track", e.target.value)}
             >
@@ -511,16 +560,16 @@ export default function AboutMyselfPage() {
       </Card>
 
       <Card className="mb-6">
-        <h2 className="text-2xl font-bold text-[#F9FAFB] mb-4">
+        <h2 className="text-2xl font-bold text-[#FFFFFF] mb-4">
           Section 7: Self-Perceived Progress & Mindset
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               How do you feel about your fitness progress so far?
             </label>
             <select
-              className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+              className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
               value={profile.progress_feeling || ""}
               onChange={(e) => updateField("progress_feeling", e.target.value)}
             >
@@ -532,11 +581,11 @@ export default function AboutMyselfPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+            <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
               Biggest blocker right now
             </label>
             <select
-              className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+              className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
               value={profile.biggest_blocker || ""}
               onChange={(e) => updateField("biggest_blocker", e.target.value)}
             >
@@ -552,14 +601,14 @@ export default function AboutMyselfPage() {
       </Card>
 
       <Card className="mb-6">
-        <h2 className="text-2xl font-bold text-[#F9FAFB] mb-4">Section 8: Open Reflection</h2>
+        <h2 className="text-2xl font-bold text-[#FFFFFF] mb-4">Section 8: Open Reflection</h2>
         <div>
-          <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">
+          <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">
             In your own words, describe your fitness journey so far. What has worked, what hasn't, and
             anything you want your AI coach to know.
           </label>
           <textarea
-            className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1] min-h-[200px]"
+            className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35] min-h-[200px]"
             value={profile.open_reflection || ""}
             onChange={(e) => updateField("open_reflection", e.target.value)}
             placeholder="Share your fitness journey, what's worked, what hasn't, and anything else you'd like your AI coach to know..."

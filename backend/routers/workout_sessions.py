@@ -18,6 +18,9 @@ class ExerciseRecommendationRequest(BaseModel):
     split_day: Optional[str] = None
     position_in_workout: Optional[int] = None
     current_workout_exercises: Optional[List[Dict]] = None  # Exercises already done in this workout
+    plan_target_sets: Optional[int] = None
+    plan_target_reps: Optional[int] = None
+    plan_notes: Optional[str] = None
 
 # ============== AI RECOMMENDATION ENDPOINTS (Must come before parameterized routes) ==============
 
@@ -93,7 +96,10 @@ async def get_exercise_ai_recommendation(
             split_name=request.split_name,
             split_day=request.split_day,
             position_in_workout=request.position_in_workout,
-            current_workout_exercises=request.current_workout_exercises
+            current_workout_exercises=request.current_workout_exercises,
+            plan_target_sets=request.plan_target_sets,
+            plan_target_reps=request.plan_target_reps,
+            plan_notes=request.plan_notes
         )
         return recommendation
     except HTTPException:

@@ -284,12 +284,12 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
       {showForm && (
         <Card className="mb-8 p-6 lg:p-8">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-[#F9FAFB]">
+            <h3 className="text-lg font-semibold text-[#FFFFFF]">
               {editingEntryId ? 'Edit Macros' : 'Log Macros'}
             </h3>
             <button
               onClick={handleCancel}
-              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors"
+              className="text-[#8E8E93] hover:text-[#FFFFFF] transition-colors"
             >
               <MdClose size={20} />
             </button>
@@ -306,7 +306,7 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
             />
 
             <div className="mb-4">
-              <label className="flex items-center gap-2 text-[#F9FAFB]">
+              <label className="flex items-center gap-2 text-[#FFFFFF]">
                 <input
                   type="checkbox"
                   checked={useIndividualFoods}
@@ -322,23 +322,23 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
             {useIndividualFoods ? (
               <>
                 {/* Image Upload Section */}
-                <div className="mb-6 p-4 lg:p-6 border border-[#374151] rounded-lg bg-[#1F2937]">
-                  <h3 className="text-lg font-semibold text-[#F9FAFB] mb-4 flex items-center gap-2">
-                    <MdCameraAlt className="text-[#6366F1]" />
+                <div className="mb-6 p-4 lg:p-6 border border-[#2A2D35] rounded-lg bg-[#1F2937]">
+                  <h3 className="text-lg font-semibold text-[#FFFFFF] mb-4 flex items-center gap-2">
+                    <MdCameraAlt className="text-[#FF6B35]" />
                     Analyze Food from Image
                   </h3>
-                  <p className="text-sm text-[#9CA3AF] mb-4">
+                  <p className="text-sm text-[#8E8E93] mb-4">
                     Upload a photo of your meal to automatically detect foods and their macros
                   </p>
                   
                   {!imagePreview ? (
-                    <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-[#374151] rounded-lg cursor-pointer hover:border-[#6366F1] transition-colors">
+                    <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-[#2A2D35] rounded-lg cursor-pointer hover:border-[#FF6B35] transition-colors">
                       <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                        <MdImage className="text-4xl text-[#9CA3AF] mb-2" />
-                        <p className="mb-2 text-sm text-[#9CA3AF]">
+                        <MdImage className="text-4xl text-[#8E8E93] mb-2" />
+                        <p className="mb-2 text-sm text-[#8E8E93]">
                           <span className="font-semibold">Click to upload</span> or drag and drop
                         </p>
-                        <p className="text-xs text-[#6B7280]">PNG, JPG, GIF (MAX. 10MB)</p>
+                        <p className="text-xs text-[#8E8E93]">PNG, JPG, GIF (MAX. 10MB)</p>
                       </div>
                       <input
                         id="food-image-input"
@@ -358,7 +358,7 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
                       <button
                         type="button"
                         onClick={clearImage}
-                        className="absolute top-2 right-2 bg-[#1F2937] text-[#F9FAFB] rounded-full p-2 hover:bg-[#374151] transition-colors"
+                        className="absolute top-2 right-2 bg-[#1F2937] text-[#FFFFFF] rounded-full p-2 hover:bg-[#2A2D35] transition-colors"
                       >
                         <MdClose size={20} />
                       </button>
@@ -381,8 +381,8 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
                   )}
                 </div>
 
-                <div className="mb-6 p-4 lg:p-6 border border-[#374151] rounded-lg">
-                  <h3 className="text-lg font-semibold text-[#F9FAFB] mb-4">
+                <div className="mb-6 p-4 lg:p-6 border border-[#2A2D35] rounded-lg">
+                  <h3 className="text-lg font-semibold text-[#FFFFFF] mb-4">
                     {editingFoodIndex !== null
                       ? 'Edit Food Item'
                       : 'Add Food Item'}
@@ -469,17 +469,17 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
 
                 {formData.food_items && formData.food_items.length > 0 && (
                   <div className="mb-4">
-                    <h3 className="text-lg font-semibold text-[#F9FAFB] mb-3">
+                    <h3 className="text-lg font-semibold text-[#FFFFFF] mb-3">
                       Foods Added
                     </h3>
                     {formData.food_items.map((food, idx) => (
                       <Card key={idx} className="mb-2">
                         <div className="flex justify-between items-start">
                           <div>
-                            <p className="font-semibold text-[#F9FAFB]">
+                            <p className="font-semibold text-[#FFFFFF]">
                               {food.name}
                             </p>
-                            <p className="text-sm text-[#9CA3AF]">
+                            <p className="text-sm text-[#8E8E93]">
                               {food.calories} cal | {food.protein}g protein
                             </p>
                           </div>
@@ -487,7 +487,7 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
                             <button
                               type="button"
                               onClick={() => editFoodItem(idx)}
-                              className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                              className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                               title="Edit food item"
                             >
                               <MdEdit size={20} />
@@ -505,13 +505,13 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
                       </Card>
                     ))}
                     <Card variant="gradient" className="mt-3">
-                      <p className="font-semibold text-[#F9FAFB] mb-2">
+                      <p className="font-semibold text-[#FFFFFF] mb-2">
                         Totals
                       </p>
                       {(() => {
                         const totals = calculateTotals(formData.food_items);
                         return (
-                          <div className="text-sm text-[#F9FAFB]">
+                          <div className="text-sm text-[#FFFFFF]">
                             <p>Calories: {totals.calories}</p>
                             <p>Protein: {totals.protein}g</p>
                             <p>Carbs: {totals.carbs}g</p>
@@ -588,7 +588,7 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
 
       {entries.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-[#9CA3AF] text-sm">No macro entries yet. Start tracking your nutrition!</p>
+          <p className="text-[#8E8E93] text-sm">No macro entries yet. Start tracking your nutrition!</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4">
@@ -601,14 +601,14 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
                 <div className="flex-1">
                   <div className="flex justify-between items-start mb-2">
                     <div>
-                      <h3 className="text-lg font-semibold text-[#F9FAFB]">
+                      <h3 className="text-lg font-semibold text-[#FFFFFF]">
                         {entry.date}
                       </h3>
                     </div>
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleEditEntry(entry)}
-                        className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                        className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                         title="Edit entry"
                       >
                         <MdEdit size={20} />
@@ -625,16 +625,16 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
                   {entry.food_items && entry.food_items.length > 0 ? (
                     <>
                       {entry.food_items.map((food, idx) => (
-                        <p key={idx} className="text-sm text-[#9CA3AF]">
+                        <p key={idx} className="text-sm text-[#8E8E93]">
                           {food.name}: {food.calories} cal | {food.protein}g
                           protein
                         </p>
                       ))}
-                      <div className="mt-2 pt-2 border-t border-[#374151]">
+                      <div className="mt-2 pt-2 border-t border-[#2A2D35]">
                         {(() => {
                           const totals = calculateTotals(entry.food_items);
                           return (
-                            <p className="text-sm font-semibold text-[#F9FAFB]">
+                            <p className="text-sm font-semibold text-[#FFFFFF]">
                               Total: {totals.calories} cal | {totals.protein}g
                               protein | {totals.carbs}g carbs | {totals.fats}g
                               fats
@@ -644,7 +644,7 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
                       </div>
                     </>
                   ) : (
-                    <p className="text-sm text-[#F9FAFB]">
+                    <p className="text-sm text-[#FFFFFF]">
                       {entry.total_calories} cal | {entry.total_protein}g protein
                       | {entry.total_carbs}g carbs | {entry.total_fats}g fats
                     </p>

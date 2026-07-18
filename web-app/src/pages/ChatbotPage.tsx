@@ -82,8 +82,8 @@ export default function ChatbotPage() {
       <div className="mb-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-4xl font-bold text-[#F9FAFB] mb-2">AI Chatbot</h1>
-            <p className="text-[#9CA3AF]">Chat with your AI fitness coach</p>
+            <h1 className="text-4xl font-bold text-[#FFFFFF] mb-2">AI Chatbot</h1>
+            <p className="text-[#8E8E93]">Chat with your AI fitness coach</p>
           </div>
           {messages.length > 0 && (
             <Button
@@ -101,11 +101,11 @@ export default function ChatbotPage() {
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center">
-              <MdChatBubble className="text-6xl text-[#6366F1] mb-4" />
-              <h3 className="text-xl font-bold text-[#F9FAFB] mb-2">
+              <MdChatBubble className="text-6xl text-[#FF6B35] mb-4" />
+              <h3 className="text-xl font-bold text-[#FFFFFF] mb-2">
                 Start a conversation with your AI coach
               </h3>
-              <p className="text-[#9CA3AF] max-w-md">
+              <p className="text-[#8E8E93] max-w-md">
                 Ask questions about your fitness progress, get personalized advice, or discuss your
                 training and nutrition goals.
               </p>
@@ -121,8 +121,8 @@ export default function ChatbotPage() {
                 <div
                   className={`max-w-[80%] rounded-lg p-4 ${
                     message.role === "user"
-                      ? "bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white"
-                      : "bg-[#374151] text-[#F9FAFB]"
+                      ? "bg-[#FF6B35] text-white"
+                      : "bg-[#2A2D35] text-[#FFFFFF]"
                   }`}
                 >
                   <div className="whitespace-pre-wrap">{message.content}</div>
@@ -132,18 +132,18 @@ export default function ChatbotPage() {
           )}
           {loading && (
             <div className="flex justify-start">
-              <div className="bg-[#374151] text-[#F9FAFB] rounded-lg p-4">
+              <div className="bg-[#2A2D35] text-[#FFFFFF] rounded-lg p-4">
                 <div className="flex gap-2">
                   <div
-                    className="w-2 h-2 bg-[#9CA3AF] rounded-full animate-bounce"
+                    className="w-2 h-2 bg-[#8E8E93] rounded-full animate-bounce"
                     style={{ animationDelay: "0ms" }}
                   />
                   <div
-                    className="w-2 h-2 bg-[#9CA3AF] rounded-full animate-bounce"
+                    className="w-2 h-2 bg-[#8E8E93] rounded-full animate-bounce"
                     style={{ animationDelay: "150ms" }}
                   />
                   <div
-                    className="w-2 h-2 bg-[#9CA3AF] rounded-full animate-bounce"
+                    className="w-2 h-2 bg-[#8E8E93] rounded-full animate-bounce"
                     style={{ animationDelay: "300ms" }}
                   />
                 </div>
@@ -153,7 +153,7 @@ export default function ChatbotPage() {
           <div ref={messagesEndRef} />
         </div>
 
-        <div className="border-t border-[#374151] p-4">
+        <div className="border-t border-[#2A2D35] p-4">
           <div className="flex gap-3">
             <Input
               type="text"

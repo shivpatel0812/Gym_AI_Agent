@@ -192,16 +192,16 @@ export default function CalendarSection({}: CalendarSectionProps) {
         <div className="flex items-center gap-4">
           <button
             onClick={handlePrevMonth}
-            className="p-2 rounded-lg bg-[#1A1F3A] hover:bg-[#2d3b4e] transition-colors text-[#9CA3AF] hover:text-white"
+            className="p-2 rounded-lg bg-[#161A22] hover:bg-[#2A2D35] transition-colors text-[#8E8E93] hover:text-[#FFFFFF]"
           >
             <MdChevronLeft size={24} />
           </button>
-          <h2 className="text-2xl font-bold text-white min-w-[200px] text-center">
+          <h2 className="text-2xl font-bold text-[#FFFFFF] min-w-[200px] text-center">
             {monthNames[month]} {year}
           </h2>
           <button
             onClick={handleNextMonth}
-            className="p-2 rounded-lg bg-[#1A1F3A] hover:bg-[#2d3b4e] transition-colors text-[#9CA3AF] hover:text-white"
+            className="p-2 rounded-lg bg-[#161A22] hover:bg-[#2A2D35] transition-colors text-[#8E8E93] hover:text-[#FFFFFF]"
           >
             <MdChevronRight size={24} />
           </button>
@@ -235,7 +235,7 @@ export default function CalendarSection({}: CalendarSectionProps) {
               <select
                 value={categoryFilter}
                 onChange={(e) => setCategoryFilter(e.target.value as LogCategory)}
-                className="w-full px-4 py-2 rounded-lg bg-[#2d3b4e] border-2 border-transparent text-white focus:outline-none focus:border-[#6366F1]"
+                className="w-full px-4 py-2 rounded-lg bg-[#2A2D35] border-2 border-transparent text-white focus:outline-none focus:border-[#FF6B35]"
               >
                 <option value="all">All Categories</option>
                 <option value="workouts">Workouts</option>
@@ -251,17 +251,17 @@ export default function CalendarSection({}: CalendarSectionProps) {
       )}
 
       <div className="flex flex-wrap items-center gap-4 mb-4 text-sm">
-        <span className="text-[#9CA3AF] font-medium">Legend:</span>
+        <span className="text-[#8E8E93] font-medium">Legend:</span>
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-[#8B5CF6]"></div>
+          <div className="w-2 h-2 rounded-full bg-[#E85A2A]"></div>
           <span className="text-white">Workout</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-[#10B981]"></div>
+          <div className="w-2 h-2 rounded-full bg-[#5EEAD4]"></div>
           <span className="text-white">Nutrition</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-[#6366F1]"></div>
+          <div className="w-2 h-2 rounded-full bg-[#FF6B35]"></div>
           <span className="text-white">Wellness</span>
         </div>
         <div className="flex items-center gap-2">
@@ -273,14 +273,14 @@ export default function CalendarSection({}: CalendarSectionProps) {
           <span className="text-white">Sleep</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-[#3B82F6]"></div>
+          <div className="w-2 h-2 rounded-full bg-[#FF6B35]"></div>
           <span className="text-white">Hydration</span>
         </div>
       </div>
 
       <div className="grid grid-cols-7 gap-1 md:gap-2">
         {dayNames.map((day) => (
-          <div key={day} className="text-center text-sm font-semibold text-[#9CA3AF] py-2">
+          <div key={day} className="text-center text-sm font-semibold text-[#8E8E93] py-2">
             {day}
           </div>
         ))}
@@ -303,12 +303,12 @@ export default function CalendarSection({}: CalendarSectionProps) {
               onClick={() => handleDateClick(day)}
               className={`aspect-square rounded-lg p-2 flex flex-col items-center justify-center transition-all relative ${
                 isSelected(day)
-                  ? 'bg-[#6366F1] text-white'
+                  ? 'bg-[#FF6B35] text-white'
                   : isToday(day)
-                  ? 'bg-[#6366F1]/20 border-2 border-[#6366F1] text-white'
+                  ? 'bg-[#FF6B35]/20 border-2 border-[#FF6B35] text-white'
                   : hasData
-                  ? 'bg-[#2d3b4e] hover:bg-[#3d4d63] text-white'
-                  : 'bg-[#1A1F3A] hover:bg-[#2d3b4e] text-[#9CA3AF] hover:text-white'
+                  ? 'bg-[#2A2D35] hover:bg-[#3A3A3C] text-white'
+                  : 'bg-[#161A22] hover:bg-[#2A2D35] text-[#8E8E93] hover:text-[#FFFFFF]'
               }`}
             >
               <span className={`text-sm font-medium ${isSelected(day) ? 'text-white' : ''}`}>
@@ -317,13 +317,13 @@ export default function CalendarSection({}: CalendarSectionProps) {
               {hasData && (
                 <div className="flex gap-1 mt-1">
                   {indicators.includes('workout') && (
-                    <div className="w-1.5 h-1.5 rounded-full bg-[#8B5CF6]" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#E85A2A]" />
                   )}
                   {indicators.includes('nutrition') && (
-                    <div className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#5EEAD4]" />
                   )}
                   {indicators.includes('wellness') && (
-                    <div className="w-1.5 h-1.5 rounded-full bg-[#6366F1]" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#FF6B35]" />
                   )}
                   {indicators.includes('activity') && (
                     <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B]" />
@@ -332,7 +332,7 @@ export default function CalendarSection({}: CalendarSectionProps) {
                     <div className="w-1.5 h-1.5 rounded-full bg-[#9333EA]" />
                   )}
                   {indicators.includes('hydration') && (
-                    <div className="w-1.5 h-1.5 rounded-full bg-[#3B82F6]" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#FF6B35]" />
                   )}
                 </div>
               )}
@@ -443,8 +443,8 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
         <Card className="w-full max-h-[90vh] overflow-y-auto p-4 rounded-t-xl rounded-b-none">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-lg font-bold text-white">{formatDate(date)}</h3>
-              <p className="text-xs text-[#9CA3AF] mt-1">
+              <h3 className="text-lg font-bold text-[#FFFFFF]">{formatDate(date)}</h3>
+              <p className="text-xs text-[#8E8E93] mt-1">
                 {dayData ? (
                   <>
                   {dayData.logs.workouts?.length || 0} workouts,{' '}
@@ -461,7 +461,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
             </div>
             <button
               onClick={onClose}
-              className="text-[#9CA3AF] hover:text-white transition-colors"
+              className="text-[#8E8E93] hover:text-[#FFFFFF] transition-colors"
             >
               <MdClose size={24} />
             </button>
@@ -469,14 +469,14 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
           {!dayData || (!dayData.logs.workouts?.length && !dayData.logs.nutrition?.length && 
             !dayData.logs.wellness?.length && !dayData.logs.activity?.length && !dayData.logs.sleep?.length && !dayData.logs.hydration?.length) ? (
             <div className="text-center py-8">
-              <p className="text-[#9CA3AF] mb-4">No logs for this date</p>
+              <p className="text-[#8E8E93] mb-4">No logs for this date</p>
             </div>
           ) : (
             <div className="space-y-4">
               {dayData.logs.workouts && dayData.logs.workouts.length > 0 && (
                 <div>
                   <h4 className="text-base font-semibold text-white mb-2 flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-[#8B5CF6]"></div>
+                    <div className="w-2 h-2 rounded-full bg-[#E85A2A]"></div>
                     Workouts
                   </h4>
                   <div className="space-y-2">
@@ -488,7 +488,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                               {session.workout_name || session.split_name || 'Workout'}
                             </h5>
                             {session.exercises && session.exercises.length > 0 && (
-                              <p className="text-xs text-[#9CA3AF]">
+                              <p className="text-xs text-[#8E8E93]">
                                 {session.exercises.length} exercise(s)
                               </p>
                             )}
@@ -496,7 +496,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                           <div className="flex gap-2 ml-2">
                             <button
                               onClick={() => handleEditWorkout(session.id!)}
-                              className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                              className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                               title="Edit workout"
                             >
                               <MdEdit size={16} />
@@ -517,7 +517,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
               {dayData.logs.nutrition && dayData.logs.nutrition.length > 0 && (
                 <div>
                   <h4 className="text-base font-semibold text-white mb-2 flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-[#10B981]"></div>
+                    <div className="w-2 h-2 rounded-full bg-[#5EEAD4]"></div>
                     Nutrition
                   </h4>
                   <div className="space-y-2">
@@ -528,13 +528,13 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                             {entry.food_items && entry.food_items.length > 0 ? (
                               <div>
                                 {entry.food_items.slice(0, 2).map((food, idx) => (
-                                  <p key={idx} className="text-xs text-[#9CA3AF]">
+                                  <p key={idx} className="text-xs text-[#8E8E93]">
                                     {food.name}: {food.calories} cal
                                   </p>
                                 ))}
                               </div>
                             ) : (
-                              <p className="text-xs text-[#9CA3AF]">
+                              <p className="text-xs text-[#8E8E93]">
                                 {entry.total_calories} cal
                               </p>
                             )}
@@ -542,7 +542,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                           <div className="flex gap-2 ml-2">
                             <button
                               onClick={() => handleEditNutrition(entry.id!)}
-                              className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                              className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                               title="Edit nutrition"
                             >
                               <MdEdit size={16} />
@@ -563,7 +563,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
               {dayData.logs.wellness && dayData.logs.wellness.length > 0 && (
                 <div>
                   <h4 className="text-base font-semibold text-white mb-2 flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-[#6366F1]"></div>
+                    <div className="w-2 h-2 rounded-full bg-[#FF6B35]"></div>
                     Wellness
                   </h4>
                   <div className="space-y-2">
@@ -581,13 +581,13 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                                 </p>
                               )}
                               {entry.description && (
-                                <p className="text-xs text-[#9CA3AF]">{entry.description}</p>
+                                <p className="text-xs text-[#8E8E93]">{entry.description}</p>
                               )}
                             </div>
                             <div className="flex gap-2 ml-2">
                               <button
                                 onClick={() => handleEditWellness(entry.id!, category as 'stress' | 'body-feelings' | 'wellness-survey')}
-                                className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                                className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                                 title="Edit wellness"
                               >
                                 <MdEdit size={16} />
@@ -621,13 +621,13 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                               {activity.activity_type || 'Activity'}
                             </h5>
                             {activity.steps && (
-                              <p className="text-xs text-[#9CA3AF]">{activity.steps} steps</p>
+                              <p className="text-xs text-[#8E8E93]">{activity.steps} steps</p>
                             )}
                           </div>
                           <div className="flex gap-2 ml-2">
                             <button
                               onClick={() => handleEditActivity(activity.id!)}
-                              className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                              className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                               title="Edit activity"
                             >
                               <MdEdit size={16} />
@@ -660,13 +660,13 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                               {entry.hours_slept}h sleep
                             </h5>
                             {entry.quality && (
-                              <p className="text-xs text-[#9CA3AF]">Quality: {entry.quality}/10</p>
+                              <p className="text-xs text-[#8E8E93]">Quality: {entry.quality}/10</p>
                             )}
                           </div>
                           <div className="flex gap-2 ml-2">
                             <button
                               onClick={() => handleEditSleep(entry.id!)}
-                              className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                              className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                               title="Edit sleep"
                             >
                               <MdEdit size={16} />
@@ -687,7 +687,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
               {dayData.logs.hydration && dayData.logs.hydration.length > 0 && (
                 <div>
                   <h4 className="text-base font-semibold text-white mb-2 flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-[#3B82F6]"></div>
+                    <div className="w-2 h-2 rounded-full bg-[#FF6B35]"></div>
                     Hydration
                   </h4>
                   <div className="space-y-2">
@@ -699,13 +699,13 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                               {entry.amount_cups === 1 ? '1 cup' : `${entry.amount_cups} cups`}
                             </h5>
                             {entry.notes && (
-                              <p className="text-xs text-[#9CA3AF]">{entry.notes}</p>
+                              <p className="text-xs text-[#8E8E93]">{entry.notes}</p>
                             )}
                           </div>
                           <div className="flex gap-2 ml-2">
                             <button
                               onClick={() => handleEditHydration(entry.id!)}
-                              className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                              className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                               title="Edit hydration"
                             >
                               <MdEdit size={16} />
@@ -735,8 +735,8 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
       <Card className="w-full max-w-4xl max-h-[90vh] overflow-y-auto p-6 lg:p-8">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h3 className="text-xl font-bold text-white">{formatDate(date)}</h3>
-            <p className="text-sm text-[#9CA3AF] mt-1">
+            <h3 className="text-xl font-bold text-[#FFFFFF]">{formatDate(date)}</h3>
+            <p className="text-sm text-[#8E8E93] mt-1">
               {dayData ? (
                 <>
                   {dayData.logs.workouts?.length || 0} workouts,{' '}
@@ -753,7 +753,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
           </div>
           <button
             onClick={onClose}
-            className="text-[#9CA3AF] hover:text-white transition-colors"
+            className="text-[#8E8E93] hover:text-[#FFFFFF] transition-colors"
           >
             <MdClose size={24} />
           </button>
@@ -762,7 +762,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
         {!dayData || (!dayData.logs.workouts?.length && !dayData.logs.nutrition?.length && 
           !dayData.logs.wellness?.length && !dayData.logs.activity?.length && !dayData.logs.sleep?.length && !dayData.logs.hydration?.length) ? (
           <div className="text-center py-12">
-            <p className="text-[#9CA3AF] mb-4">No logs for this date</p>
+            <p className="text-[#8E8E93] mb-4">No logs for this date</p>
             <div className="flex gap-2 justify-center">
               <Button onClick={() => window.location.href = '/workouts?tab=sessions'} variant="primary">
                 Log Workout
@@ -777,7 +777,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
             {dayData.logs.workouts && dayData.logs.workouts.length > 0 && (
               <div>
                 <h4 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-[#8B5CF6]"></div>
+                  <div className="w-2 h-2 rounded-full bg-[#E85A2A]"></div>
                   Workouts ({dayData.logs.workouts.length})
                 </h4>
                 <div className="space-y-3">
@@ -789,18 +789,18 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                               {session.workout_name || session.split_name || 'Workout Session'}
                             </h5>
                             {session.exercises && session.exercises.length > 0 && (
-                              <p className="text-sm text-[#9CA3AF]">
+                              <p className="text-sm text-[#8E8E93]">
                                 {session.exercises.length} exercise(s)
                               </p>
                             )}
                             {session.notes && (
-                              <p className="text-sm text-[#9CA3AF] mt-2">{session.notes}</p>
+                              <p className="text-sm text-[#8E8E93] mt-2">{session.notes}</p>
                             )}
                           </div>
                           <div className="flex gap-2 ml-4">
                             <button
                               onClick={() => handleEditWorkout(session.id!)}
-                              className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                              className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                               title="Edit workout"
                             >
                               <MdEdit size={20} />
@@ -823,7 +823,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
             {dayData.logs.nutrition && dayData.logs.nutrition.length > 0 && (
               <div>
                 <h4 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-[#10B981]"></div>
+                  <div className="w-2 h-2 rounded-full bg-[#5EEAD4]"></div>
                   Nutrition ({dayData.logs.nutrition.length})
                 </h4>
                 <div className="space-y-3">
@@ -835,13 +835,13 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                             <div>
                               <p className="font-semibold text-white mb-1">Food Items</p>
                               {entry.food_items.map((food, idx) => (
-                                <p key={idx} className="text-sm text-[#9CA3AF]">
+                                <p key={idx} className="text-sm text-[#8E8E93]">
                                   {food.name}: {food.calories} cal
                                 </p>
                               ))}
                             </div>
                           ) : (
-                            <p className="text-sm text-[#9CA3AF]">
+                            <p className="text-sm text-[#8E8E93]">
                               {entry.total_calories} cal | {entry.total_protein}g protein
                             </p>
                           )}
@@ -849,7 +849,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                         <div className="flex gap-2 ml-4">
                           <button
                             onClick={() => handleEditNutrition(entry.id!)}
-                            className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                            className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                             title="Edit nutrition"
                           >
                             <MdEdit size={20} />
@@ -872,7 +872,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
             {dayData.logs.wellness && dayData.logs.wellness.length > 0 && (
               <div>
                 <h4 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-[#6366F1]"></div>
+                  <div className="w-2 h-2 rounded-full bg-[#FF6B35]"></div>
                   Wellness ({dayData.logs.wellness.length})
                 </h4>
                 <div className="space-y-3">
@@ -890,10 +890,10 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                                 </p>
                               )}
                               {entry.description && (
-                                <p className="text-sm text-[#9CA3AF]">{entry.description}</p>
+                                <p className="text-sm text-[#8E8E93]">{entry.description}</p>
                               )}
                               {entry.fatigue_level !== undefined && (
-                                <p className="text-sm text-[#9CA3AF]">
+                                <p className="text-sm text-[#8E8E93]">
                                   Fatigue: {entry.fatigue_level}/10
                                 </p>
                               )}
@@ -901,7 +901,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                             <div className="flex gap-2 ml-4">
                               <button
                                 onClick={() => handleEditWellness(entry.id!, category as 'stress' | 'body-feelings' | 'wellness-survey')}
-                                className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                                className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                                 title="Edit wellness"
                               >
                                 <MdEdit size={20} />
@@ -937,19 +937,19 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                               {activity.activity_type || 'Physical Activity'}
                             </h5>
                             {activity.steps && (
-                              <p className="text-sm text-[#9CA3AF]">Steps: {activity.steps.toLocaleString()}</p>
+                              <p className="text-sm text-[#8E8E93]">Steps: {activity.steps.toLocaleString()}</p>
                             )}
                             {activity.duration_minutes && (
-                              <p className="text-sm text-[#9CA3AF]">Duration: {activity.duration_minutes} min</p>
+                              <p className="text-sm text-[#8E8E93]">Duration: {activity.duration_minutes} min</p>
                             )}
                             {activity.description && (
-                              <p className="text-sm text-[#9CA3AF] mt-2">{activity.description}</p>
+                              <p className="text-sm text-[#8E8E93] mt-2">{activity.description}</p>
                             )}
                           </div>
                           <div className="flex gap-2 ml-4">
                             <button
                               onClick={() => handleEditActivity(activity.id!)}
-                              className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                              className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                               title="Edit activity"
                             >
                               <MdEdit size={20} />
@@ -984,21 +984,21 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                             {entry.hours_slept} hours
                           </h5>
                           {entry.quality && (
-                            <p className="text-sm text-[#9CA3AF]">Quality: {entry.quality}/10</p>
+                            <p className="text-sm text-[#8E8E93]">Quality: {entry.quality}/10</p>
                           )}
                           {entry.bedtime && entry.wake_time && (
-                            <p className="text-sm text-[#9CA3AF]">
+                            <p className="text-sm text-[#8E8E93]">
                               {entry.bedtime} - {entry.wake_time}
                             </p>
                           )}
                           {entry.notes && (
-                            <p className="text-sm text-[#9CA3AF] mt-2">{entry.notes}</p>
+                            <p className="text-sm text-[#8E8E93] mt-2">{entry.notes}</p>
                           )}
                         </div>
                         <div className="flex gap-2 ml-4">
                           <button
                             onClick={() => handleEditSleep(entry.id!)}
-                            className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                            className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                             title="Edit sleep"
                           >
                             <MdEdit size={20} />
@@ -1021,7 +1021,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
             {dayData.logs.hydration && dayData.logs.hydration.length > 0 && (
               <div>
                 <h4 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-[#3B82F6]"></div>
+                  <div className="w-2 h-2 rounded-full bg-[#FF6B35]"></div>
                   Hydration ({dayData.logs.hydration.length})
                 </h4>
                 <div className="space-y-3">
@@ -1033,13 +1033,13 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                             {entry.amount_cups === 1 ? '1 cup' : `${entry.amount_cups} cups`}
                           </h5>
                           {entry.notes && (
-                            <p className="text-sm text-[#9CA3AF] mt-2">{entry.notes}</p>
+                            <p className="text-sm text-[#8E8E93] mt-2">{entry.notes}</p>
                           )}
                         </div>
                         <div className="flex gap-2 ml-4">
                           <button
                             onClick={() => handleEditHydration(entry.id!)}
-                            className="text-[#6366F1] hover:text-[#818CF8] transition-colors"
+                            className="text-[#FF6B35] hover:text-[#818CF8] transition-colors"
                             title="Edit hydration"
                           >
                             <MdEdit size={20} />

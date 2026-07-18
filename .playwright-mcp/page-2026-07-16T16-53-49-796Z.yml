@@ -1,0 +1,63 @@
+- generic [ref=f5e33]:
+  - complementary [ref=f5e34]:
+    - generic [ref=f5e36]:
+      - generic [ref=f5e37]: G
+      - generic [ref=f5e39]:
+        - heading "GymAI" [level=1] [ref=f5e40]
+        - paragraph [ref=f5e41]: Performance Coach
+    - navigation [ref=f5e42]:
+      - link "Dashboard" [ref=f5e43] [cursor=pointer]:
+        - /url: /dashboard
+      - link "My Plan" [ref=f5e49] [cursor=pointer]:
+        - /url: /plan-generator
+      - link "Workouts" [ref=f5e54] [cursor=pointer]:
+        - /url: /workouts
+      - link "Activity" [ref=f5e59] [cursor=pointer]:
+        - /url: /activity
+      - link "Nutrition" [ref=f5e64] [cursor=pointer]:
+        - /url: /nutrition
+      - link "Wellness" [ref=f5e69] [cursor=pointer]:
+        - /url: /wellness
+      - link "Calendar" [ref=f5e74] [cursor=pointer]:
+        - /url: /calendar
+      - link "About Myself" [ref=f5e79] [cursor=pointer]:
+        - /url: /about-myself
+      - link "General Analysis" [ref=f5e84] [cursor=pointer]:
+        - /url: /general-analysis
+      - link "Coach Chat" [ref=f5e89] [cursor=pointer]:
+        - /url: /chatbot
+    - generic [ref=f5e94]:
+      - generic [ref=f5e95]:
+        - generic [ref=f5e96]: S
+        - generic [ref=f5e97]:
+          - paragraph [ref=f5e98]: shivpatelva2
+          - paragraph [ref=f5e99]: Pro plan
+      - button "Sign Out" [ref=f5e100] [cursor=pointer]
+  - main [ref=f5e105]:
+    - generic [ref=f5e162]:
+      - heading "Workouts" [level=1] [ref=f5e164]
+      - generic [ref=f5e165]:
+        - button "Sessions" [ref=f5e166] [cursor=pointer]
+        - button "Exercises" [ref=f5e168] [cursor=pointer]
+        - button "Splits" [ref=f5e169] [cursor=pointer]
+      - generic [ref=f5e170]:
+        - generic [ref=f5e712]:
+          - paragraph [ref=f5e713]: 0 sessions logged
+          - button "New Session" [ref=f5e714] [cursor=pointer]
+        - generic [ref=f5e718]:
+          - generic [ref=f5e719]:
+            - generic [ref=f5e725]:
+              - generic [ref=f5e726]: Today
+              - heading "Chest, Shoulders, Triceps" [level=3] [ref=f5e728]
+              - paragraph [ref=f5e729]: Chest, Shoulders, Triceps · 6 exercises · ~90 min
+            - button "Start This Workout" [ref=f5e730] [cursor=pointer]
+          - generic [ref=f5e734]:
+            - generic [ref=f5e735]: Barbell Bench Press
+            - generic [ref=f5e736]: Barbell Overhead Press
+            - generic [ref=f5e737]: Incline Dumbbell Press
+            - generic [ref=f5e738]: Dumbbell Lateral Raises
+            - generic [ref=f5e739]: +2 more
+        - generic [ref=f5e741]:
+          - paragraph [ref=f5e742]: No sessions yet
+          - paragraph [ref=f5e743]: Log your first workout to see it here.
+          - button "New Session" [ref=f5e744] [cursor=pointer]

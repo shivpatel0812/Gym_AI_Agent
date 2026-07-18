@@ -1,0 +1,76 @@
+- generic [ref=e33]:
+  - complementary [ref=e34]:
+    - generic [ref=e36]:
+      - generic [ref=e37]: G
+      - generic [ref=e39]:
+        - heading "GymAI" [level=1] [ref=e40]
+        - paragraph [ref=e41]: Performance Coach
+    - navigation [ref=e42]:
+      - link "Dashboard" [ref=e43] [cursor=pointer]:
+        - /url: /dashboard
+      - link "My Plan" [ref=e49] [cursor=pointer]:
+        - /url: /plan-generator
+      - link "Workouts" [ref=e54] [cursor=pointer]:
+        - /url: /workouts
+      - link "Activity" [ref=e59] [cursor=pointer]:
+        - /url: /activity
+      - link "Nutrition" [ref=e64] [cursor=pointer]:
+        - /url: /nutrition
+      - link "Wellness" [ref=e69] [cursor=pointer]:
+        - /url: /wellness
+      - link "Calendar" [ref=e74] [cursor=pointer]:
+        - /url: /calendar
+      - link "About Myself" [ref=e79] [cursor=pointer]:
+        - /url: /about-myself
+      - link "General Analysis" [ref=e84] [cursor=pointer]:
+        - /url: /general-analysis
+      - link "Coach Chat" [ref=e89] [cursor=pointer]:
+        - /url: /chatbot
+    - generic [ref=e94]:
+      - generic [ref=e95]:
+        - generic [ref=e96]: S
+        - generic [ref=e97]:
+          - paragraph [ref=e98]: Shiv
+          - paragraph [ref=e99]: Pro plan
+      - button "Sign Out" [ref=e100] [cursor=pointer]
+  - main [ref=e105]:
+    - generic [ref=e154]:
+      - generic [ref=e155]:
+        - paragraph [ref=e156]: Step 2 of 3
+        - heading "Your schedule" [level=1] [ref=e182]
+      - generic [ref=e183]:
+        - generic [ref=e184]:
+          - generic [ref=e185]: How often can you work out?
+          - generic [ref=e186]:
+            - button [ref=e187] [cursor=pointer]:
+              - generic [ref=e188]:
+                - paragraph [ref=e189]: 2-3x / week
+                - paragraph [ref=e190]: Great for beginners
+            - button [ref=e194] [cursor=pointer]:
+              - generic [ref=e195]:
+                - paragraph [ref=e196]: 3-4x / week
+                - paragraph [ref=e197]: Most popular
+            - button [ref=e201] [cursor=pointer]:
+              - generic [ref=e202]:
+                - paragraph [ref=e203]: 5+ / week
+                - paragraph [ref=e204]: Advanced
+        - generic [ref=e208]:
+          - generic [ref=e209]: Session length
+          - generic [ref=e210]:
+            - button "30 min" [ref=e211] [cursor=pointer]
+            - button "45 min" [ref=e215] [cursor=pointer]
+            - button "60 min" [active] [ref=e219] [cursor=pointer]
+            - button "90 min" [ref=e223] [cursor=pointer]
+        - generic [ref=e227]:
+          - generic [ref=e228]: Preferred days (optional)
+          - generic [ref=e229]:
+            - button "Mon" [ref=e230] [cursor=pointer]
+            - button "Tue" [ref=e231] [cursor=pointer]
+            - button "Wed" [ref=e232] [cursor=pointer]
+            - button "Thu" [ref=e233] [cursor=pointer]
+            - button "Fri" [ref=e234] [cursor=pointer]
+            - button "Sat" [ref=e235] [cursor=pointer]
+            - button "Sun" [ref=e236] [cursor=pointer]
+      - generic [ref=e176]:
+        - button "Back" [ref=e238] [cursor=pointer]
+        - button "Continue" [ref=e178] [cursor=pointer]

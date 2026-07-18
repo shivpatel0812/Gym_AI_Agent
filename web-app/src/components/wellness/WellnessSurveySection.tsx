@@ -90,7 +90,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
     const normalizedValue = reverse ? 10 - value : value;
     if (normalizedValue <= 3) return 'bg-[#EF4444]';
     if (normalizedValue <= 6) return 'bg-[#F59E0B]';
-    return 'bg-[#10B981]';
+    return 'bg-[#5EEAD4]';
   };
 
   const handleCancel = () => {
@@ -119,12 +119,12 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
       {showForm && (
         <Card className="mb-6 sm:mb-8 p-4 sm:p-5 lg:p-8">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
-            <h3 className="text-base sm:text-lg font-semibold text-[#F9FAFB]">
+            <h3 className="text-base sm:text-lg font-semibold text-[#FFFFFF]">
               {editingEntryId ? 'Edit Wellness Survey' : 'Wellness Survey'}
             </h3>
             <button
               onClick={handleCancel}
-              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors self-start sm:self-auto"
+              className="text-[#8E8E93] hover:text-[#FFFFFF] transition-colors self-start sm:self-auto"
             >
               <MdClose size={18} className="sm:w-5 sm:h-5" />
             </button>
@@ -140,7 +140,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
             {/* Fatigue (reverse scoring) */}
             <div>
-            <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
+            <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
               Fatigue Level: {formData.fatigue_level}
             </label>
             <input
@@ -151,7 +151,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
               onChange={(e) => setFormData({ ...formData, fatigue_level: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
+            <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
               <span>None (1)</span>
               <span>Extreme (10)</span>
             </div>
@@ -159,7 +159,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
             {/* Aches (reverse scoring) */}
             <div>
-            <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
+            <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
               Body Aches: {formData.aches_level}
             </label>
             <input
@@ -170,7 +170,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
               onChange={(e) => setFormData({ ...formData, aches_level: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
+            <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
               <span>None (1)</span>
               <span>Severe (10)</span>
             </div>
@@ -178,7 +178,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
             {/* Energy (normal scoring) */}
             <div>
-            <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
+            <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
               Energy Level: {formData.energy_level}
             </label>
             <input
@@ -189,7 +189,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
               onChange={(e) => setFormData({ ...formData, energy_level: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
+            <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
               <span>Low (1)</span>
               <span>High (10)</span>
             </div>
@@ -197,7 +197,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
             {/* Sleep Quality (normal scoring) */}
             <div>
-            <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
+            <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
               Sleep Quality: {formData.sleep_quality}
             </label>
             <input
@@ -208,7 +208,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
               onChange={(e) => setFormData({ ...formData, sleep_quality: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
+            <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
               <span>Poor (1)</span>
               <span>Excellent (10)</span>
             </div>
@@ -216,7 +216,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
             {/* Mood (normal scoring) */}
             <div>
-            <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
+            <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
               Mood: {formData.mood}
             </label>
             <input
@@ -227,7 +227,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
               onChange={(e) => setFormData({ ...formData, mood: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
+            <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
               <span>Low (1)</span>
               <span>High (10)</span>
             </div>
@@ -247,15 +247,15 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
       {entries.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-[#9CA3AF] text-sm">No wellness survey entries yet. Start tracking your overall wellness!</p>
+          <p className="text-[#8E8E93] text-sm">No wellness survey entries yet. Start tracking your overall wellness!</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {entries.map((entry) => (
-            <Card key={entry.id} className="hover:border-[#6366F1]/50 transition-all duration-200">
+            <Card key={entry.id} className="hover:border-[#FF6B35]/50 transition-all duration-200">
               <div className="flex flex-col h-full">
                 <div className="flex items-start justify-between mb-4">
-                  <h3 className="text-base font-semibold text-[#F9FAFB]">{entry.date}</h3>
+                  <h3 className="text-base font-semibold text-[#FFFFFF]">{entry.date}</h3>
                   <button 
                     onClick={() => handleDelete(entry.id!)} 
                     className="text-[#EF4444] hover:text-[#DC2626] hover:bg-[#EF4444]/10 p-1.5 rounded-lg transition-all"
@@ -266,10 +266,10 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
                 <div className="space-y-3 flex-1">
                   <div>
                     <div className="flex justify-between mb-1.5">
-                      <span className="text-xs text-[#9CA3AF] font-medium">Fatigue</span>
-                      <span className="text-xs text-[#F9FAFB] font-semibold">{entry.fatigue_level}/10</span>
+                      <span className="text-xs text-[#8E8E93] font-medium">Fatigue</span>
+                      <span className="text-xs text-[#FFFFFF] font-semibold">{entry.fatigue_level}/10</span>
                     </div>
-                    <div className="w-full bg-[#374151] rounded-full h-2">
+                    <div className="w-full bg-[#2A2D35] rounded-full h-2">
                       <div
                         className={`${getColor(entry.fatigue_level, true)} h-2 rounded-full transition-all duration-300`}
                         style={{ width: `${(entry.fatigue_level / 10) * 100}%` }}
@@ -278,10 +278,10 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
                   </div>
                   <div>
                     <div className="flex justify-between mb-1.5">
-                      <span className="text-xs text-[#9CA3AF] font-medium">Aches</span>
-                      <span className="text-xs text-[#F9FAFB] font-semibold">{entry.aches_level}/10</span>
+                      <span className="text-xs text-[#8E8E93] font-medium">Aches</span>
+                      <span className="text-xs text-[#FFFFFF] font-semibold">{entry.aches_level}/10</span>
                     </div>
-                    <div className="w-full bg-[#374151] rounded-full h-2">
+                    <div className="w-full bg-[#2A2D35] rounded-full h-2">
                       <div
                         className={`${getColor(entry.aches_level, true)} h-2 rounded-full transition-all duration-300`}
                         style={{ width: `${(entry.aches_level / 10) * 100}%` }}
@@ -291,10 +291,10 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
                   {entry.energy_level && (
                     <div>
                       <div className="flex justify-between mb-1.5">
-                        <span className="text-xs text-[#9CA3AF] font-medium">Energy</span>
-                        <span className="text-xs text-[#F9FAFB] font-semibold">{entry.energy_level}/10</span>
+                        <span className="text-xs text-[#8E8E93] font-medium">Energy</span>
+                        <span className="text-xs text-[#FFFFFF] font-semibold">{entry.energy_level}/10</span>
                       </div>
-                      <div className="w-full bg-[#374151] rounded-full h-2">
+                      <div className="w-full bg-[#2A2D35] rounded-full h-2">
                         <div
                           className={`${getColor(entry.energy_level)} h-2 rounded-full transition-all duration-300`}
                           style={{ width: `${(entry.energy_level / 10) * 100}%` }}
@@ -305,10 +305,10 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
                   {entry.sleep_quality && (
                     <div>
                       <div className="flex justify-between mb-1.5">
-                        <span className="text-xs text-[#9CA3AF] font-medium">Sleep</span>
-                        <span className="text-xs text-[#F9FAFB] font-semibold">{entry.sleep_quality}/10</span>
+                        <span className="text-xs text-[#8E8E93] font-medium">Sleep</span>
+                        <span className="text-xs text-[#FFFFFF] font-semibold">{entry.sleep_quality}/10</span>
                       </div>
-                      <div className="w-full bg-[#374151] rounded-full h-2">
+                      <div className="w-full bg-[#2A2D35] rounded-full h-2">
                         <div
                           className={`${getColor(entry.sleep_quality)} h-2 rounded-full transition-all duration-300`}
                           style={{ width: `${(entry.sleep_quality / 10) * 100}%` }}
@@ -319,10 +319,10 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
                   {entry.mood && (
                     <div>
                       <div className="flex justify-between mb-1.5">
-                        <span className="text-xs text-[#9CA3AF] font-medium">Mood</span>
-                        <span className="text-xs text-[#F9FAFB] font-semibold">{entry.mood}/10</span>
+                        <span className="text-xs text-[#8E8E93] font-medium">Mood</span>
+                        <span className="text-xs text-[#FFFFFF] font-semibold">{entry.mood}/10</span>
                       </div>
-                      <div className="w-full bg-[#374151] rounded-full h-2">
+                      <div className="w-full bg-[#2A2D35] rounded-full h-2">
                         <div
                           className={`${getColor(entry.mood)} h-2 rounded-full transition-all duration-300`}
                           style={{ width: `${(entry.mood / 10) * 100}%` }}

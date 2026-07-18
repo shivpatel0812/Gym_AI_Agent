@@ -100,7 +100,7 @@ export default function GeneralAnalysisPage() {
         currentSection = "";
         const header = line.replace(/\*\*/g, "");
         formatted.push(
-          <h3 key={`header-${index}`} className="text-xl font-bold text-[#6366F1] mt-6 mb-3">
+          <h3 key={`header-${index}`} className="text-xl font-bold text-[#FF6B35] mt-6 mb-3">
             {header}
           </h3>
         );
@@ -119,17 +119,17 @@ export default function GeneralAnalysisPage() {
   return (
     <div className="p-8 lg:p-12 max-w-[1200px] mx-auto">
       <div className="mb-6">
-        <h1 className="text-4xl font-bold text-[#F9FAFB] mb-2">General Analysis</h1>
-        <p className="text-[#9CA3AF]">AI-powered insights based on your fitness data</p>
+        <h1 className="text-4xl font-bold text-[#FFFFFF] mb-2">General Analysis</h1>
+        <p className="text-[#8E8E93]">AI-powered insights based on your fitness data</p>
       </div>
 
       <Card className="mb-6">
         <div className="flex flex-col md:flex-row gap-4 items-end">
           <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">Year</label>
+              <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">Year</label>
               <select
-                className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+                className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
                 value={selectedYear}
                 onChange={(e) => setSelectedYear(parseInt(e.target.value))}
               >
@@ -141,9 +141,9 @@ export default function GeneralAnalysisPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-semibold text-[#F9FAFB] mb-2">Month</label>
+              <label className="block text-sm font-semibold text-[#FFFFFF] mb-2">Month</label>
               <select
-                className="w-full px-4 py-3 rounded-lg bg-[#1A1F3A] border-2 border-[#374151] text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+                className="w-full px-4 py-3 rounded-lg bg-[#161A22] border-2 border-[#2A2D35] text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
               >
@@ -172,11 +172,11 @@ export default function GeneralAnalysisPage() {
       <div className="space-y-4">
         {loading ? (
           <Card>
-            <div className="text-center text-[#9CA3AF] py-8">Loading analyses...</div>
+            <div className="text-center text-[#8E8E93] py-8">Loading analyses...</div>
           </Card>
         ) : analyses.length === 0 ? (
           <Card>
-            <div className="text-center text-[#9CA3AF] py-8">
+            <div className="text-center text-[#8E8E93] py-8">
               No analyses found. Generate one to get started!
             </div>
           </Card>
@@ -190,11 +190,11 @@ export default function GeneralAnalysisPage() {
               <Card key={analysis.id}>
                 <div className="flex items-start justify-between mb-4">
                   <div>
-                    <h3 className="text-xl font-bold text-[#F9FAFB]">
+                    <h3 className="text-xl font-bold text-[#FFFFFF]">
                       {monthNames[analysis.month - 1]} {analysis.year}
                     </h3>
                     {analysis.created_at && (
-                      <p className="text-sm text-[#9CA3AF] mt-1">
+                      <p className="text-sm text-[#8E8E93] mt-1">
                         {new Date(analysis.created_at).toLocaleDateString()}
                       </p>
                     )}
@@ -204,7 +204,7 @@ export default function GeneralAnalysisPage() {
                       onClick={() =>
                         setExpandedAnalysis(isExpanded ? null : analysis.id)
                       }
-                      className="p-2 rounded-lg bg-[#374151] text-[#9CA3AF] hover:text-[#F9FAFB] hover:bg-[#4B5563] transition-all"
+                      className="p-2 rounded-lg bg-[#2A2D35] text-[#8E8E93] hover:text-[#FFFFFF] hover:bg-[#4B5563] transition-all"
                     >
                       {isExpanded ? <MdExpandLess size={20} /> : <MdExpandMore size={20} />}
                     </button>
@@ -228,7 +228,7 @@ export default function GeneralAnalysisPage() {
                       {hasMore && (
                         <button
                           onClick={() => setExpandedAnalysis(analysis.id)}
-                          className="text-[#6366F1] hover:text-[#8B5CF6] text-sm font-semibold"
+                          className="text-[#FF6B35] hover:text-[#E85A2A] text-sm font-semibold"
                         >
                           Read more
                         </button>
@@ -238,7 +238,7 @@ export default function GeneralAnalysisPage() {
                 </div>
 
                 {analysis.tokens_used && (
-                  <div className="mt-4 pt-4 border-t border-[#374151] text-xs text-[#9CA3AF]">
+                  <div className="mt-4 pt-4 border-t border-[#2A2D35] text-xs text-[#8E8E93]">
                     Tokens used: {analysis.tokens_used} | Model: {analysis.model || "gpt-4o"}
                   </div>
                 )}

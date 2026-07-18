@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Card from '../components/ui/Card';
-import { MdEmail, MdLock, MdFitnessCenter } from 'react-icons/md';
+import { MdEmail, MdLock } from 'react-icons/md';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -42,23 +42,23 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0A0E27] to-[#1A1F3A] p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1A1512] to-[#0B0C10] p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-12">
-          <div className="w-24 h-24 mx-auto mb-6 rounded-xl bg-gradient-to-br from-[#6366F1] to-[#8B5CF6] flex items-center justify-center shadow-xl">
-            <MdFitnessCenter className="text-white text-5xl" />
+          <div className="w-20 h-20 mx-auto mb-6 rounded-xl bg-[#FF6B35] flex items-center justify-center shadow-orange">
+            <span className="text-white font-bold text-4xl">G</span>
           </div>
-          <h1 className="text-4xl font-bold text-[#F9FAFB] mb-2">GymAI</h1>
-          <p className="text-[#9CA3AF]">Your Fitness Companion</p>
+          <h1 className="text-4xl font-bold text-white mb-2">GymAI</h1>
+          <p className="text-[#8E8E93] text-xs tracking-[0.14em] uppercase font-semibold">Performance Coach</p>
         </div>
 
         {/* Login Form */}
         <Card className="shadow-xl">
-          <h2 className="text-2xl font-bold text-[#F9FAFB] mb-2 text-center">
+          <h2 className="text-2xl font-bold text-[#FFFFFF] mb-2 text-center">
             {isSignUp ? 'Create Account' : 'Welcome Back'}
           </h2>
-          <p className="text-sm text-[#9CA3AF] text-center mb-6">
+          <p className="text-sm text-[#8E8E93] text-center mb-6">
             {isSignUp ? 'Start your fitness journey' : 'Sign in to continue'}
           </p>
 
@@ -95,12 +95,12 @@ export default function LoginPage() {
           </form>
 
           <div className="mt-6 text-center">
-            <span className="text-sm text-[#9CA3AF]">
+            <span className="text-sm text-[#8E8E93]">
               {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
             </span>
             <button
               onClick={() => setIsSignUp(!isSignUp)}
-              className="text-sm font-semibold text-[#6366F1] hover:text-[#8B5CF6] transition-colors"
+              className="text-sm font-semibold text-[#FF6B35] hover:text-[#E85A2A] transition-colors"
             >
               {isSignUp ? 'Sign In' : 'Sign Up'}
             </button>

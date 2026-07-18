@@ -79,13 +79,13 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
   };
 
   const getStressColor = (level: number) => {
-    if (level <= 3) return 'bg-[#10B981]';
+    if (level <= 3) return 'bg-[#5EEAD4]';
     if (level <= 6) return 'bg-[#F59E0B]';
     return 'bg-[#EF4444]';
   };
 
   const getStressTextColor = (level: number) => {
-    if (level <= 3) return 'text-[#10B981]';
+    if (level <= 3) return 'text-[#5EEAD4]';
     if (level <= 6) return 'text-[#F59E0B]';
     return 'text-[#EF4444]';
   };
@@ -113,12 +113,12 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
       {showForm && (
         <Card className="mb-6 sm:mb-8 p-4 sm:p-5 lg:p-8">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
-            <h3 className="text-base sm:text-lg font-semibold text-[#F9FAFB]">
+            <h3 className="text-base sm:text-lg font-semibold text-[#FFFFFF]">
               {editingEntryId ? 'Edit Stress Level' : 'Log Stress Level'}
             </h3>
             <button
               onClick={handleCancel}
-              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors self-start sm:self-auto"
+              className="text-[#8E8E93] hover:text-[#FFFFFF] transition-colors self-start sm:self-auto"
             >
               <MdClose size={18} className="sm:w-5 sm:h-5" />
             </button>
@@ -133,7 +133,7 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
             />
 
             <div>
-              <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
+              <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
                 Stress Level: {formData.stress_level}
               </label>
               <input
@@ -144,7 +144,7 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
                 onChange={(e) => setFormData({ ...formData, stress_level: parseInt(e.target.value) })}
                 className="w-full"
               />
-              <div className="flex justify-between text-[10px] sm:text-xs text-[#9CA3AF] mt-1">
+              <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
                 <span>Low (1)</span>
                 <span>High (10)</span>
               </div>
@@ -171,21 +171,21 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
 
       {entries.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-[#9CA3AF] text-sm">No stress entries yet. Start tracking your stress levels!</p>
+          <p className="text-[#8E8E93] text-sm">No stress entries yet. Start tracking your stress levels!</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {entries.map((entry) => (
-            <Card key={entry.id} className="hover:border-[#6366F1]/50 transition-all duration-200">
+            <Card key={entry.id} className="hover:border-[#FF6B35]/50 transition-all duration-200">
               <div className="flex flex-col h-full">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1">
-                    <h3 className="text-base font-semibold text-[#F9FAFB] mb-1">{entry.date}</h3>
+                    <h3 className="text-base font-semibold text-[#FFFFFF] mb-1">{entry.date}</h3>
                     <div className="flex items-center gap-2">
                       <span className={`text-2xl font-bold ${getStressTextColor(entry.stress_level)}`}>
                         {entry.stress_level}
                       </span>
-                      <span className="text-sm text-[#9CA3AF]">/10</span>
+                      <span className="text-sm text-[#8E8E93]">/10</span>
                     </div>
                   </div>
                   <button 
@@ -196,7 +196,7 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
                   </button>
                 </div>
                 
-                <div className="w-full bg-[#374151] rounded-full h-2.5 mb-3">
+                <div className="w-full bg-[#2A2D35] rounded-full h-2.5 mb-3">
                   <div
                     className={`${getStressColor(entry.stress_level)} h-2.5 rounded-full transition-all duration-300`}
                     style={{ width: `${(entry.stress_level / 10) * 100}%` }}
@@ -204,7 +204,7 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
                 </div>
                 
                 {entry.description && (
-                  <p className="text-sm text-[#9CA3AF] mt-auto pt-2 border-t border-[#374151]">{entry.description}</p>
+                  <p className="text-sm text-[#8E8E93] mt-auto pt-2 border-t border-[#2A2D35]">{entry.description}</p>
                 )}
               </div>
             </Card>

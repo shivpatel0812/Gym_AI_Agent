@@ -56,6 +56,8 @@ class FoodItem(BaseModel):
     carbs: Optional[float] = None
     fats: Optional[float] = None
     sodium: Optional[float] = None
+    meal: Optional[str] = None
+    amount: Optional[str] = None
 
 class MacroEntry(BaseModel):
     id: Optional[str] = None
@@ -144,4 +146,46 @@ class UserProfile(BaseModel):
     progress_feeling: Optional[str] = None
     biggest_blocker: Optional[str] = None
     open_reflection: Optional[str] = None
+    available_equipment: Optional[List[str]] = None
+    preferred_workout_days: Optional[List[str]] = None
+
+
+class PlanExercise(BaseModel):
+    exercise_id: str
+    exercise_name: str
+    sets: int
+    reps: int
+    rest_seconds: Optional[int] = None
+    notes: Optional[str] = None
+    order: int
+
+class WorkoutPlanDay(BaseModel):
+    day_name: str
+    focus: str
+    exercises: List[PlanExercise]
+    estimated_duration_minutes: Optional[int] = None
+
+class WeeklySchedule(BaseModel):
+    monday: Optional[str] = None
+    tuesday: Optional[str] = None
+    wednesday: Optional[str] = None
+    thursday: Optional[str] = None
+    friday: Optional[str] = None
+    saturday: Optional[str] = None
+    sunday: Optional[str] = None
+
+class WorkoutPlan(BaseModel):
+    id: Optional[str] = None
+    plan_name: str
+    plan_description: Optional[str] = None
+    split_type: str
+    weekly_schedule: WeeklySchedule
+    days: List[WorkoutPlanDay]
+    progression_notes: Optional[str] = None
+    deload_schedule: Optional[str] = None
+    is_active: bool = True
+    linked_split_id: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    generation_metadata: Optional[dict] = None
 

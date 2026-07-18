@@ -1,0 +1,284 @@
+- generic [ref=e33]:
+  - complementary [ref=e34]:
+    - generic [ref=e36]:
+      - generic [ref=e37]: G
+      - generic [ref=e39]:
+        - heading "GymAI" [level=1] [ref=e40]
+        - paragraph [ref=e41]: Performance Coach
+    - navigation [ref=e42]:
+      - link "Dashboard" [ref=e43] [cursor=pointer]:
+        - /url: /dashboard
+      - link "My Plan" [ref=e49] [cursor=pointer]:
+        - /url: /plan-generator
+      - link "Workouts" [active] [ref=e54] [cursor=pointer]:
+        - /url: /workouts
+      - link "Activity" [ref=e59] [cursor=pointer]:
+        - /url: /activity
+      - link "Nutrition" [ref=e64] [cursor=pointer]:
+        - /url: /nutrition
+      - link "Wellness" [ref=e69] [cursor=pointer]:
+        - /url: /wellness
+      - link "Calendar" [ref=e74] [cursor=pointer]:
+        - /url: /calendar
+      - link "About Myself" [ref=e79] [cursor=pointer]:
+        - /url: /about-myself
+      - link "General Analysis" [ref=e84] [cursor=pointer]:
+        - /url: /general-analysis
+      - link "Coach Chat" [ref=e89] [cursor=pointer]:
+        - /url: /chatbot
+    - generic [ref=e94]:
+      - generic [ref=e95]:
+        - generic [ref=e96]: S
+        - generic [ref=e97]:
+          - paragraph [ref=e98]: Shiv
+          - paragraph [ref=e99]: Pro plan
+      - button "Sign Out" [ref=e100] [cursor=pointer]
+  - main [ref=e105]:
+    - generic [ref=e431]:
+      - heading "Workouts" [level=1] [ref=e433]
+      - generic [ref=e434]:
+        - button "Sessions" [ref=e435] [cursor=pointer]
+        - button "Exercises" [ref=e437] [cursor=pointer]
+        - button "Splits" [ref=e438] [cursor=pointer]
+      - generic [ref=e439]:
+        - generic [ref=e440]:
+          - paragraph [ref=e441]: 14 sessions logged
+          - button "New Session" [ref=e442] [cursor=pointer]
+        - generic [ref=e446]:
+          - button "Feb 5 push,pull,legs 1 exercise Dumbbell Bench Press 1 set" [ref=e447] [cursor=pointer]:
+            - generic [ref=e448]:
+              - generic [ref=e449]: Feb 5
+              - generic [ref=e450]:
+                - generic [ref=e451]:
+                  - generic [ref=e452]:
+                    - heading "push,pull,legs" [level=3] [ref=e453]
+                    - paragraph [ref=e454]: 1 exercise
+                  - button "Delete" [ref=e456]
+                - generic [ref=e464]:
+                  - paragraph [ref=e465]: Dumbbell Bench Press
+                  - paragraph [ref=e466]: 1 set
+          - button "Feb 1 push,pull,legs 1 exercise · 400 lb total volume Incline Dumbbell Press 1x5 · top 80 lb" [ref=e467] [cursor=pointer]:
+            - generic [ref=e468]:
+              - generic [ref=e469]: Feb 1
+              - generic [ref=e470]:
+                - generic [ref=e471]:
+                  - generic [ref=e472]:
+                    - heading "push,pull,legs" [level=3] [ref=e473]
+                    - paragraph [ref=e474]: 1 exercise · 400 lb total volume
+                  - button "Delete" [ref=e476]
+                - generic [ref=e484]:
+                  - paragraph [ref=e485]: Incline Dumbbell Press
+                  - paragraph [ref=e486]: 1x5 · top 80 lb
+          - button "Jan 29 Pull 6 exercises · 9,205 lb total volume Lat Pulldowns 4x4 · top 165 lb Pull-Ups 4x4 · top 35 lb Straight-Arm Pulldowns 3x6 · top 150 lb +3 more exercises" [ref=e487] [cursor=pointer]:
+            - generic [ref=e488]:
+              - generic [ref=e489]: Jan 29
+              - generic [ref=e490]:
+                - generic [ref=e491]:
+                  - generic [ref=e492]:
+                    - heading "Pull" [level=3] [ref=e493]
+                    - paragraph [ref=e494]: 6 exercises · 9,205 lb total volume
+                  - button "Delete" [ref=e496]
+                - generic [ref=e503]:
+                  - generic [ref=e504]:
+                    - paragraph [ref=e505]: Lat Pulldowns
+                    - paragraph [ref=e506]: 4x4 · top 165 lb
+                  - generic [ref=e507]:
+                    - paragraph [ref=e508]: Pull-Ups
+                    - paragraph [ref=e509]: 4x4 · top 35 lb
+                  - generic [ref=e510]:
+                    - paragraph [ref=e511]: Straight-Arm Pulldowns
+                    - paragraph [ref=e512]: 3x6 · top 150 lb
+                - paragraph [ref=e513]: +3 more exercises
+          - button "Jan 27 Push 6 exercises · 6,230 lb total volume Incline Dumbbell Press 4x4 · top 80 lb Dumbbell Bench Press 1x6 · top 70 lb Chest Dips 4x8 · top 45 lb +3 more exercises" [ref=e514] [cursor=pointer]:
+            - generic [ref=e515]:
+              - generic [ref=e516]: Jan 27
+              - generic [ref=e517]:
+                - generic [ref=e518]:
+                  - generic [ref=e519]:
+                    - heading "Push" [level=3] [ref=e520]
+                    - paragraph [ref=e521]: 6 exercises · 6,230 lb total volume
+                  - button "Delete" [ref=e523]
+                - generic [ref=e530]:
+                  - generic [ref=e531]:
+                    - paragraph [ref=e532]: Incline Dumbbell Press
+                    - paragraph [ref=e533]: 4x4 · top 80 lb
+                  - generic [ref=e534]:
+                    - paragraph [ref=e535]: Dumbbell Bench Press
+                    - paragraph [ref=e536]: 1x6 · top 70 lb
+                  - generic [ref=e537]:
+                    - paragraph [ref=e538]: Chest Dips
+                    - paragraph [ref=e539]: 4x8 · top 45 lb
+                - paragraph [ref=e540]: +3 more exercises
+          - button "Jan 27 Pull 3 exercises · 3,300 lb total volume Lat Pulldowns 3x6 · top 150 lb Pull-Ups 4 sets Dumbbell Curls 2x5 · top 45 lb" [ref=e541] [cursor=pointer]:
+            - generic [ref=e542]:
+              - generic [ref=e543]: Jan 27
+              - generic [ref=e544]:
+                - generic [ref=e545]:
+                  - generic [ref=e546]:
+                    - heading "Pull" [level=3] [ref=e547]
+                    - paragraph [ref=e548]: 3 exercises · 3,300 lb total volume
+                  - button "Delete" [ref=e550]
+                - generic [ref=e557]:
+                  - generic [ref=e558]:
+                    - paragraph [ref=e559]: Lat Pulldowns
+                    - paragraph [ref=e560]: 3x6 · top 150 lb
+                  - generic [ref=e561]:
+                    - paragraph [ref=e562]: Pull-Ups
+                    - paragraph [ref=e563]: 4 sets
+                  - generic [ref=e564]:
+                    - paragraph [ref=e565]: Dumbbell Curls
+                    - paragraph [ref=e566]: 2x5 · top 45 lb
+          - button "Jan 22 Pull 6 exercises · 10,115 lb total volume Lat Pulldowns 3x6 · top 150 lb Pull-Ups 4x6 · top 25 lb Straight-Arm Pulldowns 3x7 · top 150 lb +3 more exercises" [ref=e567] [cursor=pointer]:
+            - generic [ref=e568]:
+              - generic [ref=e569]: Jan 22
+              - generic [ref=e570]:
+                - generic [ref=e571]:
+                  - generic [ref=e572]:
+                    - heading "Pull" [level=3] [ref=e573]
+                    - paragraph [ref=e574]: 6 exercises · 10,115 lb total volume
+                  - button "Delete" [ref=e576]
+                - generic [ref=e583]:
+                  - generic [ref=e584]:
+                    - paragraph [ref=e585]: Lat Pulldowns
+                    - paragraph [ref=e586]: 3x6 · top 150 lb
+                  - generic [ref=e587]:
+                    - paragraph [ref=e588]: Pull-Ups
+                    - paragraph [ref=e589]: 4x6 · top 25 lb
+                  - generic [ref=e590]:
+                    - paragraph [ref=e591]: Straight-Arm Pulldowns
+                    - paragraph [ref=e592]: 3x7 · top 150 lb
+                - paragraph [ref=e593]: +3 more exercises
+          - button "Jan 19 Pull 9 exercises · 8,365 lb total volume Lat Pulldowns 3x5 · top 150 lb Pull-Ups 2 sets Straight-Arm Pulldowns 3x8 · top 65 lb +6 more exercises" [ref=e594] [cursor=pointer]:
+            - generic [ref=e595]:
+              - generic [ref=e596]: Jan 19
+              - generic [ref=e597]:
+                - generic [ref=e598]:
+                  - generic [ref=e599]:
+                    - heading "Pull" [level=3] [ref=e600]
+                    - paragraph [ref=e601]: 9 exercises · 8,365 lb total volume
+                  - button "Delete" [ref=e603]
+                - generic [ref=e610]:
+                  - generic [ref=e611]:
+                    - paragraph [ref=e612]: Lat Pulldowns
+                    - paragraph [ref=e613]: 3x5 · top 150 lb
+                  - generic [ref=e614]:
+                    - paragraph [ref=e615]: Pull-Ups
+                    - paragraph [ref=e616]: 2 sets
+                  - generic [ref=e617]:
+                    - paragraph [ref=e618]: Straight-Arm Pulldowns
+                    - paragraph [ref=e619]: 3x8 · top 65 lb
+                - paragraph [ref=e620]: +6 more exercises
+          - button "Jan 12 Workout Session 3 exercises · 5,340 lb total volume Lat Pulldowns 3x5 · top 150 lb Pull-Ups 2 sets Straight-Arm Pulldowns 4x6 · top 150 lb" [ref=e621] [cursor=pointer]:
+            - generic [ref=e622]:
+              - generic [ref=e623]: Jan 12
+              - generic [ref=e624]:
+                - generic [ref=e625]:
+                  - generic [ref=e626]:
+                    - heading "Workout Session" [level=3] [ref=e627]
+                    - paragraph [ref=e628]: 3 exercises · 5,340 lb total volume
+                  - button "Delete" [ref=e630]
+                - generic [ref=e637]:
+                  - generic [ref=e638]:
+                    - paragraph [ref=e639]: Lat Pulldowns
+                    - paragraph [ref=e640]: 3x5 · top 150 lb
+                  - generic [ref=e641]:
+                    - paragraph [ref=e642]: Pull-Ups
+                    - paragraph [ref=e643]: 2 sets
+                  - generic [ref=e644]:
+                    - paragraph [ref=e645]: Straight-Arm Pulldowns
+                    - paragraph [ref=e646]: 4x6 · top 150 lb
+          - button "Jan 10 Push 6 exercises · 2,809 lb total volume Incline Dumbbell Press 4x4 · top 80 lb Dumbbell Bench Press 1x7 · top 70 lb Chest Dips 4 sets +3 more exercises" [ref=e647] [cursor=pointer]:
+            - generic [ref=e648]:
+              - generic [ref=e649]: Jan 10
+              - generic [ref=e650]:
+                - generic [ref=e651]:
+                  - generic [ref=e652]:
+                    - heading "Push" [level=3] [ref=e653]
+                    - paragraph [ref=e654]: 6 exercises · 2,809 lb total volume
+                  - button "Delete" [ref=e656]
+                - generic [ref=e663]:
+                  - generic [ref=e664]:
+                    - paragraph [ref=e665]: Incline Dumbbell Press
+                    - paragraph [ref=e666]: 4x4 · top 80 lb
+                  - generic [ref=e667]:
+                    - paragraph [ref=e668]: Dumbbell Bench Press
+                    - paragraph [ref=e669]: 1x7 · top 70 lb
+                  - generic [ref=e670]:
+                    - paragraph [ref=e671]: Chest Dips
+                    - paragraph [ref=e672]: 4 sets
+                - paragraph [ref=e673]: +3 more exercises
+          - button "Jan 10 Push 6 exercises · 2,809 lb total volume Incline Dumbbell Press 4x4 · top 80 lb Dumbbell Bench Press 1x7 · top 70 lb Chest Dips 4 sets +3 more exercises" [ref=e674] [cursor=pointer]:
+            - generic [ref=e675]:
+              - generic [ref=e676]: Jan 10
+              - generic [ref=e677]:
+                - generic [ref=e678]:
+                  - generic [ref=e679]:
+                    - heading "Push" [level=3] [ref=e680]
+                    - paragraph [ref=e681]: 6 exercises · 2,809 lb total volume
+                  - button "Delete" [ref=e683]
+                - generic [ref=e690]:
+                  - generic [ref=e691]:
+                    - paragraph [ref=e692]: Incline Dumbbell Press
+                    - paragraph [ref=e693]: 4x4 · top 80 lb
+                  - generic [ref=e694]:
+                    - paragraph [ref=e695]: Dumbbell Bench Press
+                    - paragraph [ref=e696]: 1x7 · top 70 lb
+                  - generic [ref=e697]:
+                    - paragraph [ref=e698]: Chest Dips
+                    - paragraph [ref=e699]: 4 sets
+                - paragraph [ref=e700]: +3 more exercises
+          - button "Jan 7 push,pull,legs 3 exercises · 1,000 lb total volume Dumbbell Bench Press 1x6 · top 80 lb Incline Dumbbell Press 1x7 · top 60 lb Dumbbell Flyes 1x4 · top 25 lb" [ref=e701] [cursor=pointer]:
+            - generic [ref=e702]:
+              - generic [ref=e703]: Jan 7
+              - generic [ref=e704]:
+                - generic [ref=e705]:
+                  - generic [ref=e706]:
+                    - heading "push,pull,legs" [level=3] [ref=e707]
+                    - paragraph [ref=e708]: 3 exercises · 1,000 lb total volume
+                  - button "Delete" [ref=e710]
+                - generic [ref=e717]:
+                  - generic [ref=e718]:
+                    - paragraph [ref=e719]: Dumbbell Bench Press
+                    - paragraph [ref=e720]: 1x6 · top 80 lb
+                  - generic [ref=e721]:
+                    - paragraph [ref=e722]: Incline Dumbbell Press
+                    - paragraph [ref=e723]: 1x7 · top 60 lb
+                  - generic [ref=e724]:
+                    - paragraph [ref=e725]: Dumbbell Flyes
+                    - paragraph [ref=e726]: 1x4 · top 25 lb
+          - button "Jan 6 Workout Session 2 exercises Dumbbell Bench Press 1 set Push-Ups 1 set" [ref=e727] [cursor=pointer]:
+            - generic [ref=e728]:
+              - generic [ref=e729]: Jan 6
+              - generic [ref=e730]:
+                - generic [ref=e731]:
+                  - generic [ref=e732]:
+                    - heading "Workout Session" [level=3] [ref=e733]
+                    - paragraph [ref=e734]: 2 exercises
+                  - button "Delete" [ref=e736]
+                - generic [ref=e743]:
+                  - generic [ref=e744]:
+                    - paragraph [ref=e745]: Dumbbell Bench Press
+                    - paragraph [ref=e746]: 1 set
+                  - generic [ref=e747]:
+                    - paragraph [ref=e748]: Push-Ups
+                    - paragraph [ref=e749]: 1 set
+          - button "Jan 2 Workout Session 1 exercise · 80 lb total volume Incline Chest Presh 1x1 · top 80 lb" [ref=e750] [cursor=pointer]:
+            - generic [ref=e751]:
+              - generic [ref=e752]: Jan 2
+              - generic [ref=e753]:
+                - generic [ref=e754]:
+                  - generic [ref=e755]:
+                    - heading "Workout Session" [level=3] [ref=e756]
+                    - paragraph [ref=e757]: 1 exercise · 80 lb total volume
+                  - button "Delete" [ref=e759]
+                - generic [ref=e767]:
+                  - paragraph [ref=e768]: Incline Chest Presh
+                  - paragraph [ref=e769]: 1x1 · top 80 lb
+          - button "Dec 20 push,pull,legs 0 exercises" [ref=e770] [cursor=pointer]:
+            - generic [ref=e771]:
+              - generic [ref=e772]: Dec 20
+              - generic [ref=e774]:
+                - generic [ref=e775]:
+                  - heading "push,pull,legs" [level=3] [ref=e776]
+                  - paragraph [ref=e777]: 0 exercises
+                - button "Delete" [ref=e779]

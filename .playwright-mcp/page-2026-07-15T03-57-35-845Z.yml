@@ -1,0 +1,19 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - generic [ref=e6]: G
+    - heading "GymAI" [level=1] [ref=e8]
+    - paragraph [ref=e9]: Performance Coach
+  - generic [ref=e10]:
+    - heading "Welcome Back" [level=2] [ref=e11]
+    - paragraph [ref=e12]: Sign in to continue
+    - generic [ref=e13]:
+      - generic [ref=e14]:
+        - generic [ref=e15]: Email
+        - textbox "your@email.com" [ref=e21]: shivpatelca2@gmail.com
+      - generic [ref=e22]:
+        - generic [ref=e23]: Password
+        - textbox "••••••••" [ref=e29]: Password
+      - button "Sign In" [ref=e30] [cursor=pointer]
+    - generic [ref=e31]:
+      - text: Don't have an account?
+      - button "Sign Up" [ref=e32] [cursor=pointer]

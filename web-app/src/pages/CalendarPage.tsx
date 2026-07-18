@@ -32,7 +32,7 @@ export default function CalendarPage() {
 
   return (
     <div className="p-6 lg:p-12 max-w-[1600px] mx-auto">
-      <h1 className="text-3xl font-bold text-[#F9FAFB] mb-6">Calendar</h1>
+      <h1 className="text-3xl font-bold text-[#FFFFFF] mb-6">Calendar</h1>
       <CalendarSection exercises={exercises} splits={splits} />
     </div>
   );

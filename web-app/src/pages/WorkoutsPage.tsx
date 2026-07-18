@@ -5,7 +5,8 @@ import { Exercise, Split } from "../types";
 import ExercisesSection from "../components/workouts/ExercisesSection";
 import SplitsSection from "../components/workouts/SplitsSection";
 import SessionsSection from "../components/workouts/SessionsSection";
-import { MdFitnessCenter, MdCalendarToday, MdViewList } from "react-icons/md";
+import type { SessionSummaryData } from "../components/workouts/SessionsSection";
+import SessionSummaryPanel from "../components/workouts/SessionSummaryPanel";
 
 type TabType = "exercises" | "splits" | "sessions";
 
@@ -15,6 +16,8 @@ export default function WorkoutsPage() {
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [splits, setSplits] = useState<Split[]>([]);
   const [editSessionId, setEditSessionId] = useState<string | null>(null);
+  const [sessionSubtitle, setSessionSubtitle] = useState<string | null>(null);
+  const [summaryData, setSummaryData] = useState<SessionSummaryData | null>(null);
 
   useEffect(() => {
     fetchExercises();
@@ -51,99 +54,78 @@ export default function WorkoutsPage() {
   };
 
   const tabs = [
-    { id: "sessions" as TabType, label: "Sessions", icon: MdCalendarToday },
-    { id: "exercises" as TabType, label: "Exercises", icon: MdFitnessCenter },
-    { id: "splits" as TabType, label: "Splits", icon: MdViewList },
+    { id: "sessions" as TabType, label: "Sessions" },
+    { id: "exercises" as TabType, label: "Exercises" },
+    { id: "splits" as TabType, label: "Splits" },
   ];
 
   return (
-    <div className="p-4 sm:p-6 lg:p-12 max-w-[1600px] mx-auto">
-      <h1 className="text-3xl sm:text-4xl font-bold text-[#F9FAFB] mb-6 sm:mb-10">
-        Workouts
-      </h1>
+    <>
+      <div
+        className={`w-full p-4 sm:p-6 lg:p-8 ${
+          summaryData
+            ? "xl:pr-[304px]"
+            : "max-w-[1200px] mx-auto"
+        }`}
+      >
+        <div className="mb-6">
+          <h1 className="text-3xl sm:text-[2rem] font-bold text-white tracking-tight">
+            Workouts
+          </h1>
+          {sessionSubtitle && (
+            <p className="text-sm text-[#8E8E93] mt-1">{sessionSubtitle}</p>
+          )}
+        </div>
 
-      <div className="mb-6 sm:mb-8 bg-[#1A1F3A] p-2 rounded-xl border border-[#374151] w-full sm:w-fit">
-        {/* Mobile: 2x1 layout with Sessions centered */}
-        <div className="flex justify-center sm:hidden mb-2">
-          {tabs
-            .filter((tab) => tab.id === "sessions")
-            .map((tab) => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg transition-all text-sm ${
-                    isActive
-                      ? "bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white shadow-md"
-                      : "text-[#9CA3AF] hover:text-[#F9FAFB] hover:bg-[#374151]/30"
-                  }`}
-                >
-                  <Icon className="text-lg" />
-                  <span className="font-semibold">{tab.label}</span>
-                </button>
-              );
-            })}
-        </div>
-        <div className="grid grid-cols-2 gap-2 sm:hidden">
-          {tabs
-            .filter((tab) => tab.id !== "sessions")
-            .map((tab) => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg transition-all text-sm ${
-                    isActive
-                      ? "bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white shadow-md"
-                      : "text-[#9CA3AF] hover:text-[#F9FAFB] hover:bg-[#374151]/30"
-                  }`}
-                >
-                  <Icon className="text-lg" />
-                  <span className="font-semibold">{tab.label}</span>
-                </button>
-              );
-            })}
-        </div>
-        {/* Desktop: All tabs in a row */}
-        <div className="hidden sm:flex sm:flex-wrap sm:gap-3">
+        <div className="mb-6 flex gap-6 border-b border-[#2A2D35]">
           {tabs.map((tab) => {
-            const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-all text-base ${
+                className={`relative pb-3 text-sm font-semibold transition-colors ${
                   isActive
-                    ? "bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white shadow-md"
-                    : "text-[#9CA3AF] hover:text-[#F9FAFB] hover:bg-[#374151]/30"
+                    ? "text-white"
+                    : "text-[#8E8E93] hover:text-white"
                 }`}
               >
-                <Icon className="text-xl" />
-                <span className="font-semibold">{tab.label}</span>
+                {tab.label}
+                {isActive && (
+                  <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#FF6B35] rounded-full" />
+                )}
               </button>
             );
           })}
         </div>
+
+        {activeTab === "sessions" && (
+          <SessionsSection
+            exercises={exercises}
+            splits={splits}
+            editSessionId={editSessionId}
+            onSessionMetaChange={setSessionSubtitle}
+            onSessionSummaryChange={setSummaryData}
+          />
+        )}
+        {activeTab === "exercises" && (
+          <ExercisesSection onUpdate={fetchExercises} />
+        )}
+        {activeTab === "splits" && (
+          <SplitsSection exercises={exercises} onUpdate={fetchSplits} />
+        )}
       </div>
 
-      {activeTab === "sessions" && (
-        <SessionsSection
-          exercises={exercises}
-          splits={splits}
-          editSessionId={editSessionId}
+      {summaryData && (
+        <SessionSummaryPanel
+          totalVolume={summaryData.totalVolume}
+          completedSets={summaryData.completedSets}
+          totalSets={summaryData.totalSets}
+          completedExercises={summaryData.completedExercises}
+          totalExercises={summaryData.totalExercises}
+          completionPercent={summaryData.completionPercent}
         />
       )}
-      {activeTab === "exercises" && (
-        <ExercisesSection onUpdate={fetchExercises} />
-      )}
-      {activeTab === "splits" && (
-        <SplitsSection exercises={exercises} onUpdate={fetchSplits} />
-      )}
-    </div>
+    </>
   );
 }

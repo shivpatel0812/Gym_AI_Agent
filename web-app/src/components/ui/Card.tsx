@@ -15,9 +15,9 @@ export default function Card({
   return (
     <div
       className={clsx(
-        "bg-[#1A1F3A] rounded-xl p-5 border",
-        variant === "gradient" ? "border-[#6366F1]" : "border-[#374151]",
-        "shadow-md hover:shadow-lg transition-shadow duration-200",
+        "bg-[#161A22] rounded-2xl p-5 border",
+        variant === "gradient" ? "border-[#FF6B35]/40" : "border-[#2A2D35]",
+        "shadow-sm transition-shadow duration-200",
         className
       )}
     >

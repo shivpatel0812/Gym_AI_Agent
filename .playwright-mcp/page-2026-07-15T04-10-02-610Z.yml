@@ -1,0 +1,127 @@
+- generic [ref=e33]:
+  - complementary [ref=e34]:
+    - generic [ref=e36]:
+      - generic [ref=e37]: G
+      - generic [ref=e39]:
+        - heading "GymAI" [level=1] [ref=e40]
+        - paragraph [ref=e41]: Performance Coach
+    - navigation [ref=e42]:
+      - link "Dashboard" [ref=e43] [cursor=pointer]:
+        - /url: /dashboard
+      - link "My Plan" [ref=e49] [cursor=pointer]:
+        - /url: /plan-generator
+      - link "Workouts" [ref=e54] [cursor=pointer]:
+        - /url: /workouts
+      - link "Activity" [ref=e59] [cursor=pointer]:
+        - /url: /activity
+      - link "Nutrition" [ref=e64] [cursor=pointer]:
+        - /url: /nutrition
+      - link "Wellness" [ref=e69] [cursor=pointer]:
+        - /url: /wellness
+      - link "Calendar" [ref=e74] [cursor=pointer]:
+        - /url: /calendar
+      - link "About Myself" [ref=e79] [cursor=pointer]:
+        - /url: /about-myself
+      - link "General Analysis" [ref=e84] [cursor=pointer]:
+        - /url: /general-analysis
+      - link "Coach Chat" [ref=e89] [cursor=pointer]:
+        - /url: /chatbot
+    - generic [ref=e94]:
+      - generic [ref=e95]:
+        - generic [ref=e96]: S
+        - generic [ref=e97]:
+          - paragraph [ref=e98]: Shiv
+          - paragraph [ref=e99]: Pro plan
+      - button "Sign Out" [ref=e100] [cursor=pointer]
+  - main [ref=e105]:
+    - generic [ref=e154]:
+      - generic [ref=e269]:
+        - paragraph [ref=e278]: AI Workout Plan
+        - heading "Intermediate Full Gym Muscle Building" [level=1] [ref=e279]
+        - paragraph [ref=e275]: A balanced 4-day split focused on hypertrophy, targeting all major muscle groups with a variety of compound and isolation exercises.
+      - generic [ref=e280]:
+        - generic [ref=e281]:
+          - paragraph [ref=e282]: Split Type
+          - paragraph [ref=e283]: Upper/Lower
+        - generic [ref=e284]:
+          - paragraph [ref=e285]: Workout Days
+          - paragraph [ref=e286]: "2"
+        - generic [ref=e287]:
+          - paragraph [ref=e288]: Created
+          - paragraph [ref=e289]: 7/15/2026
+      - generic [ref=e290]:
+        - heading "Weekly Schedule" [level=3] [ref=e291]
+        - generic [ref=e295]:
+          - generic [ref=e296]:
+            - paragraph [ref=e297]: mon
+            - paragraph [ref=e298]: Upper Body
+          - generic [ref=e299]:
+            - paragraph [ref=e300]: tue
+            - paragraph [ref=e301]: Lower Body
+          - generic [ref=e302]:
+            - paragraph [ref=e303]: wed
+            - paragraph [ref=e304]: Rest
+          - generic [ref=e305]:
+            - paragraph [ref=e306]: thu
+            - paragraph [ref=e307]: Upper Body
+          - generic [ref=e308]:
+            - paragraph [ref=e309]: fri
+            - paragraph [ref=e310]: Rest
+          - generic [ref=e311]:
+            - paragraph [ref=e312]: sat
+            - paragraph [ref=e313]: Lower Body
+          - generic [ref=e314]:
+            - paragraph [ref=e315]: sun
+            - paragraph [ref=e316]: Rest
+      - generic [ref=e317]:
+        - generic [ref=e318]:
+          - button [active] [ref=e319] [cursor=pointer]:
+            - generic [ref=e320]:
+              - heading "Upper Body" [level=3] [ref=e321]
+              - paragraph [ref=e322]: Chest, Back, Shoulders, Biceps, Triceps · 5 exercises · ~60 min
+          - generic [ref=e354]:
+            - generic [ref=e355]:
+              - generic [ref=e356]: "1"
+              - generic [ref=e357]:
+                - paragraph [ref=e358]: Barbell Bench Press
+                - paragraph [ref=e359]: 4 sets × 8 reps · 90s rest
+                - paragraph [ref=e360]: Keep elbows slightly tucked.
+            - generic [ref=e361]:
+              - generic [ref=e362]: "2"
+              - generic [ref=e363]:
+                - paragraph [ref=e364]: Bent-Over Barbell Rows
+                - paragraph [ref=e365]: 4 sets × 8 reps · 90s rest
+                - paragraph [ref=e366]: Maintain a flat back.
+            - generic [ref=e367]:
+              - generic [ref=e368]: "3"
+              - generic [ref=e369]:
+                - paragraph [ref=e370]: Barbell Overhead Press
+                - paragraph [ref=e371]: 3 sets × 10 reps · 60s rest
+                - paragraph [ref=e372]: Press straight overhead.
+            - generic [ref=e373]:
+              - generic [ref=e374]: "4"
+              - generic [ref=e375]:
+                - paragraph [ref=e376]: Dumbbell Curls
+                - paragraph [ref=e377]: 3 sets × 12 reps · 60s rest
+                - paragraph [ref=e378]: Keep elbows close to body.
+            - generic [ref=e379]:
+              - generic [ref=e380]: "5"
+              - generic [ref=e381]:
+                - paragraph [ref=e382]: Tricep Pushdowns
+                - paragraph [ref=e383]: 3 sets × 12 reps · 60s rest
+                - paragraph [ref=e384]: Focus on full extension.
+        - button [ref=e327] [cursor=pointer]:
+          - generic [ref=e328]:
+            - heading "Lower Body" [level=3] [ref=e329]
+            - paragraph [ref=e330]: Quads, Hamstrings, Glutes, Calves · 5 exercises · ~60 min
+      - generic [ref=e334]:
+        - generic [ref=e335]:
+          - heading "Progression" [level=3] [ref=e336]
+          - paragraph [ref=e337]: Aim to increase the weight by 5% every 2-3 weeks while maintaining form.
+        - generic [ref=e338]:
+          - heading "Deload" [level=3] [ref=e339]
+          - paragraph [ref=e340]: Every 6-8 weeks, reduce volume by 50% for one week.
+      - generic [ref=e341]:
+        - button "New Plan" [ref=e342] [cursor=pointer]
+        - button "Regenerate" [ref=e346] [cursor=pointer]
+        - button "Delete Plan" [ref=e350] [cursor=pointer]

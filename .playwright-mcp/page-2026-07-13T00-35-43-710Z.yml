@@ -1,0 +1,317 @@
+- generic [ref=f1e5]:
+  - complementary [ref=f1e6]:
+    - generic [ref=f1e8]:
+      - generic [ref=f1e9]: G
+      - generic [ref=f1e11]:
+        - heading "GymAI" [level=1] [ref=f1e12]
+        - paragraph [ref=f1e13]: Performance Coach
+    - navigation [ref=f1e14]:
+      - link "Dashboard" [ref=f1e15] [cursor=pointer]:
+        - /url: /dashboard
+      - link "Workouts" [ref=f1e20] [cursor=pointer]:
+        - /url: /workouts
+      - link "Activity" [ref=f1e26] [cursor=pointer]:
+        - /url: /activity
+      - link "Nutrition" [ref=f1e31] [cursor=pointer]:
+        - /url: /nutrition
+      - link "Wellness" [ref=f1e36] [cursor=pointer]:
+        - /url: /wellness
+      - link "Calendar" [ref=f1e41] [cursor=pointer]:
+        - /url: /calendar
+      - link "About Myself" [ref=f1e46] [cursor=pointer]:
+        - /url: /about-myself
+      - link "General Analysis" [ref=f1e51] [cursor=pointer]:
+        - /url: /general-analysis
+      - link "Coach Chat" [ref=f1e56] [cursor=pointer]:
+        - /url: /chatbot
+    - generic [ref=f1e61]:
+      - generic [ref=f1e62]:
+        - generic [ref=f1e63]: S
+        - generic [ref=f1e64]:
+          - paragraph [ref=f1e65]: Shiv
+          - paragraph [ref=f1e66]: Pro plan
+      - button "Sign Out" [ref=f1e67] [cursor=pointer]
+  - main [ref=f1e72]:
+    - generic [ref=f1e73]:
+      - generic [ref=f1e74]:
+        - heading "Workouts" [level=1] [ref=f1e75]
+        - paragraph [ref=f1e428]: Pull · Jan 29, 2026
+      - generic [ref=f1e76]:
+        - button "Sessions" [ref=f1e77] [cursor=pointer]
+        - button "Exercises" [ref=f1e79] [cursor=pointer]
+        - button "Splits" [ref=f1e80] [cursor=pointer]
+      - generic [ref=f1e429]:
+        - generic [ref=f1e430]:
+          - generic [ref=f1e432]:
+            - button [ref=f1e433] [cursor=pointer]
+            - generic [ref=f1e437]:
+              - generic [ref=f1e438]: Active Session
+              - heading "Pull" [level=3] [ref=f1e440]
+              - paragraph [ref=f1e441]: Started 8:35 PM
+          - generic [ref=f1e444]:
+            - paragraph [ref=f1e445]: 6 of 6 exercises · 19 of 19 sets
+            - generic [ref=f1e446]:
+              - generic [ref=f1e447]: 100%
+              - button "Save Workout" [ref=f1e448] [cursor=pointer]
+        - generic [ref=f1e449]:
+          - button "Session details" [ref=f1e450] [cursor=pointer]
+          - generic [ref=f1e451]:
+            - textbox "Search exercises..." [ref=f1e457]
+            - generic [ref=f1e458]:
+              - button "All" [ref=f1e459] [cursor=pointer]
+              - button "Chest" [ref=f1e460] [cursor=pointer]
+              - button "Shoulders" [ref=f1e461] [cursor=pointer]
+              - button "Back" [ref=f1e462] [cursor=pointer]
+              - button "Arms" [ref=f1e463] [cursor=pointer]
+              - button "Legs" [ref=f1e464] [cursor=pointer]
+              - button "Core" [ref=f1e465] [cursor=pointer]
+          - button "Add exercise" [ref=f1e466] [cursor=pointer]
+          - generic [ref=f1e470]:
+            - generic [ref=f1e471]:
+              - generic [ref=f1e472]:
+                - button "Swap exercise" [ref=f1e473] [cursor=pointer]
+                - generic [ref=f1e477]:
+                  - heading "Lat Pulldowns" [level=4] [ref=f1e478]
+                  - paragraph [ref=f1e479]: Back · Primary
+                - generic [ref=f1e480]:
+                  - generic [ref=f1e481]: 4/4 sets
+                  - button "Collapse" [ref=f1e482] [cursor=pointer]
+              - generic [ref=f1e486]:
+                - generic [ref=f1e487]:
+                  - generic [ref=f1e488]: Set
+                  - generic [ref=f1e489]: Reps
+                  - generic [ref=f1e490]: Weight (lbs)
+                  - generic [ref=f1e491]: RPE
+                  - generic [ref=f1e492]: Done
+                - generic [ref=f1e493]:
+                  - generic [ref=f1e494]:
+                    - generic [ref=f1e495]: "1"
+                    - spinbutton "—" [ref=f1e497]: "2"
+                    - spinbutton "—" [ref=f1e499]: "165"
+                    - spinbutton "—" [ref=f1e501]
+                    - button [ref=f1e503] [cursor=pointer]
+                  - generic [ref=f1e507]:
+                    - generic [ref=f1e508]: "2"
+                    - spinbutton "—" [ref=f1e510]: "3"
+                    - spinbutton "—" [ref=f1e512]: "165"
+                    - spinbutton "—" [ref=f1e514]
+                    - button [ref=f1e516] [cursor=pointer]
+                  - generic [ref=f1e520]:
+                    - generic [ref=f1e521]: "3"
+                    - spinbutton "—" [ref=f1e523]: "5"
+                    - spinbutton "—" [ref=f1e525]: "150"
+                    - spinbutton "—" [ref=f1e527]
+                    - button [ref=f1e529] [cursor=pointer]
+                  - generic [ref=f1e533]:
+                    - generic [ref=f1e534]: "4"
+                    - spinbutton "—" [ref=f1e536]: "4"
+                    - spinbutton "—" [ref=f1e538]: "150"
+                    - spinbutton "—" [ref=f1e540]
+                    - button [ref=f1e542] [cursor=pointer]
+                - button "Add set" [ref=f1e546] [cursor=pointer]
+            - generic [ref=f1e550]:
+              - generic [ref=f1e551]:
+                - button "Swap exercise" [ref=f1e552] [cursor=pointer]
+                - generic [ref=f1e556]:
+                  - heading "Pull-Ups" [level=4] [ref=f1e557]
+                  - paragraph [ref=f1e558]: Back · Secondary
+                - generic [ref=f1e559]:
+                  - generic [ref=f1e560]: 4/4 sets
+                  - button "Collapse" [ref=f1e561] [cursor=pointer]
+              - generic [ref=f1e565]:
+                - generic [ref=f1e566]:
+                  - generic [ref=f1e567]: Set
+                  - generic [ref=f1e568]: Reps
+                  - generic [ref=f1e569]: Weight (lbs)
+                  - generic [ref=f1e570]: RPE
+                  - generic [ref=f1e571]: Done
+                - generic [ref=f1e572]:
+                  - generic [ref=f1e573]:
+                    - generic [ref=f1e574]: "1"
+                    - spinbutton "—" [ref=f1e576]: "4"
+                    - spinbutton "—" [ref=f1e578]: "35"
+                    - spinbutton "—" [ref=f1e580]
+                    - button [ref=f1e582] [cursor=pointer]
+                  - generic [ref=f1e586]:
+                    - generic [ref=f1e587]: "2"
+                    - spinbutton "—" [ref=f1e589]: "4"
+                    - spinbutton "—" [ref=f1e591]: "35"
+                    - spinbutton "—" [ref=f1e593]
+                    - button [ref=f1e595] [cursor=pointer]
+                  - generic [ref=f1e599]:
+                    - generic [ref=f1e600]: "3"
+                    - spinbutton "—" [ref=f1e602]: "4"
+                    - spinbutton "—" [ref=f1e604]: "25"
+                    - spinbutton "—" [ref=f1e606]
+                    - button [ref=f1e608] [cursor=pointer]
+                  - generic [ref=f1e612]:
+                    - generic [ref=f1e613]: "4"
+                    - spinbutton "—" [ref=f1e615]: "5"
+                    - spinbutton "—" [ref=f1e617]
+                    - spinbutton "—" [ref=f1e619]
+                    - button [ref=f1e621] [cursor=pointer]
+                - button "Add set" [ref=f1e625] [cursor=pointer]
+            - generic [ref=f1e629]:
+              - generic [ref=f1e630]:
+                - button "Swap exercise" [ref=f1e631] [cursor=pointer]
+                - generic [ref=f1e635]:
+                  - heading "Straight-Arm Pulldowns" [level=4] [ref=f1e636]
+                  - paragraph [ref=f1e637]: Back · Secondary
+                - generic [ref=f1e638]:
+                  - generic [ref=f1e639]: 3/3 sets
+                  - button "Collapse" [ref=f1e640] [cursor=pointer]
+              - generic [ref=f1e644]:
+                - generic [ref=f1e645]:
+                  - generic [ref=f1e646]: Set
+                  - generic [ref=f1e647]: Reps
+                  - generic [ref=f1e648]: Weight (lbs)
+                  - generic [ref=f1e649]: RPE
+                  - generic [ref=f1e650]: Done
+                - generic [ref=f1e651]:
+                  - generic [ref=f1e652]:
+                    - generic [ref=f1e653]: "1"
+                    - spinbutton "—" [ref=f1e655]: "5"
+                    - spinbutton "—" [ref=f1e657]: "150"
+                    - spinbutton "—" [ref=f1e659]
+                    - button [ref=f1e661] [cursor=pointer]
+                  - generic [ref=f1e665]:
+                    - generic [ref=f1e666]: "2"
+                    - spinbutton "—" [ref=f1e668]: "5"
+                    - spinbutton "—" [ref=f1e670]: "150"
+                    - spinbutton "—" [ref=f1e672]
+                    - button [ref=f1e674] [cursor=pointer]
+                  - generic [ref=f1e678]:
+                    - generic [ref=f1e679]: "3"
+                    - spinbutton "—" [ref=f1e681]: "8"
+                    - spinbutton "—" [ref=f1e683]: "135"
+                    - spinbutton "—" [ref=f1e685]
+                    - button [ref=f1e687] [cursor=pointer]
+                - button "Add set" [ref=f1e691] [cursor=pointer]
+            - generic [ref=f1e695]:
+              - generic [ref=f1e696]:
+                - button "Swap exercise" [ref=f1e697] [cursor=pointer]
+                - generic [ref=f1e701]:
+                  - heading "Dumbbell Curls" [level=4] [ref=f1e702]
+                  - paragraph [ref=f1e703]: Biceps · Secondary
+                - generic [ref=f1e704]:
+                  - generic [ref=f1e705]: 2/2 sets
+                  - button "Collapse" [ref=f1e706] [cursor=pointer]
+              - generic [ref=f1e710]:
+                - generic [ref=f1e711]:
+                  - generic [ref=f1e712]: Set
+                  - generic [ref=f1e713]: Reps
+                  - generic [ref=f1e714]: Weight (lbs)
+                  - generic [ref=f1e715]: RPE
+                  - generic [ref=f1e716]: Done
+                - generic [ref=f1e717]:
+                  - generic [ref=f1e718]:
+                    - generic [ref=f1e719]: "1"
+                    - spinbutton "—" [ref=f1e721]: "6"
+                    - spinbutton "—" [ref=f1e723]: "45"
+                    - spinbutton "—" [ref=f1e725]
+                    - button [ref=f1e727] [cursor=pointer]
+                  - generic [ref=f1e731]:
+                    - generic [ref=f1e732]: "2"
+                    - spinbutton "—" [ref=f1e734]: "6"
+                    - spinbutton "—" [ref=f1e736]: "45"
+                    - spinbutton "—" [ref=f1e738]
+                    - button [ref=f1e740] [cursor=pointer]
+                - button "Add set" [ref=f1e744] [cursor=pointer]
+            - generic [ref=f1e748]:
+              - generic [ref=f1e749]:
+                - button "Swap exercise" [ref=f1e750] [cursor=pointer]
+                - generic [ref=f1e754]:
+                  - heading "Preacher Curls (EZ or Barbell)" [level=4] [ref=f1e755]
+                  - paragraph [ref=f1e756]: Biceps · Secondary
+                - generic [ref=f1e757]:
+                  - generic [ref=f1e758]: 2/2 sets
+                  - button "Collapse" [ref=f1e759] [cursor=pointer]
+              - generic [ref=f1e763]:
+                - generic [ref=f1e764]:
+                  - generic [ref=f1e765]: Set
+                  - generic [ref=f1e766]: Reps
+                  - generic [ref=f1e767]: Weight (lbs)
+                  - generic [ref=f1e768]: RPE
+                  - generic [ref=f1e769]: Done
+                - generic [ref=f1e770]:
+                  - generic [ref=f1e771]:
+                    - generic [ref=f1e772]: "1"
+                    - spinbutton "—" [ref=f1e774]: "10"
+                    - spinbutton "—" [ref=f1e776]: "25"
+                    - spinbutton "—" [ref=f1e778]
+                    - button [ref=f1e780] [cursor=pointer]
+                  - generic [ref=f1e784]:
+                    - generic [ref=f1e785]: "2"
+                    - spinbutton "—" [ref=f1e787]: "10"
+                    - spinbutton "—" [ref=f1e789]: "25"
+                    - spinbutton "—" [ref=f1e791]
+                    - button [ref=f1e793] [cursor=pointer]
+                - button "Add set" [ref=f1e797] [cursor=pointer]
+            - generic [ref=f1e801]:
+              - generic [ref=f1e802]:
+                - button "Swap exercise" [ref=f1e803] [cursor=pointer]
+                - generic [ref=f1e807]:
+                  - heading "Rope Hammer Curls" [level=4] [ref=f1e808]
+                  - paragraph [ref=f1e809]: Biceps · Secondary
+                - generic [ref=f1e810]:
+                  - generic [ref=f1e811]: 4/4 sets
+                  - button "Collapse" [ref=f1e812] [cursor=pointer]
+              - generic [ref=f1e816]:
+                - generic [ref=f1e817]:
+                  - generic [ref=f1e818]: Set
+                  - generic [ref=f1e819]: Reps
+                  - generic [ref=f1e820]: Weight (lbs)
+                  - generic [ref=f1e821]: RPE
+                  - generic [ref=f1e822]: Done
+                - generic [ref=f1e823]:
+                  - generic [ref=f1e824]:
+                    - generic [ref=f1e825]: "1"
+                    - spinbutton "—" [ref=f1e827]: "6"
+                    - spinbutton "—" [ref=f1e829]: "120"
+                    - spinbutton "—" [ref=f1e831]
+                    - button [ref=f1e833] [cursor=pointer]
+                  - generic [ref=f1e837]:
+                    - generic [ref=f1e838]: "2"
+                    - spinbutton "—" [ref=f1e840]: "8"
+                    - spinbutton "—" [ref=f1e842]: "105"
+                    - spinbutton "—" [ref=f1e844]
+                    - button [ref=f1e846] [cursor=pointer]
+                  - generic [ref=f1e850]:
+                    - generic [ref=f1e851]: "3"
+                    - spinbutton "—" [ref=f1e853]: "7"
+                    - spinbutton "—" [ref=f1e855]: "105"
+                    - spinbutton "—" [ref=f1e857]
+                    - button [ref=f1e859] [cursor=pointer]
+                  - generic [ref=f1e863]:
+                    - generic [ref=f1e864]: "4"
+                    - spinbutton "—" [ref=f1e866]: "7"
+                    - spinbutton "—" [ref=f1e868]: "105"
+                    - spinbutton "—" [ref=f1e870]
+                    - button [ref=f1e872] [cursor=pointer]
+                - button "Add set" [ref=f1e876] [cursor=pointer]
+      - generic [ref=f1e880]:
+        - paragraph [ref=f1e881]: Summary
+        - generic [ref=f1e882]:
+          - generic [ref=f1e883]:
+            - paragraph [ref=f1e884]: Total Volume
+            - paragraph [ref=f1e885]: 9,205
+            - paragraph [ref=f1e886]: pounds lifted
+          - generic [ref=f1e887]:
+            - paragraph [ref=f1e888]: Completed Sets
+            - paragraph [ref=f1e889]:
+              - text: "19"
+              - generic [ref=f1e890]: / 19
+            - paragraph [ref=f1e891]: 100% complete
+          - generic [ref=f1e892]:
+            - paragraph [ref=f1e893]: Exercises
+            - paragraph [ref=f1e894]:
+              - text: "6"
+              - generic [ref=f1e895]: / 6
+        - generic [ref=f1e897]:
+          - paragraph [ref=f1e898]: Session Timer
+          - generic [ref=f1e903]:
+            - paragraph [ref=f1e904]: 00:00
+            - paragraph [ref=f1e905]: Elapsed
+          - generic [ref=f1e906]:
+            - button "Pause" [ref=f1e907] [cursor=pointer]
+            - button "Reset" [ref=f1e911] [cursor=pointer]

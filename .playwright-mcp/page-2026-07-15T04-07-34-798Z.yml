@@ -1,0 +1,57 @@
+- generic [ref=e33]:
+  - complementary [ref=e34]:
+    - generic [ref=e36]:
+      - generic [ref=e37]: G
+      - generic [ref=e39]:
+        - heading "GymAI" [level=1] [ref=e40]
+        - paragraph [ref=e41]: Performance Coach
+    - navigation [ref=e42]:
+      - link "Dashboard" [ref=e43] [cursor=pointer]:
+        - /url: /dashboard
+      - link "My Plan" [ref=e49] [cursor=pointer]:
+        - /url: /plan-generator
+      - link "Workouts" [ref=e54] [cursor=pointer]:
+        - /url: /workouts
+      - link "Activity" [ref=e59] [cursor=pointer]:
+        - /url: /activity
+      - link "Nutrition" [ref=e64] [cursor=pointer]:
+        - /url: /nutrition
+      - link "Wellness" [ref=e69] [cursor=pointer]:
+        - /url: /wellness
+      - link "Calendar" [ref=e74] [cursor=pointer]:
+        - /url: /calendar
+      - link "About Myself" [ref=e79] [cursor=pointer]:
+        - /url: /about-myself
+      - link "General Analysis" [ref=e84] [cursor=pointer]:
+        - /url: /general-analysis
+      - link "Coach Chat" [ref=e89] [cursor=pointer]:
+        - /url: /chatbot
+    - generic [ref=e94]:
+      - generic [ref=e95]:
+        - generic [ref=e96]: S
+        - generic [ref=e97]:
+          - paragraph [ref=e98]: Shiv
+          - paragraph [ref=e99]: Pro plan
+      - button "Sign Out" [ref=e100] [cursor=pointer]
+  - main [ref=e105]:
+    - generic [ref=e154]:
+      - generic [ref=e155]:
+        - paragraph [ref=e156]: Step 1 of 3
+        - heading "What's your goal?" [level=1] [ref=e157]
+      - generic [ref=e160]:
+        - generic [ref=e161]:
+          - generic [ref=e162]: Primary goal
+          - generic [ref=e163]:
+            - button "Build Muscle" [active] [ref=e164] [cursor=pointer]
+            - button "Lose Fat" [ref=e165] [cursor=pointer]
+            - button "Get Stronger" [ref=e166] [cursor=pointer]
+            - button "General Fitness" [ref=e167] [cursor=pointer]
+        - generic [ref=e168]:
+          - generic [ref=e169]: Secondary goals (optional)
+          - generic [ref=e170]:
+            - button "Lose weight" [ref=e171] [cursor=pointer]
+            - button "Gain muscle" [ref=e172] [cursor=pointer]
+            - button "Get stronger" [ref=e173] [cursor=pointer]
+            - button "Improve overall health" [ref=e174] [cursor=pointer]
+            - button "Reduce stress" [ref=e175] [cursor=pointer]
+      - button "Continue" [ref=e178] [cursor=pointer]

@@ -1,0 +1,57 @@
+- generic [ref=e33]:
+  - complementary [ref=e34]:
+    - generic [ref=e36]:
+      - generic [ref=e37]: G
+      - generic [ref=e39]:
+        - heading "GymAI" [level=1] [ref=e40]
+        - paragraph [ref=e41]: Performance Coach
+    - navigation [ref=e42]:
+      - link "Dashboard" [active] [ref=e43] [cursor=pointer]:
+        - /url: /dashboard
+      - link "My Plan" [ref=e49] [cursor=pointer]:
+        - /url: /plan-generator
+      - link "Workouts" [ref=e54] [cursor=pointer]:
+        - /url: /workouts
+      - link "Activity" [ref=e59] [cursor=pointer]:
+        - /url: /activity
+      - link "Nutrition" [ref=e64] [cursor=pointer]:
+        - /url: /nutrition
+      - link "Wellness" [ref=e69] [cursor=pointer]:
+        - /url: /wellness
+      - link "Calendar" [ref=e74] [cursor=pointer]:
+        - /url: /calendar
+      - link "About Myself" [ref=e79] [cursor=pointer]:
+        - /url: /about-myself
+      - link "General Analysis" [ref=e84] [cursor=pointer]:
+        - /url: /general-analysis
+      - link "Coach Chat" [ref=e89] [cursor=pointer]:
+        - /url: /chatbot
+    - generic [ref=e94]:
+      - generic [ref=e95]:
+        - generic [ref=e96]: S
+        - generic [ref=e97]:
+          - paragraph [ref=e98]: Shiv
+          - paragraph [ref=e99]: Pro plan
+      - button "Sign Out" [ref=e100] [cursor=pointer]
+  - main [ref=e105]:
+    - generic [ref=e386]:
+      - generic [ref=e387]:
+        - paragraph [ref=e388]: Welcome back
+        - heading "Dashboard" [level=1] [ref=e389]
+      - generic [ref=e397]:
+        - heading "Rest Day" [level=3] [ref=e398]
+        - paragraph [ref=e399]: Today is a rest day. Focus on recovery, stretching, and nutrition.
+        - paragraph [ref=e400]: "Next up: Upper Body (Thursday)"
+      - generic [ref=e401]:
+        - generic [ref=e402]:
+          - paragraph [ref=e407]: "0"
+          - paragraph [ref=e408]: Workouts Today
+        - generic [ref=e409]:
+          - paragraph [ref=e414]: "0"
+          - paragraph [ref=e415]: Activities
+        - generic [ref=e416]:
+          - paragraph [ref=e421]: "0"
+          - paragraph [ref=e422]: Macro Entries
+        - generic [ref=e423]:
+          - paragraph [ref=e428]: "0"
+          - paragraph [ref=e429]: Wellness

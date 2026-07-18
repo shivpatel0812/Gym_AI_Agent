@@ -1,0 +1,65 @@
+- generic [ref=e33]:
+  - complementary [ref=e34]:
+    - generic [ref=e36]:
+      - generic [ref=e37]: G
+      - generic [ref=e39]:
+        - heading "GymAI" [level=1] [ref=e40]
+        - paragraph [ref=e41]: Performance Coach
+    - navigation [ref=e42]:
+      - link "Dashboard" [ref=e43] [cursor=pointer]:
+        - /url: /dashboard
+      - link "My Plan" [ref=e49] [cursor=pointer]:
+        - /url: /plan-generator
+      - link "Workouts" [ref=e54] [cursor=pointer]:
+        - /url: /workouts
+      - link "Activity" [ref=e59] [cursor=pointer]:
+        - /url: /activity
+      - link "Nutrition" [ref=e64] [cursor=pointer]:
+        - /url: /nutrition
+      - link "Wellness" [ref=e69] [cursor=pointer]:
+        - /url: /wellness
+      - link "Calendar" [ref=e74] [cursor=pointer]:
+        - /url: /calendar
+      - link "About Myself" [ref=e79] [cursor=pointer]:
+        - /url: /about-myself
+      - link "General Analysis" [ref=e84] [cursor=pointer]:
+        - /url: /general-analysis
+      - link "Coach Chat" [ref=e89] [cursor=pointer]:
+        - /url: /chatbot
+    - generic [ref=e94]:
+      - generic [ref=e95]:
+        - generic [ref=e96]: S
+        - generic [ref=e97]:
+          - paragraph [ref=e98]: Shiv
+          - paragraph [ref=e99]: Pro plan
+      - button "Sign Out" [ref=e100] [cursor=pointer]
+  - main [ref=e105]:
+    - generic [ref=e154]:
+      - generic [ref=e155]:
+        - paragraph [ref=e156]: Step 3 of 3
+        - heading "Your setup" [level=1] [ref=e242]
+      - generic [ref=e243]:
+        - generic [ref=e244]:
+          - generic [ref=e245]: Experience level
+          - generic [ref=e246]:
+            - button [ref=e247] [cursor=pointer]:
+              - paragraph [ref=e248]: Beginner
+              - paragraph [ref=e249]: New to the gym or returning after a long break
+            - button [ref=e250] [cursor=pointer]:
+              - paragraph [ref=e251]: Intermediate
+              - paragraph [ref=e252]: Consistent training with solid form
+            - button [ref=e253] [cursor=pointer]:
+              - paragraph [ref=e254]: Advanced
+              - paragraph [ref=e255]: Experienced lifter looking to optimize
+        - generic [ref=e256]:
+          - generic [ref=e257]: Available equipment
+          - generic [ref=e258]:
+            - button "Full Gym" [active] [ref=e259] [cursor=pointer]
+            - button "Dumbbells Only" [ref=e260] [cursor=pointer]
+            - button "Barbell + Rack" [ref=e261] [cursor=pointer]
+            - button "Cable Machine" [ref=e262] [cursor=pointer]
+            - button "Bodyweight Only" [ref=e263] [cursor=pointer]
+            - button "Home Gym (Dumbbells + Bench)" [ref=e264] [cursor=pointer]
+      - generic [ref=e176]:
+        - button "Back" [ref=e238] [cursor=pointer]
+        - button "Generate Plan" [ref=e265] [cursor=pointer]

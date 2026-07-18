@@ -39,13 +39,13 @@ export default function WellnessPage() {
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto">
       <div className="mb-4 sm:mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold text-[#F9FAFB] mb-1.5 sm:mb-2">Wellness</h1>
-        <p className="text-xs sm:text-sm text-[#9CA3AF]">
+        <h1 className="text-2xl sm:text-3xl font-bold text-[#FFFFFF] mb-1.5 sm:mb-2">Wellness</h1>
+        <p className="text-xs sm:text-sm text-[#8E8E93]">
           Track your mental and physical well-being
         </p>
       </div>
 
-      <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-3 mb-6 sm:mb-8 bg-[#1A1F3A] p-1.5 rounded-xl border border-[#374151] w-full sm:w-fit">
+      <div className="grid grid-cols-2 sm:inline-flex p-1 rounded-xl bg-[#1C1C1E] border border-[#2A2D35] mb-6 sm:mb-8 w-full sm:w-auto gap-1">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -53,14 +53,14 @@ export default function WellnessPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2.5 sm:py-2.5 rounded-lg transition-all duration-200 text-xs sm:text-sm ${
+              className={`flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all ${
                 isActive
-                  ? "bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white shadow-lg shadow-[#6366F1]/20"
-                  : "text-[#9CA3AF] hover:text-[#F9FAFB] hover:bg-[#374151]/30"
+                  ? "bg-[#FF6B35] text-white shadow-sm"
+                  : "text-[#8E8E93] hover:text-[#FFFFFF]"
               }`}
             >
               <Icon className="text-base sm:text-lg" />
-              <span className="font-semibold whitespace-nowrap">{tab.label}</span>
+              <span className="whitespace-nowrap">{tab.label}</span>
             </button>
           );
         })}

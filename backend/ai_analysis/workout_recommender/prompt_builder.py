@@ -26,7 +26,10 @@ class PromptBuilder:
         max_reps_per_weight: Optional[Dict[float, int]] = None,
         current_workout_exercises: Optional[List[Dict]] = None,
         failed_attempts: Optional[List[Dict]] = None,
-        deload_analysis: Optional[Dict] = None
+        deload_analysis: Optional[Dict] = None,
+        plan_target_sets: Optional[int] = None,
+        plan_target_reps: Optional[int] = None,
+        plan_notes: Optional[str] = None
     ) -> str:
         """Build prompt for per-exercise recommendation."""
         
@@ -47,6 +50,19 @@ USER CONTEXT:
             if position_in_workout is not None:
                 prompt += f" (Exercise #{position_in_workout + 1} in session)"
             prompt += "\n"
+
+        if plan_target_sets or plan_target_reps:
+            prompt += f"\nPLAN CONTEXT:\n"
+            if plan_target_sets:
+                prompt += f"- The user's workout plan prescribes {plan_target_sets} sets"
+                if plan_target_reps:
+                    prompt += f" of {plan_target_reps} reps"
+                prompt += "\n"
+            elif plan_target_reps:
+                prompt += f"- The user's workout plan prescribes {plan_target_reps} reps per set\n"
+            if plan_notes:
+                prompt += f"- Coach notes: {plan_notes}\n"
+            prompt += "Generate recommendations that follow this structure while applying progressive overload.\n"
         
         stats = exercise_stats.get("stats", {})
         time_weighted = exercise_stats.get("time_weighted_stats", {})

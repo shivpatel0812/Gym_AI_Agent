@@ -7,6 +7,7 @@ import {
   MdFavorite,
 } from "react-icons/md";
 import type { DashboardStats } from "../types";
+import TodaysWorkoutCard from "../components/dashboard/TodaysWorkoutCard";
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
@@ -48,57 +49,58 @@ export default function DashboardPage() {
       label: "Workouts Today",
       value: stats.workouts,
       icon: MdFitnessCenter,
-      gradient: "from-[#6366F1] to-[#8B5CF6]",
+      iconBg: "bg-[#FF6B35]/15",
+      iconColor: "text-[#FF6B35]",
     },
     {
       label: "Activities",
       value: stats.activities,
       icon: MdDirectionsRun,
-      gradient: "from-[#10B981] to-[#059669]",
+      iconBg: "bg-[#5EEAD4]/15",
+      iconColor: "text-[#5EEAD4]",
     },
     {
       label: "Macro Entries",
       value: stats.macros,
       icon: MdRestaurant,
-      gradient: "from-[#F59E0B] to-[#D97706]",
+      iconBg: "bg-[#F5C542]/15",
+      iconColor: "text-[#F5C542]",
     },
     {
       label: "Wellness",
       value: stats.stress,
       icon: MdFavorite,
-      gradient: "from-[#8B5CF6] to-[#7C3AED]",
+      iconBg: "bg-[#C4B5FD]/15",
+      iconColor: "text-[#C4B5FD]",
     },
   ];
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="mb-6">
-        <p className="text-[#9CA3AF] text-sm mb-1">Welcome Back</p>
-        <h1 className="text-3xl font-bold text-[#F9FAFB]">Dashboard</h1>
+    <div className="p-4 sm:p-6 lg:p-8 max-w-[1200px] mx-auto">
+      <div className="mb-8">
+        <p className="text-[#8E8E93] text-sm mb-1 font-medium">Welcome back</p>
+        <h1 className="text-3xl font-bold text-white tracking-tight">Dashboard</h1>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+      <TodaysWorkoutCard />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {statCards.map((stat) => {
           const Icon = stat.icon;
           return (
-            <div key={stat.label} className="group">
+            <div
+              key={stat.label}
+              className="bg-[#161A22] border border-[#2A2D35] rounded-2xl p-5"
+            >
               <div
-                className={`bg-gradient-to-br ${stat.gradient} rounded-xl p-6 shadow-lg hover:shadow-xl transition-all h-full`}
+                className={`w-11 h-11 rounded-xl ${stat.iconBg} flex items-center justify-center mb-4`}
               >
-                <div className="flex flex-col h-full">
-                  <div className="w-12 h-12 rounded-lg bg-white/20 flex items-center justify-center mb-4 flex-shrink-0">
-                    <Icon className="text-white text-2xl" />
-                  </div>
-                  <div className="mt-auto">
-                    <p className="text-white text-4xl font-bold mb-1">
-                      {loading ? "..." : stat.value}
-                    </p>
-                    <p className="text-white/90 text-sm font-semibold">
-                      {stat.label}
-                    </p>
-                  </div>
-                </div>
+                <Icon className={`${stat.iconColor} text-xl`} />
               </div>
+              <p className="text-3xl font-bold text-white mb-1">
+                {loading ? "—" : stat.value}
+              </p>
+              <p className="text-sm font-medium text-[#8E8E93]">{stat.label}</p>
             </div>
           );
         })}

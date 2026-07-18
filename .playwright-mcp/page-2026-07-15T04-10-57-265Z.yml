@@ -1,0 +1,58 @@
+- generic [ref=e33]:
+  - complementary [ref=e34]:
+    - generic [ref=e36]:
+      - generic [ref=e37]: G
+      - generic [ref=e39]:
+        - heading "GymAI" [level=1] [ref=e40]
+        - paragraph [ref=e41]: Performance Coach
+    - navigation [ref=e42]:
+      - link "Dashboard" [ref=e43] [cursor=pointer]:
+        - /url: /dashboard
+      - link "My Plan" [ref=e49] [cursor=pointer]:
+        - /url: /plan-generator
+      - link "Workouts" [ref=e54] [cursor=pointer]:
+        - /url: /workouts
+      - link "Activity" [ref=e59] [cursor=pointer]:
+        - /url: /activity
+      - link "Nutrition" [ref=e64] [cursor=pointer]:
+        - /url: /nutrition
+      - link "Wellness" [ref=e69] [cursor=pointer]:
+        - /url: /wellness
+      - link "Calendar" [ref=e74] [cursor=pointer]:
+        - /url: /calendar
+      - link "About Myself" [ref=e79] [cursor=pointer]:
+        - /url: /about-myself
+      - link "General Analysis" [ref=e84] [cursor=pointer]:
+        - /url: /general-analysis
+      - link "Coach Chat" [ref=e89] [cursor=pointer]:
+        - /url: /chatbot
+    - generic [ref=e94]:
+      - generic [ref=e95]:
+        - generic [ref=e96]: S
+        - generic [ref=e97]:
+          - paragraph [ref=e98]: Shiv
+          - paragraph [ref=e99]: Pro plan
+      - button "Sign Out" [ref=e100] [cursor=pointer]
+  - main [ref=e105]:
+    - generic [ref=e431]:
+      - heading "Workouts" [level=1] [ref=e433]
+      - generic [ref=e434]:
+        - button "Sessions" [ref=e435] [cursor=pointer]
+        - button "Exercises" [ref=e437] [cursor=pointer]
+        - button "Splits" [active] [ref=e438] [cursor=pointer]
+      - generic [ref=e787]:
+        - generic [ref=e788]:
+          - heading "Workout Splits" [level=2] [ref=e789]
+          - button "Create" [ref=e790] [cursor=pointer]
+        - generic [ref=e794]:
+          - generic [ref=e796]:
+            - heading "push,pull,legs" [level=3] [ref=e801]
+            - generic [ref=e802]:
+              - generic [ref=e803]: push
+              - generic [ref=e804]: pull
+              - generic [ref=e805]: legs
+          - generic [ref=e807]:
+            - heading "Intermediate Full Gym Muscle Building" [level=3] [ref=e812]
+            - generic [ref=e813]:
+              - generic [ref=e814]: Upper Body
+              - generic [ref=e815]: Lower Body

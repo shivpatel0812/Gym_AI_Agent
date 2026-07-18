@@ -29,10 +29,13 @@ class RecommendationEngine:
         position_in_workout: Optional[int],
         max_reps_per_weight: Optional[Dict[float, int]] = None,
         current_workout_exercises: Optional[List[Dict]] = None,
-        failed_attempts: Optional[List[Dict]] = None
+        failed_attempts: Optional[List[Dict]] = None,
+        plan_target_sets: Optional[int] = None,
+        plan_target_reps: Optional[int] = None,
+        plan_notes: Optional[str] = None
     ) -> Dict[str, Any]:
         """Generate AI recommendation for an exercise."""
-        
+
         # Build recommendation prompt
         prompt = self.prompt_builder.build_recommendation_prompt(
             exercise_name=exercise_name,
@@ -44,7 +47,10 @@ class RecommendationEngine:
             position_in_workout=position_in_workout,
             max_reps_per_weight=max_reps_per_weight,
             current_workout_exercises=current_workout_exercises,
-            failed_attempts=failed_attempts
+            failed_attempts=failed_attempts,
+            plan_target_sets=plan_target_sets,
+            plan_target_reps=plan_target_reps,
+            plan_notes=plan_notes
         )
         
         try:

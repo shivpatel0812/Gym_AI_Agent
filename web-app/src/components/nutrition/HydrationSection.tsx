@@ -108,12 +108,12 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
       {showForm && (
         <Card className="mb-8 p-6 lg:p-8">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-[#F9FAFB]">
+            <h3 className="text-lg font-semibold text-[#FFFFFF]">
               {editingEntryId ? 'Edit Hydration' : 'Log Hydration'}
             </h3>
             <button
               onClick={handleCancel}
-              className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors"
+              className="text-[#8E8E93] hover:text-[#FFFFFF] transition-colors"
             >
               <MdClose size={20} />
             </button>
@@ -159,19 +159,19 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
 
       {entries.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-[#9CA3AF] text-sm">No hydration entries yet. Start tracking your water intake!</p>
+          <p className="text-[#8E8E93] text-sm">No hydration entries yet. Start tracking your water intake!</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {entries.map((entry) => (
-            <Card key={entry.id} className="hover:border-[#6366F1]/50 transition-all duration-200">
+            <Card key={entry.id} className="hover:border-[#FF6B35]/50 transition-all duration-200">
               <div className="flex flex-col h-full">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1">
-                    <h3 className="text-base font-semibold text-[#F9FAFB] mb-1">{entry.date}</h3>
+                    <h3 className="text-base font-semibold text-[#FFFFFF] mb-1">{entry.date}</h3>
                     <div className="flex items-center gap-2">
-                      <MdWaterDrop className="text-[#3B82F6] text-2xl" />
-                      <span className="text-2xl font-bold text-[#3B82F6]">
+                      <MdWaterDrop className="text-[#FF6B35] text-2xl" />
+                      <span className="text-2xl font-bold text-[#FF6B35]">
                         {formatAmount(entry.amount_cups)}
                       </span>
                     </div>
@@ -185,7 +185,7 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
                 </div>
                 
                 {entry.notes && (
-                  <p className="text-sm text-[#9CA3AF] mt-auto pt-2 border-t border-[#374151]">{entry.notes}</p>
+                  <p className="text-sm text-[#8E8E93] mt-auto pt-2 border-t border-[#2A2D35]">{entry.notes}</p>
                 )}
               </div>
             </Card>

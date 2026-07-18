@@ -1,37 +1,56 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import apiClient from "@/lib/api-client";
-import { WorkoutSession, Exercise, Split, SessionExercise } from "@/types";
+import { WorkoutSession, Exercise, Split, SessionExercise, TodaysWorkout } from "@/types";
 import Button from "@/components/ui/Button";
-import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
 import {
   MdAdd,
   MdDelete,
-  MdFitnessCenter,
   MdClose,
-  MdEdit,
   MdKeyboardArrowDown,
   MdSearch,
   MdArrowBack,
-  MdAccessTime,
+  MdChevronRight,
+  MdBolt,
+  MdCheck,
+  MdSwapHoriz,
+  MdExpandMore,
+  MdFitnessCenter,
+  MdPlayArrow,
+  MdSelfImprovement,
 } from "react-icons/md";
 import defaultExercises, {
-  categories,
   categoryToMuscleGroup,
+  categories,
 } from "@/data/defaultExercises";
+
+export interface SessionSummaryData {
+  totalVolume: number;
+  completedSets: number;
+  totalSets: number;
+  completedExercises: number;
+  totalExercises: number;
+  completionPercent: number;
+  isActive: boolean;
+}
 
 interface SessionsSectionProps {
   exercises: Exercise[];
   splits: Split[];
   editSessionId?: string | null;
+  onSessionMetaChange?: (subtitle: string | null) => void;
+  onSessionSummaryChange?: (data: SessionSummaryData | null) => void;
 }
 
 export default function SessionsSection({
   exercises,
   splits,
   editSessionId: propEditSessionId,
+  onSessionMetaChange,
+  onSessionSummaryChange,
 }: SessionsSectionProps) {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -55,20 +74,20 @@ export default function SessionsSection({
   const [showDayDropdown, setShowDayDropdown] = useState(false);
   const splitDropdownRef = useRef<HTMLDivElement>(null);
   const dayDropdownRef = useRef<HTMLDivElement>(null);
-  const [showExerciseDropdown, setShowExerciseDropdown] = useState(false);
   const [exerciseSearchQuery, setExerciseSearchQuery] = useState("");
   const exerciseDropdownRef = useRef<HTMLDivElement>(null);
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [selectedEquipment, setSelectedEquipment] = useState<string | null>(
-    null
-  );
-  const [exerciseTab, setExerciseTab] = useState<"browse" | "search">("browse");
   const exerciseSelectionRef = useRef<HTMLDivElement>(null);
   const [lastExerciseData, setLastExerciseData] = useState<Record<string, any>>({});
   const [maxExerciseData, setMaxExerciseData] = useState<Record<string, any>>({});
   const [aiRecommendations, setAiRecommendations] = useState<Record<string, any>>({});
   const [aiRecommendationLoading, setAiRecommendationLoading] = useState<Record<string, boolean>>({});
-  const [expandedRecommendations, setExpandedRecommendations] = useState<Record<string, boolean>>({});
+  const [collapsedExercises, setCollapsedExercises] = useState<Record<number, boolean>>({});
+  const [showExercisePicker, setShowExercisePicker] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [pickerMode, setPickerMode] = useState<"browse" | "search">("browse");
+  const [selectedBodyPart, setSelectedBodyPart] = useState<string | null>(null);
+  const [equipmentFilter, setEquipmentFilter] = useState<string | null>(null);
+  const [showSessionDetails, setShowSessionDetails] = useState(false);
   const [isAutoSaving, setIsAutoSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -79,12 +98,90 @@ export default function SessionsSection({
     sessionsLogged: number;
     sessionsNeeded: number;
   }>({ hasSetup: false, needsSetup: false, isGenerating: false, sessionsLogged: 0, sessionsNeeded: 3 });
-  // Phase 1: Enhanced tracking state
-  const [showEnhancedTracking, setShowEnhancedTracking] = useState<Record<number, boolean>>({});
+  const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null);
+  const [todaysPlanWorkout, setTodaysPlanWorkout] = useState<TodaysWorkout | null>(null);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const handleStartPlan = useCallback(async () => {
+    try {
+      const res = await apiClient.get("/api/workout-plan/today");
+      const todayData = res.data;
+      if (todayData.status !== "workout_day" || !todayData.exercises) return;
+
+      // Pre-populate session form with plan exercises
+      const planExercises = todayData.exercises.map((ex: any) => {
+        const isCardio = ex.exercise_id?.startsWith("default-cardio");
+        if (isCardio) {
+          return {
+            exercise_id: ex.exercise_id,
+            exercise_name: ex.exercise_name,
+            time: undefined,
+            speed: undefined,
+          };
+        }
+        // Create empty sets matching plan prescription
+        const sets = Array.from({ length: ex.sets || 3 }, (_, i) => ({
+          set_number: i + 1,
+          reps: 0,
+          weight: undefined,
+          completed: false,
+        }));
+        return {
+          exercise_id: ex.exercise_id,
+          exercise_name: ex.exercise_name,
+          sets,
+        };
+      });
+
+      setFormData({
+        date: new Date().toISOString().split("T")[0],
+        split_id: "",
+        split_name: todayData.plan_name || "",
+        split_day: todayData.day_name || "",
+        exercises: planExercises,
+        notes: "",
+      });
+      setShowForm(true);
+
+      // Fetch AI recommendations for each exercise
+      planExercises.forEach((ex: any, idx: number) => {
+        const planEx = todayData.exercises[idx];
+        fetchAiRecommendation(
+          ex.exercise_id,
+          ex.exercise_name,
+          idx,
+          planEx?.sets,
+          planEx?.reps,
+          planEx?.notes
+        );
+      });
+
+      // Clear URL params
+      setSearchParams({}, { replace: true });
+    } catch (error) {
+      console.error("Error loading plan workout:", error);
+    }
+  }, []);
+
+  const fetchTodaysPlan = useCallback(async () => {
+    try {
+      const res = await apiClient.get("/api/workout-plan/today");
+      setTodaysPlanWorkout(res.data);
+    } catch {
+      setTodaysPlanWorkout(null);
+    }
+  }, []);
 
   useEffect(() => {
     fetchSessions();
     checkAiSummaryStatus();
+    fetchTodaysPlan();
+
+    // Check for startPlan URL param
+    if (searchParams.get("startPlan") === "true") {
+      handleStartPlan();
+    }
   }, []);
 
   // Auto-save functionality
@@ -220,17 +317,20 @@ export default function SessionsSection({
 
   // Fetch AI recommendation for an exercise
   const fetchAiRecommendation = async (
-    exerciseId: string, 
-    exerciseName: string, 
-    positionInWorkout: number
+    exerciseId: string,
+    exerciseName: string,
+    positionInWorkout: number,
+    planTargetSets?: number,
+    planTargetReps?: number,
+    planNotes?: string
   ) => {
     // Don't fetch if AI isn't set up
     if (!aiSummaryStatus.hasSetup && !aiSummaryStatus.needsSetup) {
       return;
     }
-    
+
     setAiRecommendationLoading(prev => ({ ...prev, [exerciseId]: true }));
-    
+
     try {
       // Send exercises already done in current workout (for fatigue consideration)
       const currentExercises = formData.exercises.map(ex => ({
@@ -238,24 +338,22 @@ export default function SessionsSection({
         exercise_name: ex.exercise_name,
         sets: ex.sets || []
       }));
-      
+
       const response = await apiClient.post(`/api/workout-sessions/ai-recommendation/${exerciseId}`, {
         exercise_name: exerciseName,
         split_name: formData.split_name || undefined,
         split_day: undefined,
         position_in_workout: positionInWorkout,
-        current_workout_exercises: currentExercises
+        current_workout_exercises: currentExercises,
+        plan_target_sets: planTargetSets,
+        plan_target_reps: planTargetReps,
+        plan_notes: planNotes,
       });
-      
+
       if (response.data && response.data.status === "success") {
         setAiRecommendations(prev => ({
           ...prev,
           [exerciseId]: response.data.recommendation
-        }));
-        // Auto-expand when recommendation is first loaded
-        setExpandedRecommendations(prev => ({
-          ...prev,
-          [exerciseId]: true
         }));
       }
     } catch (error) {
@@ -299,20 +397,22 @@ export default function SessionsSection({
       }
       if (
         exerciseDropdownRef.current &&
-        !exerciseDropdownRef.current.contains(event.target as Node)
+        !exerciseDropdownRef.current.contains(event.target as Node) &&
+        exerciseSelectionRef.current &&
+        !exerciseSelectionRef.current.contains(event.target as Node)
       ) {
-        setShowExerciseDropdown(false);
+        setShowExercisePicker(false);
       }
     };
 
-    if (showSplitDropdown || showDayDropdown || showExerciseDropdown) {
+    if (showSplitDropdown || showDayDropdown || showExercisePicker) {
       document.addEventListener("mousedown", handleClickOutside);
     }
 
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
     };
-  }, [showSplitDropdown, showDayDropdown, showExerciseDropdown]);
+  }, [showSplitDropdown, showDayDropdown, showExercisePicker]);
 
   const fetchSessions = async () => {
     try {
@@ -412,8 +512,7 @@ export default function SessionsSection({
       ],
     });
     setExerciseSearchQuery("");
-    setSelectedCategory(null);
-    setSelectedEquipment(null);
+    setCategoryFilter(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -456,11 +555,10 @@ export default function SessionsSection({
         await apiClient.post("/api/workout-sessions", payload);
       }
 
-      // Keep recommendations but collapse them after saving
-      setExpandedRecommendations({});
-
+      // Keep recommendations after saving
       resetForm();
       fetchSessions();
+      fetchTodaysPlan();
     } catch (error) {
       console.error("Error saving session:", error);
     }
@@ -477,16 +575,16 @@ export default function SessionsSection({
     });
     setEditingSessionId(null);
     setShowForm(false);
-    setShowExerciseDropdown(false);
+    setShowExercisePicker(false);
     setExerciseSearchQuery("");
-    setSelectedCategory(null);
-    setSelectedEquipment(null);
+    setCategoryFilter(null);
+    setPickerMode("browse");
+    setSelectedBodyPart(null);
+    setEquipmentFilter(null);
     setLastExerciseData({});
     setMaxExerciseData({});
-    // Don't clear recommendations - keep them visible but collapsed
+    // Don't clear recommendations - keep them visible
     setAiRecommendationLoading({});
-    // Collapse all recommendations when starting a new workout or after saving
-    setExpandedRecommendations({});
     // Clear auto-save state
     setLastSaved(null);
     setIsAutoSaving(false);
@@ -517,1061 +615,1482 @@ export default function SessionsSection({
       try {
         await apiClient.delete(`/api/workout-sessions/${sessionId}`);
         fetchSessions();
+        fetchTodaysPlan();
       } catch (error) {
         console.error("Error deleting session:", error);
       }
     }
   };
 
-  const formatLastTime = (dateString: string) => {
-    const date = new Date(dateString);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const compareDate = new Date(date);
-    compareDate.setHours(0, 0, 0, 0);
-    
-    const diffTime = today.getTime() - compareDate.getTime();
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    
-    if (diffDays === 0) return "Today";
-    if (diffDays === 1) return "Yesterday";
-    if (diffDays < 7) return `${diffDays} days ago`;
-    if (diffDays < 30) {
-      const weeks = Math.floor(diffDays / 7);
-      return `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+  const formatDateBadge = (dateStr: string) => {
+    try {
+      const date = new Date(dateStr + "T00:00:00");
+      return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    } catch {
+      return dateStr;
     }
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined 
-    });
   };
+
+  const getDateBadgeColors = (index: number) => {
+    const palettes = [
+      { bg: "bg-[#FF6B35]/15", text: "text-[#FF6B35]" },
+      { bg: "bg-[#5EEAD4]/15", text: "text-[#5EEAD4]" },
+      { bg: "bg-[#F5C542]/15", text: "text-[#F5C542]" },
+      { bg: "bg-[#C4B5FD]/15", text: "text-[#C4B5FD]" },
+    ];
+    return palettes[index % palettes.length];
+  };
+
+  const applyAiSets = (exerciseId: string, exerciseIdx: number) => {
+    const rec = aiRecommendations[exerciseId];
+    if (!rec?.sets || !Array.isArray(rec.sets)) return;
+    const newExercises = [...formData.exercises];
+    newExercises[exerciseIdx] = {
+      ...newExercises[exerciseIdx],
+      sets: rec.sets.map((s: any, i: number) => ({
+        set_number: s.set_number || i + 1,
+        reps: s.reps || 0,
+        weight: s.weight,
+        completed: undefined,
+      })),
+    };
+    setFormData({ ...formData, exercises: newExercises });
+  };
+
+  const sessionProgress = useMemo(() => {
+    const exerciseCount = formData.exercises.length;
+    let totalSets = 0;
+    let doneSets = 0;
+    let doneExercises = 0;
+    for (const ex of formData.exercises) {
+      if (Array.isArray(ex.sets) && ex.sets.length > 0) {
+        totalSets += ex.sets.length;
+        const completed = ex.sets.filter(
+          (s) => s.completed !== false && ((s.reps || 0) > 0 || (s.weight || 0) > 0)
+        ).length;
+        doneSets += completed;
+        if (completed > 0) doneExercises += 1;
+      } else if (ex.time) {
+        totalSets += 1;
+        doneSets += 1;
+        doneExercises += 1;
+      }
+    }
+    const pct = totalSets > 0 ? Math.round((doneSets / totalSets) * 100) : 0;
+    return { exerciseCount, totalSets, doneSets, doneExercises, pct };
+  }, [formData.exercises]);
+
+  const currentVolume = useMemo(() => {
+    let volume = 0;
+    for (const ex of formData.exercises) {
+      if (Array.isArray(ex.sets)) {
+        for (const s of ex.sets) {
+          volume += (s.weight || 0) * (s.reps || 0);
+        }
+      }
+    }
+    return volume;
+  }, [formData.exercises]);
+
+  // Track session start time
+  useEffect(() => {
+    if (showForm) {
+      setSessionStartTime(new Date());
+    } else {
+      setSessionStartTime(null);
+    }
+  }, [showForm]);
+
+  // Push summary data to parent
+  useEffect(() => {
+    if (!onSessionSummaryChange) return;
+    if (showForm) {
+      onSessionSummaryChange({
+        totalVolume: currentVolume,
+        completedSets: sessionProgress.doneSets,
+        totalSets: sessionProgress.totalSets,
+        completedExercises: sessionProgress.doneExercises,
+        totalExercises: sessionProgress.exerciseCount,
+        completionPercent: sessionProgress.pct,
+        isActive: true,
+      });
+    } else {
+      onSessionSummaryChange(null);
+    }
+  }, [showForm, currentVolume, sessionProgress, onSessionSummaryChange]);
+
+  useEffect(() => {
+    if (!onSessionMetaChange) return;
+    if (showForm) {
+      const name = formData.split_name || formData.split_day || "Workout Session";
+      const dateLabel = formData.date
+        ? new Date(formData.date + "T00:00:00").toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          })
+        : "";
+      onSessionMetaChange(`${name} · ${dateLabel}`);
+    } else {
+      onSessionMetaChange(null);
+    }
+  }, [showForm, formData.split_name, formData.split_day, formData.date, onSessionMetaChange]);
+
+  const getSessionVolume = (session: WorkoutSession) => {
+    let volume = 0;
+    for (const ex of session.exercises || []) {
+      if (Array.isArray(ex.sets)) {
+        for (const s of ex.sets) {
+          const weight = s.weight || 0;
+          const reps = s.reps || 0;
+          volume += weight * reps;
+        }
+      }
+    }
+    return volume;
+  };
+
+  const formatExerciseSummary = (ex: any) => {
+    if (ex.time) {
+      return `${ex.time} min${ex.speed ? ` · ${ex.speed}` : ""}`;
+    }
+    if (Array.isArray(ex.sets) && ex.sets.length > 0) {
+      const setCount = ex.sets.length;
+      const reps = ex.sets.map((s: any) => s.reps || 0);
+      const avgReps = Math.round(reps.reduce((a: number, b: number) => a + b, 0) / reps.length) || 0;
+      const topWeight = Math.max(...ex.sets.map((s: any) => s.weight || 0), 0);
+      if (topWeight > 0) {
+        return `${setCount}x${avgReps} · top ${topWeight} lb`;
+      }
+      return `${setCount} set${setCount > 1 ? "s" : ""}`;
+    }
+    if (ex.sets && typeof ex.sets === "number") {
+      return `${ex.sets}x${ex.reps || 0}${ex.weight ? ` · ${ex.weight} lb` : ""}`;
+    }
+    return "No sets logged";
+  };
+
+
+  const getExerciseCategory = (exerciseId: string, exerciseName: string) => {
+    const fromDefault = defaultExercises.find(
+      (e) => e.id === exerciseId || e.name === exerciseName
+    );
+    if (fromDefault?.category) {
+      return fromDefault.category.charAt(0) + fromDefault.category.slice(1).toLowerCase();
+    }
+    const fromCustom = exercises.find((e) => e.id === exerciseId || e.name === exerciseName);
+    if (fromCustom?.muscle_group) {
+      return fromCustom.muscle_group;
+    }
+    return "Exercise";
+  };
+
+  const getBestSetLabel = (maxData: any) => {
+    if (!maxData?.max_per_set) return null;
+    const entries = Object.entries(maxData.max_per_set) as [string, any][];
+    if (!entries.length) return null;
+    entries.sort((a, b) => ((b[1].weight || 0) - (a[1].weight || 0)));
+    const best = entries[0][1];
+    if (best?.weight == null) return null;
+    return `${best.weight} × ${best.reps || 0}`;
+  };
+
+  const confidencePct = (confidence?: string) => {
+    if (confidence === "high") return "92%";
+    if (confidence === "medium") return "75%";
+    if (confidence === "low") return "58%";
+    return null;
+  };
+
+  const formatShortDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  const getExerciseRole = (index: number) =>
+    index === 0 ? "Primary" : "Secondary";
+
+  const toggleExerciseCollapse = (idx: number) => {
+    setCollapsedExercises((prev) => ({
+      ...prev,
+      [idx]: !prev[idx],
+    }));
+  };
+
+  const getCompletedSetCount = (sets: SessionExercise["sets"]) => {
+    if (!Array.isArray(sets)) return 0;
+    return sets.filter(
+      (s) =>
+        s.completed === true ||
+        (s.completed !== false &&
+          ((s.reps || 0) > 0 || (s.weight || 0) > 0))
+    ).length;
+  };
+
+  const categoryFilterPills = [
+    { id: null, label: "All" },
+    { id: "CHEST", label: "Chest" },
+    { id: "SHOULDERS", label: "Shoulders" },
+    { id: "BACK", label: "Back" },
+    { id: "ARMS", label: "Arms" },
+    { id: "LEGS", label: "Legs" },
+    { id: "CORE", label: "Core" },
+  ];
+
+  // matchesCategoryFilter and filteredPickerExercises removed - filtering is now inline in the picker
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-8">
-        <h2 className="text-2xl font-bold text-[#F9FAFB]">Workout Sessions</h2>
-        <Button onClick={() => setShowForm(true)} icon={<MdAdd />}>
-          Log Workout
-        </Button>
-      </div>
+      {!showForm && (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+          <p className="text-sm text-[#8E8E93] font-medium">
+            {sessions.length} session{sessions.length !== 1 ? "s" : ""} logged
+          </p>
+          <Button onClick={() => setShowForm(true)} icon={<MdAdd />}>
+            New Session
+          </Button>
+        </div>
+      )}
+
+      {/* Today's Workout Banner */}
+      {!showForm && todaysPlanWorkout && todaysPlanWorkout.status === "workout_day" && !todaysPlanWorkout.already_logged && (
+        <div className="mb-5 bg-[#161A22] border border-[#FF6B35]/30 rounded-2xl p-5 sm:p-6">
+          <div className="flex items-start sm:items-center justify-between gap-4 flex-col sm:flex-row">
+            <div className="flex items-center gap-4">
+              <div className="w-11 h-11 rounded-xl bg-[#FF6B35]/15 flex items-center justify-center flex-shrink-0">
+                <MdFitnessCenter className="text-[#FF6B35] text-xl" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-[#FF6B35]/15 text-[#FF6B35] border border-[#FF6B35]/30">
+                    Today
+                  </span>
+                </div>
+                <h3 className="text-base font-bold text-white">
+                  {todaysPlanWorkout.day_name}
+                </h3>
+                <p className="text-sm text-[#8E8E93] mt-0.5">
+                  {todaysPlanWorkout.focus}
+                  {todaysPlanWorkout.exercises && todaysPlanWorkout.exercises.length > 0 && (
+                    <> &middot; {todaysPlanWorkout.exercises.length} exercises</>
+                  )}
+                  {todaysPlanWorkout.estimated_duration_minutes && (
+                    <> &middot; ~{todaysPlanWorkout.estimated_duration_minutes} min</>
+                  )}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleStartPlan}
+              className="px-5 py-2.5 rounded-xl bg-[#FF6B35] text-white text-sm font-bold hover:bg-[#E85A2A] transition-colors flex items-center gap-2 flex-shrink-0 shadow-lg shadow-[#FF6B35]/20"
+            >
+              <MdPlayArrow size={18} />
+              Start This Workout
+            </button>
+          </div>
+
+          {/* Exercise preview */}
+          {todaysPlanWorkout.exercises && todaysPlanWorkout.exercises.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {todaysPlanWorkout.exercises.slice(0, 4).map((ex) => (
+                <span
+                  key={ex.exercise_id + "-" + ex.order}
+                  className="px-3 py-1.5 rounded-lg bg-[#0B0C10]/60 border border-[#2A2D35] text-xs text-[#8E8E93] font-medium"
+                >
+                  {ex.exercise_name}
+                </span>
+              ))}
+              {todaysPlanWorkout.exercises.length > 4 && (
+                <span className="px-3 py-1.5 rounded-lg bg-[#0B0C10]/60 border border-[#2A2D35] text-xs text-[#636366] font-medium">
+                  +{todaysPlanWorkout.exercises.length - 4} more
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Rest Day Banner */}
+      {!showForm && todaysPlanWorkout && todaysPlanWorkout.status === "rest_day" && (
+        <div className="mb-5 bg-[#161A22] border border-[#2A2D35] rounded-2xl px-5 py-4">
+          <div className="flex items-center gap-3">
+            <MdSelfImprovement className="text-[#5EEAD4] text-xl flex-shrink-0" />
+            <p className="text-sm text-[#8E8E93]">
+              <span className="text-[#5EEAD4] font-medium">Rest Day</span>
+              {todaysPlanWorkout.next_workout_day && todaysPlanWorkout.next_workout_name && (
+                <> — Next up: {todaysPlanWorkout.next_workout_name} ({todaysPlanWorkout.next_workout_day})</>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
 
       {showForm && (
-        <Card className="mb-6 sm:mb-8 p-4 sm:p-6 bg-[#1A1F3A] border-none shadow-2xl">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={handleCancel}
-                className="text-[#9CA3AF] hover:text-[#F9FAFB] transition-colors"
-              >
-                <MdArrowBack size={24} />
-              </button>
-              <h3 className="text-xl sm:text-2xl font-bold text-[#F9FAFB]">
-                {editingSessionId
-                  ? "Edit Workout Session"
-                  : "Log Workout Session"}
-              </h3>
+        <div className="mb-6 space-y-5">
+          {/* Active Session Banner */}
+          <div className="bg-[#161A22] rounded-2xl border border-[#2A2D35] p-4 sm:p-5">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  className="text-[#8E8E93] hover:text-white transition-colors"
+                >
+                  <MdArrowBack size={22} />
+                </button>
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-[#5EEAD4]/15 text-[#5EEAD4] border border-[#5EEAD4]/30">
+                      Active Session
+                    </span>
+                  </div>
+                  <h3 className="text-base sm:text-lg font-bold text-white">
+                    {formData.split_name || formData.split_day || "Workout Session"}
+                  </h3>
+                  {sessionStartTime && (
+                    <p className="text-xs text-[#8E8E93] mt-0.5">
+                      Started{" "}
+                      {sessionStartTime.toLocaleTimeString([], {
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {/* Auto-save indicator */}
+                <span className="text-[11px] text-[#636366]">
+                  {isAutoSaving
+                    ? "Saving..."
+                    : lastSaved
+                    ? `Saved ${lastSaved.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                    : ""}
+                </span>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            <div className="w-full h-1.5 rounded-full bg-[#2A2D35] mb-3">
+              <div
+                className="h-full rounded-full bg-[#FF6B35] transition-all duration-300"
+                style={{ width: `${sessionProgress.pct}%` }}
+              />
+            </div>
+
+            {/* Stats and Save row */}
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-[#8E8E93]">
+                {sessionProgress.doneExercises} of{" "}
+                {sessionProgress.exerciseCount || 0} exercises
+                {" \u00B7 "}
+                {sessionProgress.doneSets} of{" "}
+                {sessionProgress.totalSets || 0} sets
+              </p>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#FF6B35]/15 text-[#FF6B35]">
+                  {sessionProgress.pct}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSubmit({
+                      preventDefault: () => {},
+                    } as React.FormEvent)
+                  }
+                  disabled={formData.exercises.length === 0}
+                  className="px-4 py-2 rounded-xl bg-[#FF6B35] text-white text-sm font-semibold hover:bg-[#FF6B35]/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Save Workout
+                </button>
+              </div>
             </div>
           </div>
-          <form onSubmit={handleSubmit} className="space-y-6 sm:space-y-8">
-            {/* Auto-save indicator */}
-            {isAutoSaving && (
-              <div className="flex items-center gap-2 text-sm text-[#10B981] mb-2">
-                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <span>Auto-saving...</span>
-              </div>
-            )}
-            {lastSaved && !isAutoSaving && (
-              <div className="text-xs text-[#9CA3AF] mb-2">
-                Last saved: {lastSaved.toLocaleTimeString()}
-              </div>
-            )}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Input
-                label="Workout Name (Optional)"
-                value={formData.split_name}
-                onChange={(e) =>
-                  setFormData({ ...formData, split_name: e.target.value })
-                }
-                placeholder="e.g., Push Day, Leg Day, Full Body"
-                className="bg-[#2d3b4e] border-none text-white placeholder:text-gray-500"
-              />
 
-              <Input
-                label="Date"
-                type="date"
-                value={formData.date}
-                onChange={(e) =>
-                  setFormData({ ...formData, date: e.target.value })
-                }
-                required
-                className="bg-[#2d3b4e] border-none text-white"
-              />
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <button
+              type="button"
+              onClick={() => setShowSessionDetails(!showSessionDetails)}
+              className="text-xs font-semibold text-[#8E8E93] hover:text-white transition-colors"
+            >
+              {showSessionDetails ? "Hide session details" : "Session details"}
+            </button>
 
-              <div className="flex flex-col">
-                <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
-                  Split (Optional)
-                </label>
-                <div className="relative z-30 flex-1" ref={splitDropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => setShowSplitDropdown(!showSplitDropdown)}
-                    className="w-full h-[46px] px-3 sm:px-4 text-base rounded-lg bg-[#2d3b4e] text-left text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1] cursor-pointer transition-all flex items-center justify-between"
-                  >
-                    <span className="truncate">
-                      {formData.split_id
-                        ? splits.find((s) => s.id === formData.split_id)
-                            ?.name || "No Split"
-                        : "No Split"}
-                    </span>
-                    <MdKeyboardArrowDown
-                      className={`text-gray-400 text-lg sm:text-xl flex-shrink-0 transition-transform ${
-                        showSplitDropdown ? "rotate-180" : ""
-                      }`}
-                    />
-                  </button>
-                  {showSplitDropdown && (
-                    <div className="absolute z-[100] w-full mt-1 bg-[#1A1F3A] border border-[#374151] rounded-lg shadow-lg overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFormData({ 
-                            ...formData, 
-                            split_id: "",
-                            split_name: "",
-                            split_day: "",
-                          });
-                          setShowSplitDropdown(false);
-                        }}
-                        className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-white hover:bg-[#374151] transition-colors ${
-                          !formData.split_id ? "bg-[#6366F1]/20" : ""
+            {showSessionDetails && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-2xl bg-[#161A22] border border-[#2A2D35]">
+                <Input
+                  label="Workout Name (Optional)"
+                  value={formData.split_name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, split_name: e.target.value })
+                  }
+                  placeholder="e.g., Push Day, Leg Day, Full Body"
+                  className="bg-[#0B0C10] border border-[#2A2D35] text-[#FFFFFF] placeholder:text-[#636366]"
+                />
+
+                <Input
+                  label="Date"
+                  type="date"
+                  value={formData.date}
+                  onChange={(e) =>
+                    setFormData({ ...formData, date: e.target.value })
+                  }
+                  required
+                  className="bg-[#0B0C10] border border-[#2A2D35] text-[#FFFFFF]"
+                />
+
+                <div className="flex flex-col">
+                  <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
+                    Split (Optional)
+                  </label>
+                  <div className="relative z-30 flex-1" ref={splitDropdownRef}>
+                    <button
+                      type="button"
+                      onClick={() => setShowSplitDropdown(!showSplitDropdown)}
+                      className="w-full h-[46px] px-3 sm:px-4 text-base rounded-lg bg-[#2A2D35] text-left text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35] cursor-pointer transition-all flex items-center justify-between"
+                    >
+                      <span className="truncate">
+                        {formData.split_id
+                          ? splits.find((s) => s.id === formData.split_id)
+                              ?.name || "No Split"
+                          : "No Split"}
+                      </span>
+                      <MdKeyboardArrowDown
+                        className={`text-[#8E8E93] text-lg sm:text-xl flex-shrink-0 transition-transform ${
+                          showSplitDropdown ? "rotate-180" : ""
                         }`}
-                      >
-                        No Split
-                      </button>
-                      {splits.map((split) => (
+                      />
+                    </button>
+                    {showSplitDropdown && (
+                      <div className="absolute z-[100] w-full mt-1 bg-[#161A22] border border-[#2A2D35] rounded-lg shadow-lg overflow-hidden">
                         <button
-                          key={split.id}
                           type="button"
                           onClick={() => {
                             setFormData({
                               ...formData,
-                              split_id: split.id || "",
-                              split_name: split.name,
-                              split_day: "", // Reset day when split changes
+                              split_id: "",
+                              split_name: "",
+                              split_day: "",
                             });
                             setShowSplitDropdown(false);
                           }}
-                          className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-white hover:bg-[#374151] transition-colors ${
-                            formData.split_id === split.id
-                              ? "bg-[#6366F1]/20"
-                              : ""
+                          className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-[#FFFFFF] hover:bg-[#2A2D35] transition-colors ${
+                            !formData.split_id ? "bg-[#FF6B35]/20" : ""
                           }`}
                         >
-                          {split.name}
+                          No Split
                         </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Split Day Dropdown - Only show if a split is selected */}
-              {formData.split_id && (() => {
-                const selectedSplit = splits.find((s) => s.id === formData.split_id);
-                return selectedSplit && selectedSplit.days && selectedSplit.days.length > 0 ? (
-                  <div className="flex flex-col">
-                    <label className="block text-xs sm:text-sm font-semibold text-[#F9FAFB] mb-1.5 sm:mb-2">
-                      Split Day (Optional)
-                    </label>
-                    <div className="relative z-20 flex-1" ref={dayDropdownRef}>
-                      <button
-                        type="button"
-                        onClick={() => setShowDayDropdown(!showDayDropdown)}
-                        className="w-full h-[46px] px-3 sm:px-4 text-base rounded-lg bg-[#2d3b4e] text-left text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-[#6366F1] cursor-pointer transition-all flex items-center justify-between"
-                      >
-                        <span className="truncate">
-                          {formData.split_day || "Select Day"}
-                        </span>
-                        <MdKeyboardArrowDown
-                          className={`text-gray-400 text-lg sm:text-xl flex-shrink-0 transition-transform ${
-                            showDayDropdown ? "rotate-180" : ""
-                          }`}
-                        />
-                      </button>
-                      {showDayDropdown && (
-                        <div className="absolute z-[100] w-full mt-1 bg-[#1A1F3A] border border-[#374151] rounded-lg shadow-lg overflow-hidden">
+                        {splits.map((split) => (
                           <button
+                            key={split.id}
                             type="button"
                             onClick={() => {
-                              setFormData({ ...formData, split_day: "" });
-                              setShowDayDropdown(false);
+                              setFormData({
+                                ...formData,
+                                split_id: split.id || "",
+                                split_name: split.name,
+                                split_day: "",
+                              });
+                              setShowSplitDropdown(false);
                             }}
-                            className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-white hover:bg-[#374151] transition-colors ${
-                              !formData.split_day ? "bg-[#6366F1]/20" : ""
+                            className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-[#FFFFFF] hover:bg-[#2A2D35] transition-colors ${
+                              formData.split_id === split.id
+                                ? "bg-[#FF6B35]/20"
+                                : ""
                             }`}
                           >
-                            No Specific Day
+                            {split.name}
                           </button>
-                          {selectedSplit.days.map((day, index) => (
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {formData.split_id && (() => {
+                  const selectedSplit = splits.find((s) => s.id === formData.split_id);
+                  return selectedSplit && selectedSplit.days && selectedSplit.days.length > 0 ? (
+                    <div className="flex flex-col">
+                      <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
+                        Split Day (Optional)
+                      </label>
+                      <div className="relative z-20 flex-1" ref={dayDropdownRef}>
+                        <button
+                          type="button"
+                          onClick={() => setShowDayDropdown(!showDayDropdown)}
+                          className="w-full h-[46px] px-3 sm:px-4 text-base rounded-lg bg-[#2A2D35] text-left text-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-[#FF6B35] cursor-pointer transition-all flex items-center justify-between"
+                        >
+                          <span className="truncate">
+                            {formData.split_day || "Select Day"}
+                          </span>
+                          <MdKeyboardArrowDown
+                            className={`text-[#8E8E93] text-lg sm:text-xl flex-shrink-0 transition-transform ${
+                              showDayDropdown ? "rotate-180" : ""
+                            }`}
+                          />
+                        </button>
+                        {showDayDropdown && (
+                          <div className="absolute z-[100] w-full mt-1 bg-[#161A22] border border-[#2A2D35] rounded-lg shadow-lg overflow-hidden">
                             <button
-                              key={index}
                               type="button"
                               onClick={() => {
-                                setFormData({ ...formData, split_day: day });
+                                setFormData({ ...formData, split_day: "" });
                                 setShowDayDropdown(false);
                               }}
-                              className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-white hover:bg-[#374151] transition-colors ${
-                                formData.split_day === day
-                                  ? "bg-[#6366F1]/20"
-                                  : ""
+                              className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-[#FFFFFF] hover:bg-[#2A2D35] transition-colors ${
+                                !formData.split_day ? "bg-[#FF6B35]/20" : ""
                               }`}
                             >
-                              {day}
+                              No Specific Day
                             </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : null;
-              })()}
-            </div>
-
-            <div>
-              <label className="block text-lg font-bold text-[#F9FAFB] mb-4">
-                Exercises
-              </label>
-
-              {/* Exercise Selection Box */}
-              <div
-                ref={exerciseSelectionRef}
-                className="bg-[#1a2332] rounded-xl border border-[#2d3b4e] overflow-hidden mb-6"
-              >
-                <div className="p-4 sm:p-6">
-                  <div className="flex items-center justify-between mb-6">
-                    <h4 className="text-xl font-bold text-white">
-                      Select Exercise
-                    </h4>
-                    <button
-                      type="button"
-                      onClick={() => setShowExerciseDropdown(false)}
-                      className="text-gray-400 hover:text-white"
-                    >
-                      <MdClose size={24} />
-                    </button>
-                  </div>
-
-                  {/* Tabs */}
-                  <div className="flex bg-[#2d3b4e] p-1 rounded-lg mb-6">
-                    <button
-                      type="button"
-                      onClick={() => setExerciseTab("browse")}
-                      className={`flex-1 py-2 rounded-md font-semibold transition-all ${
-                        exerciseTab === "browse"
-                          ? "bg-white text-[#1a2332]"
-                          : "text-gray-400"
-                      }`}
-                    >
-                      Browse
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setExerciseTab("search")}
-                      className={`flex-1 py-2 rounded-md font-semibold transition-all ${
-                        exerciseTab === "search"
-                          ? "bg-white text-[#1a2332]"
-                          : "text-gray-400"
-                      }`}
-                    >
-                      Search
-                    </button>
-                  </div>
-
-                  {exerciseTab === "browse" ? (
-                    !selectedCategory ? (
-                      <div>
-                        <p className="text-[#9CA3AF] mb-4 font-semibold">
-                          Select Body Part
-                        </p>
-                        <div className="grid grid-cols-2 gap-3">
-                          {categories.map((category) => (
-                            <button
-                              key={category}
-                              type="button"
-                              onClick={() => setSelectedCategory(category)}
-                              className="flex items-center justify-between p-3 rounded-lg bg-[#2d3b4e] text-white hover:bg-[#3d4d63] transition-colors border border-transparent hover:border-[#6366F1]/50 text-left"
-                            >
-                              <span className="font-semibold text-sm sm:text-base italic flex items-center gap-2">
-                                <span className="text-gray-500">{">"}</span>{" "}
-                                {category}
-                              </span>
-                            </button>
-                          ))}
-                          {!categories.includes("CARDIO") && (
-                            <button
-                              type="button"
-                              onClick={() => setSelectedCategory("CARDIO")}
-                              className="flex items-center justify-between p-3 rounded-lg bg-[#2d3b4e] text-white hover:bg-[#3d4d63] transition-colors border border-transparent hover:border-[#6366F1]/50 text-left"
-                            >
-                              <span className="font-semibold text-sm sm:text-base italic flex items-center gap-2">
-                                <span className="text-gray-500">{">"}</span>{" "}
-                                CARDIO
-                              </span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ) : (
-                      <div>
-                        <div className="flex items-center justify-between mb-4">
-                          <h5 className="text-lg font-bold text-white uppercase italic">
-                            {selectedCategory} Exercises
-                          </h5>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedCategory(null);
-                              setSelectedEquipment(null);
-                            }}
-                            className="text-[#6366F1] font-bold text-sm hover:underline"
-                          >
-                            Change Body Part
-                          </button>
-                        </div>
-
-                        <p className="text-[#9CA3AF] text-xs font-semibold mb-2">
-                          Filter by Equipment
-                        </p>
-                        <div className="flex flex-wrap gap-2 mb-6">
-                          {[
-                            "Barbell",
-                            "Dumbbell",
-                            "Cable",
-                            "Machine",
-                            "Bodyweight",
-                          ].map((equip) => (
-                            <button
-                              key={equip}
-                              type="button"
-                              onClick={() =>
-                                setSelectedEquipment(
-                                  selectedEquipment === equip ? null : equip
-                                )
-                              }
-                              className={`px-3 py-1 rounded-full text-xs font-bold transition-all ${
-                                selectedEquipment === equip
-                                  ? "bg-[#6366F1] text-white"
-                                  : "bg-[#2d3b4e] text-gray-400 hover:text-white"
-                              }`}
-                            >
-                              {equip}
-                            </button>
-                          ))}
-                        </div>
-
-                        <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                          {allExercises
-                            .filter(
-                              (ex) =>
-                                ex.category === selectedCategory &&
-                                (!selectedEquipment ||
-                                  ex.equipment === selectedEquipment)
-                            )
-                            .map((ex) => (
+                            {selectedSplit.days.map((day, index) => (
                               <button
-                                key={ex.id}
+                                key={index}
                                 type="button"
-                                onClick={() =>
-                                  handleExerciseChange(ex.id, ex.name)
-                                }
-                                className="w-full flex items-center justify-between p-3 rounded-lg bg-[#2d3b4e] text-white hover:bg-[#3d4d63] transition-colors border border-[#374151]"
+                                onClick={() => {
+                                  setFormData({ ...formData, split_day: day });
+                                  setShowDayDropdown(false);
+                                }}
+                                className={`w-full px-4 py-3 sm:py-4 text-base sm:text-lg text-left text-[#FFFFFF] hover:bg-[#2A2D35] transition-colors ${
+                                  formData.split_day === day
+                                    ? "bg-[#FF6B35]/20"
+                                    : ""
+                                }`}
                               >
-                                <span className="font-bold text-left">
-                                  {ex.name}
-                                </span>
-                                {ex.equipment && (
-                                  <span className="text-[10px] bg-[#374151] px-2 py-0.5 rounded text-gray-400 font-bold uppercase">
-                                    {ex.equipment}
-                                  </span>
-                                )}
+                                {day}
                               </button>
                             ))}
-                        </div>
+                          </div>
+                        )}
                       </div>
-                    )
+                    </div>
+                  ) : null;
+                })()}
+                </div>
+
+                <Input
+                  label="Notes (Optional)"
+                  value={formData.notes}
+                  onChange={(e) =>
+                    setFormData({ ...formData, notes: e.target.value })
+                  }
+                  placeholder="How did the workout feel?"
+                  className="bg-[#0B0C10] border border-[#2A2D35] text-[#FFFFFF] placeholder:text-[#636366]"
+                />
+              </>
+            )}
+
+            {/* Search + category filters */}
+            <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+              <div className="relative flex-1" ref={exerciseDropdownRef}>
+                <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#8E8E93]">
+                  <MdSearch size={18} />
+                </div>
+                <input
+                  type="text"
+                  value={exerciseSearchQuery}
+                  onChange={(e) => {
+                    setExerciseSearchQuery(e.target.value);
+                    if (e.target.value) {
+                      setShowExercisePicker(true);
+                      setPickerMode("search");
+                    }
+                  }}
+                  onFocus={() => setShowExercisePicker(true)}
+                  placeholder="Search exercises..."
+                  className="w-full h-11 pl-10 pr-4 rounded-xl bg-[#161A22] border border-[#2A2D35] text-white placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {categoryFilterPills.map((pill) => {
+                  const isActive = categoryFilter === pill.id;
+                  return (
+                    <button
+                      key={pill.label}
+                      type="button"
+                      onClick={() => {
+                        setCategoryFilter(pill.id);
+                        setShowExercisePicker(true);
+                      }}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                        isActive
+                          ? "border border-[#FF6B35] text-[#FF6B35] bg-[#FF6B35]/10"
+                          : "border border-[#2A2D35] text-[#8E8E93] hover:text-white hover:border-[#3A3A3C]"
+                      }`}
+                    >
+                      {pill.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowExercisePicker(true);
+                setPickerMode("browse");
+                setSelectedBodyPart(null);
+                setEquipmentFilter(null);
+                exerciseSelectionRef.current?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "nearest",
+                });
+              }}
+              className="w-full py-3 rounded-xl border border-dashed border-[#3A3A3C] text-[#8E8E93] hover:text-[#FF6B35] hover:border-[#FF6B35]/40 text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+            >
+              <MdAdd size={18} /> Add exercise
+            </button>
+
+            {/* Exercise picker */}
+            {showExercisePicker && (
+              <div
+                ref={exerciseSelectionRef}
+                className="rounded-2xl border border-[#2A2D35] bg-[#161A22] overflow-hidden"
+              >
+                {/* Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-[#2A2D35]">
+                  <div className="flex items-center gap-3">
+                    {selectedBodyPart && pickerMode === "browse" ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedBodyPart(null);
+                          setEquipmentFilter(null);
+                        }}
+                        className="text-[#8E8E93] hover:text-white transition-colors"
+                      >
+                        <MdArrowBack size={20} />
+                      </button>
+                    ) : null}
+                    <p className="text-sm font-semibold text-white">Select Exercise</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExercisePicker(false);
+                      setSelectedBodyPart(null);
+                      setEquipmentFilter(null);
+                      setExerciseSearchQuery("");
+                      setCategoryFilter(null);
+                    }}
+                    className="text-[#8E8E93] hover:text-white transition-colors"
+                  >
+                    <MdClose size={20} />
+                  </button>
+                </div>
+
+                {/* Browse / Search tabs */}
+                <div className="grid grid-cols-2 mx-4 mt-3 gap-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPickerMode("browse");
+                      setExerciseSearchQuery("");
+                    }}
+                    className={`py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+                      pickerMode === "browse"
+                        ? "bg-[#FF6B35] text-white"
+                        : "text-[#8E8E93] hover:text-white"
+                    }`}
+                  >
+                    Browse
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPickerMode("search");
+                      setSelectedBodyPart(null);
+                      setEquipmentFilter(null);
+                    }}
+                    className={`py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+                      pickerMode === "search"
+                        ? "bg-[#FF6B35] text-white"
+                        : "text-[#8E8E93] hover:text-white"
+                    }`}
+                  >
+                    Search
+                  </button>
+                </div>
+
+                {pickerMode === "browse" ? (
+                  selectedBodyPart ? (
+                    /* Exercise list for selected body part */
+                    <div className="p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8E8E93]">
+                          {selectedBodyPart} Exercises
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedBodyPart(null);
+                            setEquipmentFilter(null);
+                          }}
+                          className="text-xs font-semibold text-[#5EEAD4] hover:text-[#5EEAD4]/80 transition-colors"
+                        >
+                          Change Body Part
+                        </button>
+                      </div>
+
+                      {/* Equipment filter pills */}
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {(() => {
+                          const equipmentTypes = [...new Set(
+                            allExercises
+                              .filter((ex) => ex.category === selectedBodyPart)
+                              .map((ex) => ex.equipment)
+                              .filter(Boolean)
+                          )] as string[];
+                          return equipmentTypes.map((eq) => (
+                            <button
+                              key={eq}
+                              type="button"
+                              onClick={() =>
+                                setEquipmentFilter(
+                                  equipmentFilter === eq ? null : eq
+                                )
+                              }
+                              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                                equipmentFilter === eq
+                                  ? "border border-[#FF6B35] text-[#FF6B35] bg-[#FF6B35]/10"
+                                  : "border border-[#2A2D35] text-[#8E8E93] hover:text-white hover:border-[#3A3A3C]"
+                              }`}
+                            >
+                              {eq}
+                            </button>
+                          ));
+                        })()}
+                      </div>
+
+                      {/* Exercise list */}
+                      <div className="max-h-[320px] overflow-y-auto custom-scrollbar space-y-0.5">
+                        {allExercises
+                          .filter((ex) => {
+                            if (ex.category !== selectedBodyPart) return false;
+                            if (equipmentFilter && ex.equipment !== equipmentFilter)
+                              return false;
+                            return true;
+                          })
+                          .map((ex) => (
+                            <button
+                              key={ex.id}
+                              type="button"
+                              onClick={() => {
+                                handleExerciseChange(ex.id, ex.name);
+                                setShowExercisePicker(false);
+                                setSelectedBodyPart(null);
+                                setEquipmentFilter(null);
+                                setExerciseSearchQuery("");
+                              }}
+                              className="w-full flex items-center justify-between px-3 py-3 rounded-xl text-left text-white hover:bg-[#2A2D35] transition-colors"
+                            >
+                              <span className="font-semibold text-sm">
+                                {ex.name}
+                              </span>
+                              {ex.equipment && (
+                                <span className="text-[10px] uppercase text-[#636366] font-bold">
+                                  {ex.equipment}
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
                   ) : (
-                    <div className="relative">
-                      <div className="absolute left-3 top-3 text-gray-400">
-                        <MdSearch size={20} />
+                    /* Body part grid */
+                    <div className="p-4">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8E8E93] mb-3">
+                        Select Body Part
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {categories.map((cat) => (
+                          <button
+                            key={cat}
+                            type="button"
+                            onClick={() => setSelectedBodyPart(cat)}
+                            className="flex items-center gap-3 px-4 py-3.5 rounded-xl bg-[#0B0C10]/60 border border-[#2A2D35] text-left text-white hover:border-[#3A3A3C] hover:bg-[#1C1C1E] transition-colors"
+                          >
+                            <MdChevronRight
+                              size={18}
+                              className="text-[#636366]"
+                            />
+                            <span className="text-sm font-semibold">{cat}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                ) : (
+                  /* Search mode */
+                  <div className="p-4">
+                    <div className="relative mb-3">
+                      <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#8E8E93]">
+                        <MdSearch size={18} />
                       </div>
                       <input
                         type="text"
                         value={exerciseSearchQuery}
                         onChange={(e) => setExerciseSearchQuery(e.target.value)}
-                        placeholder="Search for a workout..."
-                        className="w-full pl-10 pr-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
+                        placeholder="Search all exercises..."
                         autoFocus
+                        className="w-full h-11 pl-10 pr-4 rounded-xl bg-[#0B0C10] border border-[#2A2D35] text-white placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
                       />
-                      {exerciseSearchQuery && (
-                        <div className="mt-4 space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                          {allExercises
-                            .filter((ex) =>
-                              ex.name
-                                .toLowerCase()
-                                .includes(exerciseSearchQuery.toLowerCase())
-                            )
-                            .slice(0, 20)
-                            .map((ex) => (
-                              <button
-                                key={ex.id}
-                                type="button"
-                                onClick={() =>
-                                  handleExerciseChange(ex.id, ex.name)
-                                }
-                                className="w-full flex items-center justify-between p-3 rounded-lg bg-[#2d3b4e] text-white hover:bg-[#3d4d63] transition-colors border border-[#374151]"
-                              >
-                                <span className="font-bold text-left">
-                                  {ex.name}
-                                </span>
-                                <span className="text-[10px] text-gray-500 uppercase">
-                                  {ex.category}
-                                </span>
-                              </button>
-                            ))}
-                        </div>
-                      )}
                     </div>
-                  )}
-                </div>
+                    <div className="max-h-[320px] overflow-y-auto custom-scrollbar space-y-0.5">
+                      {allExercises
+                        .filter((ex) => {
+                          if (!exerciseSearchQuery.trim()) return true;
+                          return ex.name
+                            .toLowerCase()
+                            .includes(
+                              exerciseSearchQuery.trim().toLowerCase()
+                            );
+                        })
+                        .slice(0, 40)
+                        .map((ex) => (
+                          <button
+                            key={ex.id}
+                            type="button"
+                            onClick={() => {
+                              handleExerciseChange(ex.id, ex.name);
+                              setShowExercisePicker(false);
+                              setExerciseSearchQuery("");
+                            }}
+                            className="w-full flex items-center justify-between px-3 py-3 rounded-xl text-left text-white hover:bg-[#2A2D35] transition-colors"
+                          >
+                            <span className="font-semibold text-sm">
+                              {ex.name}
+                            </span>
+                            {ex.equipment && (
+                              <span className="text-[10px] uppercase text-[#636366] font-bold">
+                                {ex.equipment}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      {exerciseSearchQuery.trim() &&
+                        allExercises.filter((ex) =>
+                          ex.name
+                            .toLowerCase()
+                            .includes(
+                              exerciseSearchQuery.trim().toLowerCase()
+                            )
+                        ).length === 0 && (
+                          <p className="text-sm text-[#8E8E93] text-center py-6">
+                            No exercises match your search.
+                          </p>
+                        )}
+                    </div>
+                  </div>
+                )}
               </div>
+            )}
 
               {/* List of Added Exercises */}
               <div className="space-y-4">
                 {formData.exercises.map((ex, idx) => {
                   const exerciseSets = Array.isArray(ex.sets) ? ex.sets : [];
                   const isCardio = ex.hasOwnProperty("time") || ex.hasOwnProperty("speed");
-                  
+                  const isCollapsed = collapsedExercises[idx] ?? false;
+                  const completedCount = getCompletedSetCount(exerciseSets);
+                  const totalSetCount = exerciseSets.length;
+                  const categoryLabel = getExerciseCategory(
+                    ex.exercise_id,
+                    ex.exercise_name
+                  );
+                  const roleLabel = getExerciseRole(idx);
+                  const lastData = lastExerciseData[ex.exercise_id];
+                  const maxData = maxExerciseData[ex.exercise_id];
+                  const aiRec = aiRecommendations[ex.exercise_id];
+                  const aiLoading = aiRecommendationLoading[ex.exercise_id];
+                  const bestSetLabel = getBestSetLabel(maxData);
+                  const confPct = aiRec ? confidencePct(aiRec.confidence) : null;
+
                   return (
                     <div
                       key={idx}
-                      className="bg-[#1a2332] rounded-xl border border-[#2d3b4e] p-4 sm:p-6 overflow-hidden shadow-lg"
+                      className="bg-[#161A22] rounded-2xl border border-[#2A2D35] overflow-hidden"
                     >
-                      <div className="flex items-center justify-between mb-6">
-                        <h4 className="text-xl font-bold text-white italic uppercase">
-                          {ex.exercise_name}
-                        </h4>
+                      {/* Exercise Header */}
+                      <div className="flex items-center gap-3 px-4 sm:px-5 py-3.5">
                         <button
                           type="button"
-                          onClick={() =>
-                            setFormData({
-                              ...formData,
-                              exercises: formData.exercises.filter(
-                                (_, i) => i !== idx
-                              ),
-                            })
-                          }
-                          className="text-red-500 hover:text-red-400 transition-colors"
+                          onClick={() => {
+                            setShowExercisePicker(true);
+                            exerciseSelectionRef.current?.scrollIntoView({
+                              behavior: "smooth",
+                              block: "nearest",
+                            });
+                          }}
+                          className="flex-shrink-0 w-10 h-10 rounded-xl bg-[#1C1C1E] border border-[#2A2D35] flex items-center justify-center text-[#8E8E93] hover:text-[#FF6B35] hover:border-[#FF6B35]/40 transition-colors"
+                          title="Swap exercise"
                         >
-                          <MdClose size={24} />
+                          <MdSwapHoriz size={20} />
                         </button>
+
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-base sm:text-lg font-bold text-white truncate">
+                            {ex.exercise_name}
+                          </h4>
+                          <p className="text-xs text-[#8E8E93] mt-0.5">
+                            {categoryLabel} · {roleLabel}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2.5 flex-shrink-0">
+                          {!isCardio && (
+                            <span className="text-xs sm:text-sm font-medium text-[#8E8E93] whitespace-nowrap">
+                              {completedCount}/{totalSetCount} sets
+                            </span>
+                          )}
+                          {(aiRec || aiLoading) && (
+                            <span className="w-7 h-7 rounded-full bg-[#5EEAD4]/15 border border-[#5EEAD4]/30 flex items-center justify-center text-[10px] font-bold text-[#5EEAD4]">
+                              AI
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => toggleExerciseCollapse(idx)}
+                            className="text-[#8E8E93] hover:text-white transition-colors"
+                            title={isCollapsed ? "Expand" : "Collapse"}
+                          >
+                            <MdExpandMore
+                              size={22}
+                              className={`transition-transform duration-200 ${
+                                isCollapsed ? "-rotate-90" : ""
+                              }`}
+                            />
+                          </button>
+                        </div>
                       </div>
 
-                      {/* Last Time Info */}
-                      {lastExerciseData[ex.exercise_id] && (
-                        <div className="bg-[#252f3f] rounded-lg p-3 mb-4 border-l-4 border-[#6366F1]">
-                          <div className="flex items-center gap-2 mb-2">
-                            <MdAccessTime className="text-[#6366F1]" size={16} />
-                            <span className="text-sm font-semibold text-[#6366F1]">
-                              Last time: {formatLastTime(lastExerciseData[ex.exercise_id].date)}
-                            </span>
-                          </div>
-                          {lastExerciseData[ex.exercise_id].exercise_data && (
-                            <div className="ml-6">
-                              {lastExerciseData[ex.exercise_id].exercise_data.time !== undefined ? (
-                                <p className="text-xs text-[#9CA3AF]">
-                                  Time: {lastExerciseData[ex.exercise_id].exercise_data.time} min
-                                  {lastExerciseData[ex.exercise_id].exercise_data.speed && 
-                                    ` | Speed: ${lastExerciseData[ex.exercise_id].exercise_data.speed} mph`}
-                                </p>
-                              ) : lastExerciseData[ex.exercise_id].exercise_data.sets && Array.isArray(lastExerciseData[ex.exercise_id].exercise_data.sets) ? (
-                                <div>
-                                  <p className="text-xs text-[#9CA3AF] mb-1">
-                                    {lastExerciseData[ex.exercise_id].exercise_data.sets.length} set{lastExerciseData[ex.exercise_id].exercise_data.sets.length > 1 ? 's' : ''}
-                                  </p>
-                                  {lastExerciseData[ex.exercise_id].exercise_data.sets.slice(0, 3).map((set: any, setIdx: number) => (
-                                    <p key={setIdx} className="text-xs text-[#9CA3AF] ml-2 flex items-center gap-2">
-                                      <span>
-                                        Set {set.set_number}: {set.reps} reps
-                                        {set.weight && ` @ ${set.weight} lbs`}
+                      {!isCollapsed && (
+                        <div>
+                          {/* AI Coach — full-bleed band */}
+                          {aiLoading ? (
+                            <div className="bg-[#142422] px-4 sm:px-5 py-4 border-y border-[#5EEAD4]/20">
+                              <div className="flex items-center gap-2">
+                                <svg
+                                  className="animate-spin h-4 w-4 text-[#5EEAD4]"
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <circle
+                                    className="opacity-25"
+                                    cx="12"
+                                    cy="12"
+                                    r="10"
+                                    stroke="currentColor"
+                                    strokeWidth="4"
+                                  />
+                                  <path
+                                    className="opacity-75"
+                                    fill="currentColor"
+                                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                                  />
+                                </svg>
+                                <span className="text-sm font-semibold text-[#5EEAD4]">
+                                  Getting AI recommendation...
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            aiRec && (
+                              <div className="bg-[#142422] px-4 sm:px-5 py-4 border-y border-[#5EEAD4]/20">
+                                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-[10px] font-bold tracking-[0.14em] uppercase text-[#5EEAD4]">
+                                      ✦ AI Coach
+                                    </span>
+                                    {confPct && (
+                                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-[#5EEAD4]/15 text-[#5EEAD4] border border-[#5EEAD4]/30">
+                                        {confPct} confidence
                                       </span>
-                                      {set.rpe && (
-                                        <span className="text-yellow-400 text-xs" title={`RPE: ${set.rpe}/10`}>
-                                          RPE {set.rpe}
-                                        </span>
-                                      )}
-                                      {set.completed === false && (
-                                        <span className="text-red-400 text-xs" title="Set not completed">
-                                          ❌
-                                        </span>
-                                      )}
-                                    </p>
-                                  ))}
-                                </div>
-                              ) : (
-                                <p className="text-xs text-[#9CA3AF]">
-                                  {lastExerciseData[ex.exercise_id].exercise_data.sets} sets x {lastExerciseData[ex.exercise_id].exercise_data.reps} reps
-                                  {lastExerciseData[ex.exercise_id].exercise_data.weight && 
-                                    ` @ ${lastExerciseData[ex.exercise_id].exercise_data.weight} lbs`}
-                                </p>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* AI Recommendation */}
-                      {aiRecommendationLoading[ex.exercise_id] ? (
-                        <div className="bg-[#1a2a1f] rounded-lg p-3 mb-4 border-l-4 border-[#10B981]">
-                          <div className="flex items-center gap-2">
-                            <svg className="animate-spin h-4 w-4 text-[#10B981]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            <span className="text-sm font-semibold text-[#10B981]">
-                              Getting AI recommendation...
-                            </span>
-                          </div>
-                        </div>
-                      ) : aiRecommendations[ex.exercise_id] && (
-                        <div className="bg-[#1a2a1f] rounded-lg p-3 mb-4 border-l-4 border-[#10B981]">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-[#10B981]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                              </svg>
-                              <span className="text-sm font-semibold text-[#10B981]">
-                                AI Recommendation
-                              </span>
-                              {aiRecommendations[ex.exercise_id].confidence && (
-                                <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                  aiRecommendations[ex.exercise_id].confidence === 'high' 
-                                    ? 'bg-[#10B981]/20 text-[#10B981]' 
-                                    : aiRecommendations[ex.exercise_id].confidence === 'medium'
-                                    ? 'bg-yellow-500/20 text-yellow-500'
-                                    : 'bg-gray-500/20 text-gray-400'
-                                }`}>
-                                  {aiRecommendations[ex.exercise_id].confidence}
-                                </span>
-                              )}
-                            </div>
-                            <button
-                              onClick={() => setExpandedRecommendations(prev => ({
-                                ...prev,
-                                [ex.exercise_id]: !(prev[ex.exercise_id] ?? true)
-                              }))}
-                              className="text-[#10B981] hover:text-[#10B981]/80 transition-colors"
-                            >
-                              <MdKeyboardArrowDown 
-                                className={`h-5 w-5 transition-transform ${
-                                  (expandedRecommendations[ex.exercise_id] ?? true) ? '' : 'rotate-180'
-                                }`}
-                              />
-                            </button>
-                          </div>
-                          {(expandedRecommendations[ex.exercise_id] ?? true) && (
-                          <div className="ml-6">
-                            {/* Cardio recommendation */}
-                            {aiRecommendations[ex.exercise_id].time !== undefined ? (
-                              <div>
-                                <p className="text-xs text-[#9CA3AF]">
-                                  Target: {aiRecommendations[ex.exercise_id].time} min
-                                  {aiRecommendations[ex.exercise_id].speed && 
-                                    ` @ ${aiRecommendations[ex.exercise_id].speed} mph`}
-                                </p>
-                              </div>
-                            ) : aiRecommendations[ex.exercise_id].sets && Array.isArray(aiRecommendations[ex.exercise_id].sets) ? (
-                              /* Strength recommendation with sets array */
-                              <div>
-                                <p className="text-xs text-[#9CA3AF] mb-1 font-semibold">
-                                  Target: {aiRecommendations[ex.exercise_id].sets.length} set{aiRecommendations[ex.exercise_id].sets.length > 1 ? 's' : ''}
-                                </p>
-                                {aiRecommendations[ex.exercise_id].sets.map((set: any, setIdx: number) => (
-                                  <p key={setIdx} className="text-xs text-[#9CA3AF] ml-2">
-                                    Set {set.set_number || setIdx + 1}: {set.reps} reps
-                                    {set.weight && ` @ ${set.weight} lbs`}
-                                  </p>
-                                ))}
-                              </div>
-                            ) : null}
-                            
-                            {/* Progression type badge */}
-                            {aiRecommendations[ex.exercise_id].progression_type && (
-                              <div className="mt-2">
-                                <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                  aiRecommendations[ex.exercise_id].progression_type === 'increase_weight'
-                                    ? 'bg-green-500/20 text-green-400'
-                                    : aiRecommendations[ex.exercise_id].progression_type === 'increase_reps'
-                                    ? 'bg-blue-500/20 text-blue-400'
-                                    : aiRecommendations[ex.exercise_id].progression_type === 'deload'
-                                    ? 'bg-yellow-500/20 text-yellow-400'
-                                    : 'bg-gray-500/20 text-gray-400'
-                                }`}>
-                                  {aiRecommendations[ex.exercise_id].progression_type.replace('_', ' ')}
-                                </span>
-                              </div>
-                            )}
-                            
-                            {/* Reasoning */}
-                            {aiRecommendations[ex.exercise_id].reasoning && (
-                              <p className="text-xs text-[#6B7280] mt-2 italic">
-                                {aiRecommendations[ex.exercise_id].reasoning}
-                              </p>
-                            )}
-                          </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* All-Time Max Info */}
-                      {maxExerciseData[ex.exercise_id] && (
-                        <div className="bg-[#2a1f1a] rounded-lg p-3 mb-4 border-l-4 border-[#F59E0B]">
-                          <div className="flex items-center gap-2 mb-2">
-                            <MdFitnessCenter className="text-[#F59E0B]" size={16} />
-                            <span className="text-sm font-semibold text-[#F59E0B]">
-                              All-Time Max
-                            </span>
-                          </div>
-                          {maxExerciseData[ex.exercise_id] && (
-                            <div className="ml-6">
-                              {(maxExerciseData[ex.exercise_id].max_time != null || maxExerciseData[ex.exercise_id].max_speed != null) ? (
-                                <div>
-                                  {maxExerciseData[ex.exercise_id].max_time != null && (
-                                    <p className="text-xs text-[#9CA3AF]">
-                                      Best Time: {maxExerciseData[ex.exercise_id].max_time} min
-                                    </p>
-                                  )}
-                                  {maxExerciseData[ex.exercise_id].max_speed != null && (
-                                    <p className="text-xs text-[#9CA3AF]">
-                                      Best Speed: {maxExerciseData[ex.exercise_id].max_speed} mph
+                                    )}
+                                  </div>
+                                  {lastData && (
+                                    <p className="text-[11px] text-[#636366]">
+                                      Last: {formatShortDate(lastData.date)}
+                                      {lastData.exercise_data?.sets &&
+                                        Array.isArray(
+                                          lastData.exercise_data.sets
+                                        ) &&
+                                        lastData.exercise_data.sets[0] && (
+                                          <>
+                                            {" · "}
+                                            {
+                                              lastData.exercise_data.sets.length
+                                            }{" "}
+                                            set
+                                            {" · "}
+                                            {
+                                              lastData.exercise_data.sets[0]
+                                                .reps
+                                            }{" "}
+                                            reps
+                                            {lastData.exercise_data.sets[0]
+                                              .weight != null &&
+                                              ` @ ${lastData.exercise_data.sets[0].weight} lbs`}
+                                          </>
+                                        )}
                                     </p>
                                   )}
                                 </div>
-                              ) : (
-                                <div>
-                                  {/* Primary: Max Weight - Most Prominent */}
-                                  {maxExerciseData[ex.exercise_id].max_weight != null && (
-                                    <div className="mb-2">
-                                      <p className="text-sm font-bold text-white">
-                                        Personal Best: {maxExerciseData[ex.exercise_id].max_weight} lbs
-                                      </p>
-                                      {/* Calculate estimated 1RM if we have max weight and reps */}
-                                      {maxExerciseData[ex.exercise_id].max_weight != null && maxExerciseData[ex.exercise_id].max_reps != null && maxExerciseData[ex.exercise_id].max_reps > 0 && (
-                                        <p className="text-xs text-[#9CA3AF] mt-0.5">
-                                          Est. 1RM: {Math.round(maxExerciseData[ex.exercise_id].max_weight * (1 + maxExerciseData[ex.exercise_id].max_reps / 30))} lbs
-                                        </p>
-                                      )}
-                                    </div>
-                                  )}
-                                  
-                                  {/* Heaviest Sets - Weight-focused */}
-                                  {maxExerciseData[ex.exercise_id].max_per_set && Object.keys(maxExerciseData[ex.exercise_id].max_per_set).length > 0 && (
-                                    <div className="mt-3 pt-3 border-t border-[#374151]">
-                                      <p className="text-xs font-semibold text-[#F59E0B] mb-1">
-                                        Heaviest Sets:
-                                      </p>
-                                      {Object.entries(maxExerciseData[ex.exercise_id].max_per_set)
-                                        .sort(([a, aData], [b, bData]) => {
-                                          // Sort by weight (descending), then by set number
-                                          const weightA = (aData as any).weight || 0;
-                                          const weightB = (bData as any).weight || 0;
-                                          if (weightB !== weightA) return weightB - weightA;
-                                          return parseInt(a) - parseInt(b);
-                                        })
-                                        .map(([setNum, setData]: [string, any]) => (
-                                          <p key={setNum} className="text-xs text-[#9CA3AF] ml-2">
-                                            Set {setNum}: {setData.weight != null ? `${setData.weight} lbs` : ''}
-                                            {setData.reps != null && setData.reps > 0 && ` × ${setData.reps} reps`}
+
+                                {aiRec.sets && Array.isArray(aiRec.sets) && (
+                                  <div className="flex gap-2 mb-3">
+                                    {aiRec.sets.slice(0, 3).map(
+                                      (set: any, setIdx: number) => (
+                                        <div
+                                          key={setIdx}
+                                          className="rounded-xl bg-[#0B0C10]/60 border border-[#5EEAD4]/25 px-4 py-2.5 min-w-[80px]"
+                                        >
+                                          <p className="text-[10px] font-bold uppercase tracking-wide text-[#5EEAD4]/60 mb-1">
+                                            Set {set.set_number || setIdx + 1}
                                           </p>
-                                        ))}
-                                    </div>
-                                  )}
-                                  
-                                  {/* Secondary metrics - smaller, less prominent */}
-                                  <div className="mt-2 pt-2 border-t border-[#374151]">
-                                    {maxExerciseData[ex.exercise_id].max_volume != null && (
-                                      <p className="text-xs text-[#6B7280]">
-                                        Max Volume: {Math.round(maxExerciseData[ex.exercise_id].max_volume)} lbs
-                                      </p>
+                                          <p className="text-white">
+                                            <span className="text-base font-bold">
+                                              {set.reps}
+                                            </span>
+                                            <span className="text-xs text-[#8E8E93] ml-1">
+                                              reps
+                                            </span>
+                                          </p>
+                                          {set.weight != null && (
+                                            <p className="text-sm font-bold text-[#5EEAD4]">
+                                              {set.weight} lbs
+                                            </p>
+                                          )}
+                                        </div>
+                                      )
                                     )}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {isCardio ? (
-                        <div className="space-y-4">
-                          <div>
-                            <label className="block text-xs font-bold text-[#9CA3AF] uppercase italic mb-2">
-                              Time (minutes)
-                            </label>
-                            <input
-                              type="number"
-                              value={ex.time || ""}
-                              onChange={(e) => {
-                                const newExercises = [...formData.exercises];
-                                newExercises[idx] = {
-                                  ...newExercises[idx],
-                                  time: e.target.value ? parseFloat(e.target.value) : undefined,
-                                };
-                                setFormData({ ...formData, exercises: newExercises });
-                              }}
-                              placeholder="Time"
-                              className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-bold text-[#9CA3AF] uppercase italic mb-2">
-                              Speed (mph)
-                            </label>
-                            <input
-                              type="number"
-                              value={ex.speed || ""}
-                              onChange={(e) => {
-                                const newExercises = [...formData.exercises];
-                                newExercises[idx] = {
-                                  ...newExercises[idx],
-                                  speed: e.target.value ? parseFloat(e.target.value) : undefined,
-                                };
-                                setFormData({ ...formData, exercises: newExercises });
-                              }}
-                              placeholder="Speed"
-                              className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
-                            />
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          {/* Phase 1: Enhanced Tracking Toggle */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowEnhancedTracking({
-                                ...showEnhancedTracking,
-                                [idx]: !showEnhancedTracking[idx]
-                              });
-                            }}
-                            className="text-sm text-gray-400 hover:text-white transition-colors mb-3 flex items-center gap-2"
-                          >
-                            {showEnhancedTracking[idx] ? '▼' : '▶'}
-                            {showEnhancedTracking[idx] ? 'Hide' : 'Show'} Advanced Tracking (RPE, Completion)
-                          </button>
-
-                          <div className="grid grid-cols-12 gap-4 mb-2 text-xs font-bold text-[#9CA3AF] uppercase italic">
-                            <div className="col-span-2">Set</div>
-                            <div className="col-span-5">Reps</div>
-                            <div className="col-span-5">Weight (lbs)</div>
-                          </div>
-
-                          <div className="space-y-3 mb-6">
-                            {exerciseSets.map((set, setIdx) => (
-                              <div key={setIdx}>
-                                <div className="grid grid-cols-12 gap-4 items-center">
-                                  <div className="col-span-2 text-lg font-bold text-gray-400 italic flex items-center gap-2">
-                                    {set.set_number}
-                                    {set.completed === false && (
-                                      <span className="text-red-400 text-sm" title="Set not completed">❌</span>
-                                    )}
-                                    {set.rpe && set.rpe >= 9 && (
-                                      <span className="text-orange-400 text-sm" title={`RPE: ${set.rpe}/10`}>🔥</span>
-                                    )}
-                                  </div>
-                                  <div className="col-span-5">
-                                    <input
-                                      type="number"
-                                      value={set.reps === 0 ? "" : set.reps}
-                                      onChange={(e) => {
-                                        const newExercises = [...formData.exercises];
-                                        const newSets = [...exerciseSets];
-                                        const inputValue = e.target.value;
-                                        const value =
-                                          inputValue === ""
-                                            ? 0
-                                            : parseInt(inputValue) || 0;
-                                        newSets[setIdx] = {
-                                          ...newSets[setIdx],
-                                          reps: value,
-                                        };
-                                        newExercises[idx] = {
-                                          ...newExercises[idx],
-                                          sets: newSets,
-                                        };
-                                        setFormData({
-                                          ...formData,
-                                          exercises: newExercises,
-                                        });
-                                      }}
-                                      onFocus={(e) => {
-                                        e.target.select();
-                                      }}
-                                      placeholder="Reps"
-                                      className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
-                                    />
-                                  </div>
-                                  <div className="col-span-5">
-                                    <input
-                                      type="number"
-                                      value={set.weight || ""}
-                                      onChange={(e) => {
-                                        const newExercises = [...formData.exercises];
-                                        const newSets = [...exerciseSets];
-                                        newSets[setIdx] = {
-                                          ...newSets[setIdx],
-                                          weight: e.target.value
-                                            ? parseFloat(e.target.value)
-                                            : undefined,
-                                        };
-                                        newExercises[idx] = {
-                                          ...newExercises[idx],
-                                          sets: newSets,
-                                        };
-                                        setFormData({
-                                          ...formData,
-                                          exercises: newExercises,
-                                        });
-                                      }}
-                                      placeholder="Weight (lbs)"
-                                      className="w-full px-4 py-3 rounded-lg bg-[#2d3b4e] border-none text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-[#6366F1]"
-                                    />
-                                  </div>
-                                </div>
-
-                                {/* Phase 1: Enhanced Tracking Fields */}
-                                {showEnhancedTracking[idx] && (
-                                  <div className="mt-3 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg space-y-3">
-                                    <div className="grid grid-cols-2 gap-4">
-                                      <div>
-                                        <label className="text-xs text-gray-400 mb-1 block">
-                                          RPE (1-10)
-                                        </label>
-                                        <input
-                                          type="number"
-                                          min="1"
-                                          max="10"
-                                          value={set.rpe || ""}
-                                          onChange={(e) => {
-                                            const newExercises = [...formData.exercises];
-                                            const newSets = [...exerciseSets];
-                                            newSets[setIdx] = {
-                                              ...newSets[setIdx],
-                                              rpe: e.target.value ? parseInt(e.target.value) : undefined,
-                                            };
-                                            newExercises[idx] = {
-                                              ...newExercises[idx],
-                                              sets: newSets,
-                                            };
-                                            setFormData({
-                                              ...formData,
-                                              exercises: newExercises,
-                                            });
-                                          }}
-                                          placeholder="Rate difficulty 1-10"
-                                          className="w-full px-3 py-2 rounded bg-[#2d3b4e] border-none text-white text-sm placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-yellow-500"
-                                        />
-                                      </div>
-                                      <div className="flex items-end">
-                                        <label className="flex items-center gap-2 cursor-pointer">
-                                          <input
-                                            type="checkbox"
-                                            checked={set.completed !== false}
-                                            onChange={(e) => {
-                                              const newExercises = [...formData.exercises];
-                                              const newSets = [...exerciseSets];
-                                              newSets[setIdx] = {
-                                                ...newSets[setIdx],
-                                                completed: e.target.checked,
-                                              };
-                                              newExercises[idx] = {
-                                                ...newExercises[idx],
-                                                sets: newSets,
-                                              };
-                                              setFormData({
-                                                ...formData,
-                                                exercises: newExercises,
-                                              });
-                                            }}
-                                            className="w-5 h-5 rounded bg-[#2d3b4e] border-gray-600 text-green-500 focus:ring-green-500"
-                                          />
-                                          <span className="text-sm text-gray-300">Set completed</span>
-                                        </label>
-                                      </div>
-                                    </div>
                                   </div>
                                 )}
-                              </div>
-                            ))}
-                          </div>
 
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newExercises = [...formData.exercises];
-                              const newSets = [...exerciseSets];
-                              newSets.push({
-                                set_number: exerciseSets.length + 1,
-                                reps: 0,
-                                weight: undefined,
-                              });
-                              newExercises[idx] = {
-                                ...newExercises[idx],
-                                sets: newSets,
-                              };
-                              setFormData({ ...formData, exercises: newExercises });
-                            }}
-                            className="w-full py-3 bg-white hover:bg-gray-100 text-[#1a2332] font-bold rounded-lg flex items-center justify-center gap-2 transition-colors mb-4"
-                          >
-                            <MdAdd size={20} /> Add Set
-                          </button>
-                        </>
+                                <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+                                  {aiRec.reasoning && (
+                                    <p className="text-xs text-[#8E8E93] leading-relaxed flex-1">
+                                      {aiRec.reasoning}
+                                    </p>
+                                  )}
+                                  {aiRec.sets && Array.isArray(aiRec.sets) && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        applyAiSets(ex.exercise_id, idx)
+                                      }
+                                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#5EEAD4]/40 bg-[#5EEAD4]/10 text-[#5EEAD4] text-xs sm:text-sm font-semibold hover:bg-[#5EEAD4]/15 transition-colors shadow-ai flex-shrink-0 sm:ml-auto"
+                                    >
+                                      <MdBolt size={15} />
+                                      Apply sets
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          )}
+
+                          {/* Stats — full-bleed band */}
+                          {maxData && maxData.max_weight != null && (
+                            <div className="flex items-stretch divide-x divide-[#2A2D35]/80 bg-[#1A1410] border-b border-[#2A2D35]/60 px-4 sm:px-5 py-3">
+                              <div className="flex-1 px-2 first:pl-0">
+                                <p className="text-[10px] uppercase tracking-wide text-[#FF6B35] font-bold">
+                                  PR
+                                </p>
+                                <p className="text-sm font-bold text-white mt-0.5">
+                                  {maxData.max_weight} lbs
+                                </p>
+                              </div>
+                              {maxData.max_reps != null &&
+                                maxData.max_reps > 0 && (
+                                  <div className="flex-1 px-2">
+                                    <p className="text-[10px] uppercase tracking-wide text-[#636366] font-semibold">
+                                      Est. 1RM
+                                    </p>
+                                    <p className="text-sm font-bold text-white mt-0.5">
+                                      {Math.round(
+                                        maxData.max_weight *
+                                          (1 + maxData.max_reps / 30)
+                                      )}{" "}
+                                      lbs
+                                    </p>
+                                  </div>
+                                )}
+                              {bestSetLabel && (
+                                <div className="flex-1 px-2">
+                                  <p className="text-[10px] uppercase tracking-wide text-[#636366] font-semibold">
+                                    Best Set
+                                  </p>
+                                  <p className="text-sm font-bold text-white mt-0.5">
+                                    {bestSetLabel}
+                                  </p>
+                                </div>
+                              )}
+                              {maxData.max_volume != null && (
+                                <div className="flex-1 px-2 last:pr-0">
+                                  <p className="text-[10px] uppercase tracking-wide text-[#636366] font-semibold">
+                                    Max Volume
+                                  </p>
+                                  <p className="text-sm font-bold text-white mt-0.5">
+                                    {Math.round(maxData.max_volume)} lbs
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="px-4 sm:px-5 py-4 space-y-3">
+                          {isCardio ? (
+                            <div className="space-y-4">
+                              <div>
+                                <label className="block text-[10px] font-bold text-[#636366] uppercase tracking-wide mb-2">
+                                  Time (minutes)
+                                </label>
+                                <input
+                                  type="number"
+                                  value={ex.time || ""}
+                                  onChange={(e) => {
+                                    const newExercises = [...formData.exercises];
+                                    newExercises[idx] = {
+                                      ...newExercises[idx],
+                                      time: e.target.value
+                                        ? parseFloat(e.target.value)
+                                        : undefined,
+                                    };
+                                    setFormData({
+                                      ...formData,
+                                      exercises: newExercises,
+                                    });
+                                  }}
+                                  placeholder="—"
+                                  className="w-full px-4 py-3 rounded-xl bg-[#0B0C10] border border-[#2A2D35] text-white placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/50"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-bold text-[#636366] uppercase tracking-wide mb-2">
+                                  Speed (mph)
+                                </label>
+                                <input
+                                  type="number"
+                                  value={ex.speed || ""}
+                                  onChange={(e) => {
+                                    const newExercises = [...formData.exercises];
+                                    newExercises[idx] = {
+                                      ...newExercises[idx],
+                                      speed: e.target.value
+                                        ? parseFloat(e.target.value)
+                                        : undefined,
+                                    };
+                                    setFormData({
+                                      ...formData,
+                                      exercises: newExercises,
+                                    });
+                                  }}
+                                  placeholder="—"
+                                  className="w-full px-4 py-3 rounded-xl bg-[#0B0C10] border border-[#2A2D35] text-white placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/50"
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="grid grid-cols-12 gap-2 sm:gap-3 text-[10px] font-bold text-[#636366] uppercase tracking-wide">
+                                <div className="col-span-1">Set</div>
+                                <div className="col-span-3">Reps</div>
+                                <div className="col-span-3">Weight (lbs)</div>
+                                <div className="col-span-3">RPE</div>
+                                <div className="col-span-2 text-center">Done</div>
+                              </div>
+
+                              <div className="space-y-1.5">
+                                {exerciseSets.map((set, setIdx) => (
+                                  <div
+                                    key={setIdx}
+                                    className="grid grid-cols-12 gap-2 sm:gap-3 items-center"
+                                  >
+                                    <div className="col-span-1 text-sm font-medium text-[#8E8E93]">
+                                      {set.set_number}
+                                    </div>
+                                    <div className="col-span-3">
+                                      <input
+                                        type="number"
+                                        value={set.reps === 0 ? "" : set.reps}
+                                        onChange={(e) => {
+                                          const newExercises = [
+                                            ...formData.exercises,
+                                          ];
+                                          const newSets = [...exerciseSets];
+                                          const inputValue = e.target.value;
+                                          const value =
+                                            inputValue === ""
+                                              ? 0
+                                              : parseInt(inputValue) || 0;
+                                          newSets[setIdx] = {
+                                            ...newSets[setIdx],
+                                            reps: value,
+                                          };
+                                          newExercises[idx] = {
+                                            ...newExercises[idx],
+                                            sets: newSets,
+                                          };
+                                          setFormData({
+                                            ...formData,
+                                            exercises: newExercises,
+                                          });
+                                        }}
+                                        onFocus={(e) => e.target.select()}
+                                        placeholder="—"
+                                        className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
+                                      />
+                                    </div>
+                                    <div className="col-span-3">
+                                      <input
+                                        type="number"
+                                        value={set.weight || ""}
+                                        onChange={(e) => {
+                                          const newExercises = [
+                                            ...formData.exercises,
+                                          ];
+                                          const newSets = [...exerciseSets];
+                                          newSets[setIdx] = {
+                                            ...newSets[setIdx],
+                                            weight: e.target.value
+                                              ? parseFloat(e.target.value)
+                                              : undefined,
+                                          };
+                                          newExercises[idx] = {
+                                            ...newExercises[idx],
+                                            sets: newSets,
+                                          };
+                                          setFormData({
+                                            ...formData,
+                                            exercises: newExercises,
+                                          });
+                                        }}
+                                        placeholder="—"
+                                        className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
+                                      />
+                                    </div>
+                                    <div className="col-span-3">
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        max="10"
+                                        step="0.5"
+                                        value={set.rpe || ""}
+                                        onChange={(e) => {
+                                          const newExercises = [
+                                            ...formData.exercises,
+                                          ];
+                                          const newSets = [...exerciseSets];
+                                          newSets[setIdx] = {
+                                            ...newSets[setIdx],
+                                            rpe: e.target.value
+                                              ? parseFloat(e.target.value)
+                                              : undefined,
+                                          };
+                                          newExercises[idx] = {
+                                            ...newExercises[idx],
+                                            sets: newSets,
+                                          };
+                                          setFormData({
+                                            ...formData,
+                                            exercises: newExercises,
+                                          });
+                                        }}
+                                        placeholder="—"
+                                        className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
+                                      />
+                                    </div>
+                                    <div className="col-span-2 flex justify-center">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const newExercises = [
+                                            ...formData.exercises,
+                                          ];
+                                          const newSets = [...exerciseSets];
+                                          const next =
+                                            set.completed === true
+                                              ? false
+                                              : true;
+                                          newSets[setIdx] = {
+                                            ...newSets[setIdx],
+                                            completed: next,
+                                          };
+                                          newExercises[idx] = {
+                                            ...newExercises[idx],
+                                            sets: newSets,
+                                          };
+                                          setFormData({
+                                            ...formData,
+                                            exercises: newExercises,
+                                          });
+                                        }}
+                                        className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
+                                          set.completed === true
+                                            ? "bg-[#FF6B35] text-white"
+                                            : "bg-[#161A22] border border-[#3A3A3C] text-transparent hover:border-[#FF6B35]/40"
+                                        }`}
+                                      >
+                                        <MdCheck
+                                          size={18}
+                                          className={
+                                            set.completed === true
+                                              ? "opacity-100"
+                                              : "opacity-0"
+                                          }
+                                        />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const newExercises = [...formData.exercises];
+                                  const newSets = [...exerciseSets];
+                                  newSets.push({
+                                    set_number: exerciseSets.length + 1,
+                                    reps: 0,
+                                    weight: undefined,
+                                    completed: false,
+                                  });
+                                  newExercises[idx] = {
+                                    ...newExercises[idx],
+                                    sets: newSets,
+                                  };
+                                  setFormData({
+                                    ...formData,
+                                    exercises: newExercises,
+                                  });
+                                }}
+                                className="w-full py-2.5 border border-dashed border-[#3A3A3C] hover:border-[#FF6B35]/40 text-[#8E8E93] hover:text-[#FF6B35] text-sm font-medium rounded-lg flex items-center justify-center gap-2 transition-colors"
+                              >
+                                <MdAdd size={16} /> Add set
+                              </button>
+                            </>
+                          )}
+                          </div>
+                        </div>
                       )}
                     </div>
                   );
                 })}
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  exerciseSelectionRef.current?.scrollIntoView({
-                    behavior: "smooth",
-                  });
-                }}
-                className="w-full py-3 mt-4 border-2 border-white/20 text-[#6366F1] font-bold rounded-lg flex items-center justify-center gap-2 hover:bg-white/5 transition-colors"
-              >
-                <MdAdd size={20} /> Add Exercise
-              </button>
-            </div>
-
-            <Input
-              label="Notes (Optional)"
-              value={formData.notes}
-              onChange={(e) =>
-                setFormData({ ...formData, notes: e.target.value })
-              }
-              placeholder="How did the workout feel?"
-              className="bg-[#2d3b4e] border-none text-white placeholder:text-gray-500"
-            />
-
-            <div className="flex flex-col sm:flex-row gap-4 pt-4">
-              <Button
-                type="submit"
-                variant="primary"
-                disabled={formData.exercises.length === 0}
-                className="flex-1 py-4 text-lg font-bold"
-              >
-                {editingSessionId ? "Update Workout" : "Save Workout"}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={handleCancel}
-                className="flex-1 py-4 text-lg font-bold bg-white text-[#1a2332] hover:bg-gray-100 border-none"
-              >
-                {editingSessionId ? "Close" : "Cancel"}
-              </Button>
-            </div>
           </form>
-        </Card>
+        </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {sessions.map((session) => (
-          <Card key={session.id}>
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-lg bg-[#6366F1]/20 flex items-center justify-center flex-shrink-0">
-                <MdFitnessCenter className="text-[#6366F1] text-2xl" />
-              </div>
-              <div className="flex-1">
-                <div className="flex items-start justify-between mb-2">
-                  <h3 className="text-lg font-semibold text-[#F9FAFB]">
-                    {session.split_name || "Workout Session"}
-                  </h3>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleEdit(session)}
-                      className="text-[#6366F1] hover:text-[#8B5CF6] transition-colors"
-                      title="Edit"
-                    >
-                      <MdEdit size={20} />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(session.id!)}
-                      className="text-[#EF4444] hover:text-[#DC2626] transition-colors"
-                      title="Delete"
-                    >
-                      <MdDelete size={20} />
-                    </button>
-                  </div>
-                </div>
-                <p className="text-sm text-[#9CA3AF] mb-2">{session.date}</p>
-                <p className="text-sm text-[#9CA3AF] mb-2">
-                  {session.exercises?.length || 0} exercises
-                </p>
-                {session.exercises && session.exercises.length > 0 && (
-                  <div className="space-y-1 mb-2">
-                    {session.exercises.slice(0, 3).map((ex: any, idx: number) => {
-                      const hasFailedSets = ex.sets?.some((s: any) => s.completed === false);
-                      const avgRpe = ex.sets?.filter((s: any) => s.rpe).length > 0
-                        ? Math.round(ex.sets.filter((s: any) => s.rpe).reduce((acc: number, s: any) => acc + s.rpe, 0) / ex.sets.filter((s: any) => s.rpe).length)
-                        : null;
+      {!showForm && (
+        <div className="space-y-4">
+          {sessions.length === 0 && (
+            <div className="rounded-2xl border border-dashed border-[#2A2D35] bg-[#161A22] px-6 py-16 text-center">
+              <p className="text-[#FFFFFF] font-semibold mb-1">No sessions yet</p>
+              <p className="text-sm text-[#8E8E93] mb-5">
+                Log your first workout to see it here.
+              </p>
+              <Button onClick={() => setShowForm(true)} icon={<MdAdd />}>
+                New Session
+              </Button>
+            </div>
+          )}
 
-                      return (
-                        <div key={idx} className="text-xs text-[#9CA3AF] flex items-center gap-2">
-                          <span>
-                            • {ex.exercise_name || ex.exercise_id}
-                            {ex.sets && ex.sets.length > 0 && (
-                              <span className="text-[#6B7280] ml-1">
-                                ({ex.sets.length} set{ex.sets.length > 1 ? 's' : ''})
-                              </span>
-                            )}
-                          </span>
-                          {avgRpe && (
-                            <span className="text-yellow-400 text-xs" title={`Average RPE: ${avgRpe}/10`}>
-                              RPE {avgRpe}
-                            </span>
+          {sessions.map((session, index) => {
+            const badge = getDateBadgeColors(index);
+            const volume = getSessionVolume(session);
+            const exerciseCount = session.exercises?.length || 0;
+            const previewExercises = (session.exercises || []).slice(0, 3);
+
+            return (
+              <button
+                key={session.id}
+                type="button"
+                onClick={() => handleEdit(session)}
+                className="w-full text-left group bg-[#161A22] border border-[#2A2D35] rounded-2xl p-5 sm:p-6 shadow-sm hover:shadow-md hover:border-[#FF6B35]/40 transition-all"
+              >
+                <div className="flex items-start gap-3 sm:gap-4">
+                  <div
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap ${badge.bg} ${badge.text}`}
+                  >
+                    {formatDateBadge(session.date)}
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="text-base sm:text-lg font-bold text-[#FFFFFF] truncate">
+                          {session.split_name || session.workout_name || "Workout Session"}
+                        </h3>
+                        <p className="text-sm text-[#8E8E93] mt-0.5">
+                          {exerciseCount} exercise{exerciseCount !== 1 ? "s" : ""}
+                          {volume > 0 && (
+                            <>
+                              {" · "}
+                              {volume.toLocaleString()} lb total volume
+                            </>
                           )}
-                          {hasFailedSets && (
-                            <span className="text-red-400 text-xs" title="Some sets not completed">
-                              ⚠️
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {session.exercises.length > 3 && (
-                      <div className="text-xs text-[#6B7280]">
-                        +{session.exercises.length - 3} more
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(session.id!);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.stopPropagation();
+                              handleDelete(session.id!);
+                            }
+                          }}
+                          className="p-1.5 rounded-lg text-[#636366] hover:text-[#EF4444] hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                          title="Delete"
+                        >
+                          <MdDelete size={18} />
+                        </span>
+                        <MdChevronRight className="text-[#3A3A3C] text-xl group-hover:text-[#FF6B35] transition-colors" />
+                      </div>
+                    </div>
+
+                    {previewExercises.length > 0 && (
+                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        {previewExercises.map((ex: any, idx: number) => (
+                          <div
+                            key={idx}
+                            className="rounded-xl bg-[#0B0C10] border border-[#1C1C1E] px-3.5 py-3"
+                          >
+                            <p className="text-sm font-semibold text-[#FFFFFF] truncate">
+                              {ex.exercise_name || ex.exercise_id}
+                            </p>
+                            <p className="text-xs text-[#8E8E93] mt-1">
+                              {formatExerciseSummary(ex)}
+                            </p>
+                          </div>
+                        ))}
                       </div>
                     )}
+
+                    {session.exercises && session.exercises.length > 3 && (
+                      <p className="text-xs text-[#636366] mt-3">
+                        +{session.exercises.length - 3} more exercise
+                        {session.exercises.length - 3 !== 1 ? "s" : ""}
+                      </p>
+                    )}
                   </div>
-                )}
-                {session.notes && (
-                  <p className="text-sm text-[#F9FAFB] mt-2 italic">
-                    {session.notes}
-                  </p>
-                )}
-              </div>
-            </div>
-          </Card>
-        ))}
-      </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
