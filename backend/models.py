@@ -29,6 +29,7 @@ class WorkoutSet(BaseModel):
     completed: Optional[bool] = None  # Whether the set was successfully completed
     form_quality: Optional[str] = None  # "excellent", "good", "fair", "poor"
     notes: Optional[str] = None  # Any additional notes about this specific set
+    difficulty: Optional[str] = None  # "easy", "solid", "grind", "failed"
 
 class WorkoutSession(BaseModel):
     id: Optional[str] = None
@@ -158,12 +159,14 @@ class PlanExercise(BaseModel):
     rest_seconds: Optional[int] = None
     notes: Optional[str] = None
     order: int
+    intensity: Optional[str] = None  # "heavy", "light", "normal"
 
 class WorkoutPlanDay(BaseModel):
     day_name: str
     focus: str
     exercises: List[PlanExercise]
     estimated_duration_minutes: Optional[int] = None
+    intensity: Optional[str] = None  # "heavy", "light", "normal"
 
 class WeeklySchedule(BaseModel):
     monday: Optional[str] = None

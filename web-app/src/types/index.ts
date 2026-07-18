@@ -29,6 +29,7 @@ export interface WorkoutSet {
   completed?: boolean; // Whether the set was successfully completed
   form_quality?: string; // "excellent", "good", "fair", "poor"
   notes?: string; // Any additional notes about this specific set
+  difficulty?: 'easy' | 'solid' | 'grind' | 'failed';
 }
 
 export interface SessionExercise {
@@ -174,6 +175,7 @@ export interface PlanExercise {
   rest_seconds?: number;
   notes?: string;
   order: number;
+  intensity?: 'heavy' | 'light' | 'normal';
 }
 
 export interface WorkoutPlanDay {
@@ -181,6 +183,7 @@ export interface WorkoutPlanDay {
   focus: string;
   exercises: PlanExercise[];
   estimated_duration_minutes?: number;
+  intensity?: 'heavy' | 'light' | 'normal';
 }
 
 export interface WeeklySchedule {

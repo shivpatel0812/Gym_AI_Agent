@@ -1,6 +1,11 @@
 """
 Simple progression recommendation logic.
 Used when there's insufficient data for full AI analysis.
+
+DEPRECATED: This module's logic has been absorbed into progression_engine.py.
+The ProgressionEngine handles all cases (first session, few sessions, many sessions)
+deterministically. This file is kept for backward compatibility but is no longer
+called by WorkoutRecommender.get_exercise_recommendation().
 """
 
 from typing import Dict, List, Any
