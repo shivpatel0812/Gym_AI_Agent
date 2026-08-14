@@ -50,6 +50,7 @@ export interface WorkoutSession {
   workout_name?: string;
   split_id?: string;
   split_name?: string;
+  split_day?: string;
   exercises: SessionExercise[];
   notes?: string;
 }
@@ -150,8 +151,23 @@ export interface AIExerciseRecommendation {
   time?: number;
   speed?: number;
   reasoning?: string;
-  progression_type?: 'increase_weight' | 'increase_reps' | 'maintain' | 'deload';
+  progression_type?:
+    | 'first_session'
+    | 'needs_starting_weight'
+    | 'increase_weight'
+    | 'increase_reps'
+    | 'maintain'
+    | 'deload'
+    | 'light_day'
+    | 'cardio_progress'
+    | 'bodyweight_progress';
   confidence?: 'high' | 'medium' | 'low';
+  needs_starting_weight?: boolean;
+  suggested_reps?: number;
+  suggested_sets?: number;
+  rep_range?: [number, number];
+  has_implausible_data?: boolean;
+  estimated_from_top_lifts?: boolean;
 }
 
 export interface AISummaryStatus {
@@ -210,6 +226,9 @@ export interface WorkoutPlan {
   created_at?: string;
   updated_at?: string;
   generation_metadata?: Record<string, unknown>;
+  creation_mode?: PlanCreationMode;
+  source_split_id?: string;
+  owns_linked_split?: boolean;
 }
 
 export interface TodaysWorkout {
@@ -220,6 +239,7 @@ export interface TodaysWorkout {
   estimated_duration_minutes?: number;
   plan_id?: string;
   plan_name?: string;
+  split_id?: string;
   already_logged?: boolean;
   existing_session_id?: string;
   rest_day_message?: string;
@@ -236,4 +256,63 @@ export interface PlanGenerationRequest {
   preferred_workout_days?: string[];
   secondary_goals?: string[];
   coaching_style?: string;
+  mode: PlanCreationMode;
+  split_id?: string;
+  top_lifts?: TopLifts;
+  accepted_additions?: ExerciseSuggestion[];
+  split_routine?: SplitRoutineDay[];
+}
+
+export type PlanCreationMode =
+  | "generate"
+  | "use_split"
+  | "adopt_split"
+  | "add_onto";
+
+export interface TopLiftEntry {
+  weight: number;
+  reps?: number;
+}
+
+export interface TopLifts {
+  bench_press?: TopLiftEntry;
+  squat?: TopLiftEntry;
+  deadlift?: TopLiftEntry;
+  overhead_press?: TopLiftEntry;
+  barbell_row?: TopLiftEntry;
+}
+
+export interface SplitRoutineSet {
+  set_number: number;
+  reps: number;
+  weight?: number;
+}
+
+export interface SplitRoutineExercise {
+  exercise_id: string;
+  exercise_name: string;
+  /** Convenience totals derived from set_details */
+  sets?: number;
+  reps?: number;
+  weight?: number;
+  set_details?: SplitRoutineSet[];
+}
+
+export interface SplitRoutineDay {
+  day: string;
+  exercises: SplitRoutineExercise[];
+}
+
+export interface ExerciseSuggestion {
+  exercise_id: string;
+  exercise_name: string;
+  day: string;
+  sets: number;
+  reps: number;
+  reason: string;
+}
+
+export interface ExerciseSuggestionGroup {
+  day: string;
+  exercises: Omit<ExerciseSuggestion, "day">[];
 }

@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Dict, Union
 from pydantic import BaseModel
 from enum import Enum
 
@@ -6,6 +6,15 @@ class WorkoutType(str, Enum):
     CARDIO = "cardio"
     STRENGTH = "strength"
     CUSTOM = "custom"
+
+
+class TopLiftEntry(BaseModel):
+    """A representative set supplied for strength context; not necessarily a max."""
+    weight: float
+    reps: Optional[int] = None
+
+
+TopLifts = Dict[str, Union[float, TopLiftEntry]]
 
 class Exercise(BaseModel):
     id: Optional[str] = None
@@ -35,6 +44,7 @@ class WorkoutSession(BaseModel):
     id: Optional[str] = None
     date: str
     workout_name: Optional[str] = None
+    split_id: Optional[str] = None
     split_name: Optional[str] = None
     split_day: Optional[str] = None
     exercises: List[dict]
@@ -149,6 +159,8 @@ class UserProfile(BaseModel):
     open_reflection: Optional[str] = None
     available_equipment: Optional[List[str]] = None
     preferred_workout_days: Optional[List[str]] = None
+    top_lifts: Optional[dict] = None
+    top_lifts_updated: Optional[str] = None
 
 
 class PlanExercise(BaseModel):
@@ -191,4 +203,7 @@ class WorkoutPlan(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     generation_metadata: Optional[dict] = None
+    creation_mode: Optional[str] = None
+    source_split_id: Optional[str] = None
+    owns_linked_split: bool = False
 

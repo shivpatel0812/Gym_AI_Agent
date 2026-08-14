@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import apiClient from "../lib/api-client";
 import { MacroEntry, FoodItem, HydrationEntry } from "../types";
-import LogFoodModal, { MEALS } from "../components/nutrition/LogFoodModal";
+import LogFoodForm, { MEALS } from "../components/nutrition/LogFoodModal";
 import { MdAdd, MdClose } from "react-icons/md";
 
 const TARGETS = {
@@ -79,8 +79,7 @@ export default function NutritionPage() {
   const [entries, setEntries] = useState<MacroEntry[]>([]);
   const [hydrationEntries, setHydrationEntries] = useState<HydrationEntry[]>([]);
   const [selectedDate, setSelectedDate] = useState(() => toDateKey(new Date()));
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalMeal, setModalMeal] = useState<string | undefined>(undefined);
+  const [loggingMeal, setLoggingMeal] = useState<string | null>(null);
   const [collapsedMeals, setCollapsedMeals] = useState<Record<string, boolean>>({});
 
   const fetchAll = useCallback(async () => {
@@ -193,6 +192,7 @@ export default function NutritionPage() {
         });
       }
       fetchAll();
+      setLoggingMeal(null);
     } catch (error) {
       console.error("Error adding food:", error);
     }
@@ -239,8 +239,10 @@ export default function NutritionPage() {
   };
 
   const openLogFood = (meal?: string) => {
-    setModalMeal(meal);
-    setModalOpen(true);
+    const firstEmpty = MEALS.find((m) => !(mealGroups[m.id] || []).length)?.id;
+    const target = meal || firstEmpty || MEALS[0].id;
+    setLoggingMeal(target);
+    setCollapsedMeals((prev) => ({ ...prev, [target]: false }));
   };
 
   const pct = Math.min(
@@ -279,13 +281,15 @@ export default function NutritionPage() {
 
   const mealsToShow = [
     ...MEALS.filter(
-      (m) => (mealGroups[m.id] || []).length > 0
+      (m) => (mealGroups[m.id] || []).length > 0 || loggingMeal === m.id
     ),
     ...(mealGroups["Other"]?.length
       ? [{ id: "Other", label: "Other", icon: "🍽️" }]
       : []),
   ];
-  const emptyMeals = MEALS.filter((m) => !(mealGroups[m.id] || []).length);
+  const emptyMeals = MEALS.filter(
+    (m) => !(mealGroups[m.id] || []).length && loggingMeal !== m.id
+  );
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-[1100px] mx-auto pb-28">
@@ -493,7 +497,7 @@ export default function NutritionPage() {
 
               {!isCollapsed && (
                 <>
-                  {/* Food table */}
+                  {rows.length > 0 && (
                   <div className="border-t border-[#2A2D35]">
                     <div className="grid grid-cols-12 gap-2 px-5 py-2.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[#636366] bg-[#0F1117]/60">
                       <div className="col-span-7 sm:col-span-5">Food</div>
@@ -567,16 +571,26 @@ export default function NutritionPage() {
                       </div>
                     </div>
                   </div>
+                  )}
 
                   {/* Add food */}
                   {meal.id !== "Other" && (
-                    <div className="px-5 py-4">
-                      <button
-                        onClick={() => openLogFood(meal.id)}
-                        className="w-full py-2.5 rounded-xl border border-dashed border-[#3A3A3C] text-[#8E8E93] hover:text-[#FF6B35] hover:border-[#FF6B35]/40 text-sm font-medium flex items-center justify-center gap-1.5 transition-colors"
-                      >
-                        <MdAdd size={16} /> Add food
-                      </button>
+                    <div className="px-5 py-4 border-t border-[#2A2D35]">
+                      {loggingMeal === meal.id ? (
+                        <LogFoodForm
+                          key={meal.id}
+                          meal={meal.id}
+                          onAdd={addFood}
+                          onCancel={() => setLoggingMeal(null)}
+                        />
+                      ) : (
+                        <button
+                          onClick={() => openLogFood(meal.id)}
+                          className="w-full py-2.5 rounded-xl border border-dashed border-[#3A3A3C] text-[#8E8E93] hover:text-[#FF6B35] hover:border-[#FF6B35]/40 text-sm font-medium flex items-center justify-center gap-1.5 transition-colors"
+                        >
+                          <MdAdd size={16} /> Add food
+                        </button>
+                      )}
                     </div>
                   )}
                 </>
@@ -618,13 +632,6 @@ export default function NutritionPage() {
       >
         <MdAdd size={20} /> Log Food
       </button>
-
-      <LogFoodModal
-        isOpen={modalOpen}
-        initialMeal={modalMeal}
-        onClose={() => setModalOpen(false)}
-        onAdd={addFood}
-      />
     </div>
   );
 }

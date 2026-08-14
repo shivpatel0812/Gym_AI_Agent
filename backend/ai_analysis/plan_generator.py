@@ -5,9 +5,10 @@ Uses GPT-4o to create structured workout programs from user preferences.
 
 import json
 import os
-from typing import Optional
+from typing import Optional, List, Dict
 from openai import OpenAI
 from data.default_exercises import filter_exercises_by_equipment, validate_exercise_id
+from models import WorkoutPlan
 
 
 class WorkoutPlanGenerator:
@@ -47,6 +48,8 @@ class WorkoutPlanGenerator:
 
         # Build context from user profile
         profile_context = self._build_profile_context(user_profile)
+        mode = request.get("mode", "generate")
+        split_context = request.get("split_context")
 
         system_prompt = """You are an expert personal trainer and exercise scientist. Create a structured workout program.
 
@@ -61,6 +64,12 @@ CRITICAL RULES:
    - Lose Fat: 12-15 reps with some 8-10 for compounds
    - Get Stronger: 3-6 reps for main lifts, 8-12 for accessories
    - General Fitness: 8-15 reps mixed
+7. If an EXISTING SPLIT STRUCTURE is provided, preserve every day name exactly
+   and return exactly those workout days. Any exercises the user listed are
+   SEED CONTEXT only (strength level, preferred movements). Build a complete
+   day with 4-7 exercises - do NOT limit a day to only the seed lifts.
+8. When seed exercises include weights/reps, use them to infer intermediate vs
+   beginner loading and keep complementary accessories appropriate.
 
 Return a JSON object with this exact structure:
 {
@@ -98,6 +107,18 @@ Return a JSON object with this exact structure:
   "deload_schedule": "string - when to deload"
 }"""
 
+        split_structure_block = ""
+        if mode == "use_split" and split_context:
+            split_structure_block = (
+                "EXISTING SPLIT STRUCTURE (preserve these exact day names):\n"
+                f"{json.dumps(split_context, indent=2)}\n\n"
+                "The exercises above (if any) are optional seed context from the user - "
+                "a few key lifts with weights is enough. Design a full balanced program "
+                "for each day (compounds first, then accessories). Prefer keeping the "
+                "user's seed lifts in the plan when they fit, and fill the rest from "
+                "the catalog."
+            )
+
         user_prompt = f"""Create a workout program for this user:
 
 PRIMARY GOAL: {request.get('primary_goal', 'General Fitness')}
@@ -113,6 +134,8 @@ AVAILABLE EQUIPMENT: {', '.join(available_equipment)}
 
 AVAILABLE EXERCISE CATALOG (you MUST only use exercises from this list):
 {catalog_str}
+
+{split_structure_block}
 
 Generate the workout program as JSON."""
 
@@ -139,10 +162,118 @@ Generate the workout program as JSON."""
         }
 
         # Validate and clean the plan
-        validated_plan = self._validate_plan(raw_plan)
+        validated_plan = self._validate_plan(
+            raw_plan, allowed_ids={exercise["id"] for exercise in filtered_exercises}
+        )
+        if mode == "use_split" and split_context:
+            validated_plan = self._enforce_split_structure(
+                validated_plan, split_context
+            )
+        validated_plan = WorkoutPlan(**validated_plan).dict(exclude_none=True)
         validated_plan["generation_metadata"] = metadata
 
         return validated_plan
+
+    def suggest_additions(
+        self,
+        split_context: dict,
+        primary_goal: str,
+        available_equipment: List[str],
+        user_profile: Optional[dict] = None,
+    ) -> List[Dict]:
+        """Suggest catalog-backed additions without replacing current exercises."""
+        filtered_exercises = filter_exercises_by_equipment(available_equipment)
+        existing_ids = {
+            ex.get("exercise_id")
+            for day in split_context.get("days", [])
+            for ex in day.get("exercises", [])
+            if ex.get("exercise_id")
+        }
+        available = [ex for ex in filtered_exercises if ex["id"] not in existing_ids]
+        available_ids = {ex["id"] for ex in available}
+        catalog_str = "\n".join(
+            f'- id: "{ex["id"]}", name: "{ex["name"]}", '
+            f'category: "{ex["category"]}", equipment: "{ex["equipment"]}"'
+            for ex in available
+        )
+
+        prompt = f"""Suggest complementary exercises for this existing routine.
+
+PRIMARY GOAL: {primary_goal}
+EXISTING ROUTINE:
+{json.dumps(split_context, indent=2)}
+
+RULES:
+- Keep every existing exercise untouched.
+- Suggest at most 3 additions per day and only where useful.
+- Fill genuine muscle-coverage or movement-pattern gaps.
+- Avoid redundant variants and excessive weekly volume.
+- Use ONLY exact IDs from the catalog below.
+- Return JSON: {{"suggestions": [{{"day": "exact existing day name",
+  "exercises": [{{"exercise_id": "...", "exercise_name": "...",
+  "sets": 3, "reps": 10, "reason": "short explanation"}}]}}]}}
+
+CATALOG:
+{catalog_str}"""
+        response = self.client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an exercise-programming assistant. Suggest additions only; "
+                        "never replace the user's current routine."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.4,
+            max_tokens=2200,
+        )
+        raw = json.loads(response.choices[0].message.content)
+        valid_days = {day.get("day_name") for day in split_context.get("days", [])}
+        cleaned = []
+        seen = set(existing_ids)
+        for day_group in raw.get("suggestions", []):
+            day_name = day_group.get("day")
+            if day_name not in valid_days:
+                continue
+            exercises = []
+            for ex in day_group.get("exercises", [])[:3]:
+                exercise_id = ex.get("exercise_id")
+                if exercise_id not in available_ids or exercise_id in seen:
+                    continue
+                seen.add(exercise_id)
+                exercises.append(
+                    {
+                        "exercise_id": exercise_id,
+                        "exercise_name": ex.get("exercise_name", ""),
+                        "sets": max(1, min(5, int(ex.get("sets", 3)))),
+                        "reps": max(1, min(30, int(ex.get("reps", 10)))),
+                        "reason": ex.get("reason", "Complements your current routine."),
+                    }
+                )
+            if exercises:
+                cleaned.append({"day": day_name, "exercises": exercises})
+        return cleaned
+
+    def _enforce_split_structure(self, plan: dict, split_context: dict) -> dict:
+        """Preserve source split day names even if the model changes formatting."""
+        generated_by_name = {
+            day.get("day_name", "").strip().lower(): day
+            for day in plan.get("days", [])
+        }
+        days = []
+        for source_day in split_context.get("days", []):
+            name = source_day.get("day_name", "")
+            generated = generated_by_name.get(name.strip().lower())
+            if not generated:
+                raise ValueError(f"Generated plan omitted split day: {name}")
+            generated["day_name"] = name
+            days.append(generated)
+        plan["days"] = days
+        return plan
 
     def _build_profile_context(self, profile: dict) -> str:
         """Build user profile context string for the prompt."""
@@ -164,14 +295,16 @@ Generate the workout program as JSON."""
             return "USER PROFILE:\n" + "\n".join(f"- {p}" for p in parts)
         return ""
 
-    def _validate_plan(self, plan: dict) -> dict:
+    def _validate_plan(self, plan: dict, allowed_ids: Optional[set] = None) -> dict:
         """Validate AI output and fix issues."""
         # Validate each day's exercises
         for day in plan.get("days", []):
             valid_exercises = []
             for ex in day.get("exercises", []):
                 exercise_id = ex.get("exercise_id", "")
-                if validate_exercise_id(exercise_id):
+                if validate_exercise_id(exercise_id) and (
+                    allowed_ids is None or exercise_id in allowed_ids
+                ):
                     # Clamp rep ranges
                     ex["reps"] = max(1, min(30, ex.get("reps", 10)))
                     ex["sets"] = max(1, min(10, ex.get("sets", 3)))

@@ -21,9 +21,12 @@ import {
   MdExpandMore,
   MdFitnessCenter,
   MdPlayArrow,
+  MdPause,
+  MdRefresh,
   MdSelfImprovement,
   MdCalendarToday,
 } from "react-icons/md";
+import { useSessionTimer } from "@/hooks/useSessionTimer";
 import defaultExercises, {
   categoryToMuscleGroup,
   categories,
@@ -84,6 +87,36 @@ function buildSessionPayload(formData: SessionFormData) {
     exercises: filteredExercises,
     notes: formData.notes || undefined,
   };
+}
+
+function ActiveSessionTimer() {
+  const { formattedTime, isRunning, pause, resume, reset } = useSessionTimer();
+
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <span className="font-mono text-lg font-bold text-white tabular-nums">
+        {formattedTime}
+      </span>
+      <button
+        type="button"
+        onClick={isRunning ? pause : resume}
+        className="w-8 h-8 rounded-full bg-[#0B0C10] border border-[#2A2D35] flex items-center justify-center text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40 transition-colors"
+        title={isRunning ? "Pause" : "Resume"}
+        aria-label={isRunning ? "Pause timer" : "Resume timer"}
+      >
+        {isRunning ? <MdPause size={16} /> : <MdPlayArrow size={16} />}
+      </button>
+      <button
+        type="button"
+        onClick={reset}
+        className="w-8 h-8 rounded-full bg-[#0B0C10] border border-[#2A2D35] flex items-center justify-center text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40 transition-colors"
+        title="Reset timer"
+        aria-label="Reset timer"
+      >
+        <MdRefresh size={16} />
+      </button>
+    </div>
+  );
 }
 
 function getApiErrorMessage(error: unknown, fallback: string) {
@@ -660,6 +693,39 @@ export default function SessionsSection({
     return palettes[index % palettes.length];
   };
 
+  const removeExercise = (exerciseIdx: number) => {
+    setFormData({
+      ...formData,
+      exercises: formData.exercises.filter((_, i) => i !== exerciseIdx),
+    });
+    setCollapsedExercises((prev) => {
+      const next: Record<number, boolean> = {};
+      Object.entries(prev).forEach(([key, value]) => {
+        const i = Number(key);
+        if (i < exerciseIdx) next[i] = value;
+        if (i > exerciseIdx) next[i - 1] = value;
+      });
+      return next;
+    });
+  };
+
+  const removeSet = (exerciseIdx: number, setIdx: number) => {
+    const exercise = formData.exercises[exerciseIdx];
+    const currentSets = Array.isArray(exercise?.sets) ? exercise.sets : [];
+    const remaining = currentSets
+      .filter((_, i) => i !== setIdx)
+      .map((set, i) => ({ ...set, set_number: i + 1 }));
+
+    if (remaining.length === 0) {
+      removeExercise(exerciseIdx);
+      return;
+    }
+
+    const newExercises = [...formData.exercises];
+    newExercises[exerciseIdx] = { ...exercise, sets: remaining };
+    setFormData({ ...formData, exercises: newExercises });
+  };
+
   const applyAiSets = (exerciseId: string, exerciseIdx: number) => {
     const rec = aiRecommendations[exerciseId];
     if (!rec?.sets || !Array.isArray(rec.sets)) return;
@@ -1036,40 +1102,22 @@ export default function SessionsSection({
               </div>
             </div>
 
-            {/* Progress bar */}
-            <div className="w-full h-1.5 rounded-full bg-[#2A2D35] mb-3">
-              <div
-                className="h-full rounded-full bg-[#FF6B35] transition-all duration-300"
-                style={{ width: `${sessionProgress.pct}%` }}
-              />
-            </div>
-
-            {/* Stats and Save row */}
             <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-[#8E8E93]">
-                {sessionProgress.doneExercises} of{" "}
-                {sessionProgress.exerciseCount || 0} exercises
-                {" \u00B7 "}
-                {sessionProgress.doneSets} of{" "}
-                {sessionProgress.totalSets || 0} sets
-              </p>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#FF6B35]/15 text-[#FF6B35]">
-                  {sessionProgress.pct}%
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleSubmit({
-                      preventDefault: () => {},
-                    } as React.FormEvent)
-                  }
-                  disabled={formData.exercises.length === 0 || isSaving}
-                  className="px-4 py-2 rounded-xl bg-[#FF6B35] text-white text-sm font-semibold hover:bg-[#FF6B35]/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isSaving ? "Saving..." : "Save Workout"}
-                </button>
+              <div className="xl:hidden">
+                <ActiveSessionTimer />
               </div>
+              <button
+                type="button"
+                onClick={() =>
+                  handleSubmit({
+                    preventDefault: () => {},
+                  } as React.FormEvent)
+                }
+                disabled={formData.exercises.length === 0 || isSaving}
+                className="ml-auto px-4 py-2 rounded-xl bg-[#FF6B35] text-white text-sm font-semibold hover:bg-[#FF6B35]/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {isSaving ? "Saving..." : "Save Workout"}
+              </button>
             </div>
             {saveError && (
               <p className="mt-3 text-xs text-[#EF4444]">{saveError}</p>
@@ -1624,6 +1672,15 @@ export default function SessionsSection({
                           )}
                           <button
                             type="button"
+                            onClick={() => removeExercise(idx)}
+                            className="text-[#636366] hover:text-[#EF4444] transition-colors"
+                            title="Remove exercise"
+                            aria-label={`Remove ${ex.exercise_name}`}
+                          >
+                            <MdDelete size={18} />
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => toggleExerciseCollapse(idx)}
                             className="text-[#8E8E93] hover:text-white transition-colors"
                             title={isCollapsed ? "Expand" : "Collapse"}
@@ -1925,8 +1982,9 @@ export default function SessionsSection({
                                 <div className="col-span-1">Set</div>
                                 <div className="col-span-3">Reps</div>
                                 <div className="col-span-3">Weight (lbs)</div>
-                                <div className="col-span-3">RPE</div>
+                                <div className="col-span-2">RPE</div>
                                 <div className="col-span-2 text-center">Done</div>
+                                <div className="col-span-1" />
                               </div>
 
                               <div className="space-y-1.5">
@@ -1998,7 +2056,7 @@ export default function SessionsSection({
                                         className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
                                       />
                                     </div>
-                                    <div className="col-span-3">
+                                    <div className="col-span-2">
                                       <input
                                         type="number"
                                         min="1"
@@ -2068,6 +2126,17 @@ export default function SessionsSection({
                                               : "opacity-0"
                                           }
                                         />
+                                      </button>
+                                    </div>
+                                    <div className="col-span-1 flex justify-center">
+                                      <button
+                                        type="button"
+                                        onClick={() => removeSet(idx, setIdx)}
+                                        className="text-[#636366] hover:text-[#EF4444] transition-colors"
+                                        title="Remove set"
+                                        aria-label={`Remove set ${set.set_number}`}
+                                      >
+                                        <MdClose size={16} />
                                       </button>
                                     </div>
                                   </div>

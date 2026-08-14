@@ -21,7 +21,7 @@ def engine():
 # === First Session ===
 
 class TestFirstSession:
-    def test_no_history_returns_first_session(self, engine):
+    def test_no_history_returns_needs_starting_weight(self, engine):
         result = engine.compute_recommendation(
             exercise_id="default-chest-db-bench-press",
             exercise_name="Dumbbell Bench Press",
@@ -29,11 +29,13 @@ class TestFirstSession:
             recent_sessions=[],
             num_sets=3,
         )
-        assert result.decision == Decision.FIRST_SESSION
-        assert len(result.sets) == 3
+        assert result.decision == Decision.NEEDS_STARTING_WEIGHT
+        assert result.sets == []
         # Compound + hypertrophy = 6-10, starts at 6
-        assert all(s.reps == 6 for s in result.sets)
-        assert all(s.weight == 0 for s in result.sets)
+        # Should indicate this is a "pick your weight" prompt
+        assert result.reasoning_context.get("reason") == "needs_starting_weight"
+        assert result.reasoning_context.get("suggested_reps") == 6
+        assert result.reasoning_context.get("suggested_sets") == 3
 
     def test_first_session_isolation_exercise(self, engine):
         result = engine.compute_recommendation(
@@ -43,9 +45,10 @@ class TestFirstSession:
             recent_sessions=[],
             num_sets=3,
         )
-        assert result.decision == Decision.FIRST_SESSION
+        assert result.decision == Decision.NEEDS_STARTING_WEIGHT
         # Isolation + hypertrophy = 10-15, starts at 10
-        assert all(s.reps == 10 for s in result.sets)
+        assert result.sets == []
+        assert result.reasoning_context["suggested_reps"] == 10
 
     def test_first_session_strength_goal(self, engine):
         result = engine.compute_recommendation(
@@ -56,7 +59,9 @@ class TestFirstSession:
             num_sets=3,
         )
         # Compound + strength = 3-6, starts at 3
-        assert all(s.reps == 3 for s in result.sets)
+        assert result.decision == Decision.NEEDS_STARTING_WEIGHT
+        assert result.sets == []
+        assert result.reasoning_context["suggested_reps"] == 3
 
     def test_empty_sets_in_session_treated_as_first(self, engine):
         result = engine.compute_recommendation(
@@ -66,7 +71,7 @@ class TestFirstSession:
             recent_sessions=[{"date": "2024-01-01", "sets": []}],
             num_sets=3,
         )
-        assert result.decision == Decision.FIRST_SESSION
+        assert result.decision == Decision.NEEDS_STARTING_WEIGHT
 
 
 # === Increase Reps ===

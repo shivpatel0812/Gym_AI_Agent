@@ -1,0 +1,5 @@
+# Keep lean — only what experiments need.
+# Do not mirror full backend deps here.
+openai>=1.0.0
+python-dotenv>=1.0.0
+pydantic>=2.5.0

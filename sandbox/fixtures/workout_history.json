@@ -1,0 +1,332 @@
+{
+  "meta": {
+    "description": "Sample intermediate lifter on Push/Pull/Legs — mirrors frontend session shape",
+    "units": "lbs",
+    "ready_for_gpt": false
+  },
+  "profile": {
+    "primary_goal": "Build Muscle",
+    "experience_level": "intermediate",
+    "preferred_workout_frequency": "4x/week",
+    "preferred_session_length": "60-75 min",
+    "available_equipment": ["Barbell", "Dumbbell", "Cable", "Machine", "Bodyweight"],
+    "preferred_workout_days": ["monday", "tuesday", "thursday", "friday"],
+    "top_lifts": {
+      "bench_press": { "weight": 185, "reps": 5 },
+      "squat": { "weight": 225, "reps": 5 },
+      "deadlift": { "weight": 315, "reps": 3 },
+      "overhead_press": { "weight": 115, "reps": 5 },
+      "barbell_row": { "weight": 155, "reps": 6 }
+    }
+  },
+  "split": {
+    "id": "split-ppl-sandbox",
+    "name": "Push / Pull / Legs",
+    "days": ["Push", "Pull", "Legs"]
+  },
+  "exercises": [
+    { "id": "default-chest-bb-bench-press", "name": "Barbell Bench Press", "category": "CHEST", "equipment": "Barbell" },
+    { "id": "default-chest-db-incline-press", "name": "Incline Dumbbell Press", "category": "CHEST", "equipment": "Dumbbell" },
+    { "id": "default-shoulders-db-lateral", "name": "Dumbbell Lateral Raises", "category": "SHOULDERS", "equipment": "Dumbbell" },
+    { "id": "default-back-bb-deadlifts", "name": "Deadlifts", "category": "BACK", "equipment": "Barbell" },
+    { "id": "default-back-bb-bent-over-rows", "name": "Bent-Over Barbell Rows", "category": "BACK", "equipment": "Barbell" },
+    { "id": "default-back-cable-lat-pulldown", "name": "Lat Pulldowns", "category": "BACK", "equipment": "Cable" },
+    { "id": "default-legs-bb-back-squats", "name": "Back Squats", "category": "LEGS", "equipment": "Barbell" },
+    { "id": "default-legs-bb-romanian-deadlift", "name": "Romanian Deadlifts", "category": "LEGS", "equipment": "Barbell" },
+    { "id": "default-legs-machine-leg-press", "name": "Leg Press", "category": "LEGS", "equipment": "Machine" }
+  ],
+  "sessions": [
+    {
+      "id": "sess-001",
+      "date": "2026-07-21",
+      "split_id": "split-ppl-sandbox",
+      "split_name": "Push / Pull / Legs",
+      "split_day": "Push",
+      "notes": "Good energy after weekend",
+      "exercises": [
+        {
+          "exercise_id": "default-chest-bb-bench-press",
+          "exercise_name": "Barbell Bench Press",
+          "sets": [
+            { "set_number": 1, "reps": 8, "weight": 155, "rpe": 7, "completed": true, "difficulty": "solid" },
+            { "set_number": 2, "reps": 7, "weight": 155, "rpe": 8, "completed": true, "difficulty": "solid" },
+            { "set_number": 3, "reps": 6, "weight": 155, "rpe": 8, "completed": true, "difficulty": "grind" }
+          ]
+        },
+        {
+          "exercise_id": "default-chest-db-incline-press",
+          "exercise_name": "Incline Dumbbell Press",
+          "sets": [
+            { "set_number": 1, "reps": 10, "weight": 60, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 9, "weight": 60, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 8, "weight": 60, "rpe": 8, "completed": true }
+          ]
+        },
+        {
+          "exercise_id": "default-shoulders-db-lateral",
+          "exercise_name": "Dumbbell Lateral Raises",
+          "sets": [
+            { "set_number": 1, "reps": 12, "weight": 20, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 12, "weight": 20, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 10, "weight": 20, "rpe": 9, "completed": true, "difficulty": "grind" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sess-002",
+      "date": "2026-07-22",
+      "split_id": "split-ppl-sandbox",
+      "split_name": "Push / Pull / Legs",
+      "split_day": "Pull",
+      "exercises": [
+        {
+          "exercise_id": "default-back-bb-deadlifts",
+          "exercise_name": "Deadlifts",
+          "sets": [
+            { "set_number": 1, "reps": 5, "weight": 275, "rpe": 7, "completed": true, "difficulty": "solid" },
+            { "set_number": 2, "reps": 5, "weight": 275, "rpe": 8, "completed": true, "difficulty": "solid" },
+            { "set_number": 3, "reps": 4, "weight": 275, "rpe": 9, "completed": true, "difficulty": "grind" }
+          ]
+        },
+        {
+          "exercise_id": "default-back-bb-bent-over-rows",
+          "exercise_name": "Bent-Over Barbell Rows",
+          "sets": [
+            { "set_number": 1, "reps": 8, "weight": 145, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 8, "weight": 145, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 7, "weight": 145, "rpe": 8, "completed": true }
+          ]
+        },
+        {
+          "exercise_id": "default-back-cable-lat-pulldown",
+          "exercise_name": "Lat Pulldowns",
+          "sets": [
+            { "set_number": 1, "reps": 10, "weight": 120, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 10, "weight": 120, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 9, "weight": 120, "rpe": 8, "completed": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sess-003",
+      "date": "2026-07-24",
+      "split_id": "split-ppl-sandbox",
+      "split_name": "Push / Pull / Legs",
+      "split_day": "Legs",
+      "notes": "Quads still sore from last week",
+      "exercises": [
+        {
+          "exercise_id": "default-legs-bb-back-squats",
+          "exercise_name": "Back Squats",
+          "sets": [
+            { "set_number": 1, "reps": 6, "weight": 205, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 6, "weight": 205, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 5, "weight": 205, "rpe": 8, "completed": true, "difficulty": "grind" }
+          ]
+        },
+        {
+          "exercise_id": "default-legs-bb-romanian-deadlift",
+          "exercise_name": "Romanian Deadlifts",
+          "sets": [
+            { "set_number": 1, "reps": 8, "weight": 185, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 8, "weight": 185, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 7, "weight": 185, "rpe": 8, "completed": true }
+          ]
+        },
+        {
+          "exercise_id": "default-legs-machine-leg-press",
+          "exercise_name": "Leg Press",
+          "sets": [
+            { "set_number": 1, "reps": 12, "weight": 360, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 11, "weight": 360, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 10, "weight": 360, "rpe": 8, "completed": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sess-004",
+      "date": "2026-07-28",
+      "split_id": "split-ppl-sandbox",
+      "split_name": "Push / Pull / Legs",
+      "split_day": "Push",
+      "exercises": [
+        {
+          "exercise_id": "default-chest-bb-bench-press",
+          "exercise_name": "Barbell Bench Press",
+          "sets": [
+            { "set_number": 1, "reps": 8, "weight": 160, "rpe": 7, "completed": true, "difficulty": "solid" },
+            { "set_number": 2, "reps": 7, "weight": 160, "rpe": 8, "completed": true, "difficulty": "solid" },
+            { "set_number": 3, "reps": 7, "weight": 160, "rpe": 8, "completed": true, "difficulty": "solid" }
+          ]
+        },
+        {
+          "exercise_id": "default-chest-db-incline-press",
+          "exercise_name": "Incline Dumbbell Press",
+          "sets": [
+            { "set_number": 1, "reps": 10, "weight": 65, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 9, "weight": 65, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 8, "weight": 65, "rpe": 8, "completed": true }
+          ]
+        },
+        {
+          "exercise_id": "default-shoulders-db-lateral",
+          "exercise_name": "Dumbbell Lateral Raises",
+          "sets": [
+            { "set_number": 1, "reps": 12, "weight": 20, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 12, "weight": 20, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 11, "weight": 20, "rpe": 8, "completed": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sess-005",
+      "date": "2026-07-29",
+      "split_id": "split-ppl-sandbox",
+      "split_name": "Push / Pull / Legs",
+      "split_day": "Pull",
+      "notes": "Deadlift felt sticky off the floor",
+      "exercises": [
+        {
+          "exercise_id": "default-back-bb-deadlifts",
+          "exercise_name": "Deadlifts",
+          "sets": [
+            { "set_number": 1, "reps": 5, "weight": 285, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 4, "weight": 285, "rpe": 8, "completed": true, "difficulty": "grind" },
+            { "set_number": 3, "reps": 4, "weight": 285, "rpe": 9, "completed": true, "difficulty": "grind" }
+          ]
+        },
+        {
+          "exercise_id": "default-back-bb-bent-over-rows",
+          "exercise_name": "Bent-Over Barbell Rows",
+          "sets": [
+            { "set_number": 1, "reps": 8, "weight": 155, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 7, "weight": 155, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 7, "weight": 155, "rpe": 8, "completed": true }
+          ]
+        },
+        {
+          "exercise_id": "default-back-cable-lat-pulldown",
+          "exercise_name": "Lat Pulldowns",
+          "sets": [
+            { "set_number": 1, "reps": 10, "weight": 130, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 10, "weight": 130, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 8, "weight": 130, "rpe": 9, "completed": true, "difficulty": "grind" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sess-006",
+      "date": "2026-07-31",
+      "split_id": "split-ppl-sandbox",
+      "split_name": "Push / Pull / Legs",
+      "split_day": "Legs",
+      "exercises": [
+        {
+          "exercise_id": "default-legs-bb-back-squats",
+          "exercise_name": "Back Squats",
+          "sets": [
+            { "set_number": 1, "reps": 6, "weight": 215, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 6, "weight": 215, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 5, "weight": 215, "rpe": 9, "completed": true, "difficulty": "grind" }
+          ]
+        },
+        {
+          "exercise_id": "default-legs-bb-romanian-deadlift",
+          "exercise_name": "Romanian Deadlifts",
+          "sets": [
+            { "set_number": 1, "reps": 8, "weight": 195, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 8, "weight": 195, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 7, "weight": 195, "rpe": 8, "completed": true }
+          ]
+        },
+        {
+          "exercise_id": "default-legs-machine-leg-press",
+          "exercise_name": "Leg Press",
+          "sets": [
+            { "set_number": 1, "reps": 12, "weight": 380, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 11, "weight": 380, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 10, "weight": 380, "rpe": 8, "completed": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sess-007",
+      "date": "2026-08-04",
+      "split_id": "split-ppl-sandbox",
+      "split_name": "Push / Pull / Legs",
+      "split_day": "Push",
+      "notes": "Felt strong on bench",
+      "exercises": [
+        {
+          "exercise_id": "default-chest-bb-bench-press",
+          "exercise_name": "Barbell Bench Press",
+          "sets": [
+            { "set_number": 1, "reps": 8, "weight": 165, "rpe": 7, "completed": true, "difficulty": "solid" },
+            { "set_number": 2, "reps": 8, "weight": 165, "rpe": 8, "completed": true, "difficulty": "solid" },
+            { "set_number": 3, "reps": 7, "weight": 165, "rpe": 8, "completed": true, "difficulty": "solid" }
+          ]
+        },
+        {
+          "exercise_id": "default-chest-db-incline-press",
+          "exercise_name": "Incline Dumbbell Press",
+          "sets": [
+            { "set_number": 1, "reps": 10, "weight": 65, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 10, "weight": 65, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 9, "weight": 65, "rpe": 8, "completed": true }
+          ]
+        },
+        {
+          "exercise_id": "default-shoulders-db-lateral",
+          "exercise_name": "Dumbbell Lateral Raises",
+          "sets": [
+            { "set_number": 1, "reps": 12, "weight": 22.5, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 11, "weight": 22.5, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 10, "weight": 22.5, "rpe": 9, "completed": true, "difficulty": "grind" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sess-008",
+      "date": "2026-08-05",
+      "split_id": "split-ppl-sandbox",
+      "split_name": "Push / Pull / Legs",
+      "split_day": "Pull",
+      "exercises": [
+        {
+          "exercise_id": "default-back-bb-deadlifts",
+          "exercise_name": "Deadlifts",
+          "sets": [
+            { "set_number": 1, "reps": 5, "weight": 295, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 5, "weight": 295, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 4, "weight": 295, "rpe": 9, "completed": true, "difficulty": "grind" }
+          ]
+        },
+        {
+          "exercise_id": "default-back-bb-bent-over-rows",
+          "exercise_name": "Bent-Over Barbell Rows",
+          "sets": [
+            { "set_number": 1, "reps": 8, "weight": 155, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 8, "weight": 155, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 7, "weight": 155, "rpe": 8, "completed": true }
+          ]
+        },
+        {
+          "exercise_id": "default-back-cable-lat-pulldown",
+          "exercise_name": "Lat Pulldowns",
+          "sets": [
+            { "set_number": 1, "reps": 10, "weight": 130, "rpe": 7, "completed": true },
+            { "set_number": 2, "reps": 10, "weight": 130, "rpe": 8, "completed": true },
+            { "set_number": 3, "reps": 9, "weight": 130, "rpe": 8, "completed": true }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -16,7 +16,12 @@ class DataFetcher:
     
     def get_user_profile(self) -> Dict[str, Any]:
         """Fetch user profile from Firestore."""
-        profile_ref = self.db.collection("users").document(self.user_id).collection("profile").document("data")
+        profile_ref = (
+            self.db.collection("users")
+            .document(self.user_id)
+            .collection("user_profile")
+            .document("profile")
+        )
         profile_doc = profile_ref.get()
         if profile_doc.exists:
             return profile_doc.to_dict()

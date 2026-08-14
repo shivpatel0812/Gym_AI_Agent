@@ -46,6 +46,12 @@ class ReasoningGenerator:
         Returns:
             Human-readable reasoning string (1-2 sentences)
         """
+        # This state is a UI/data-quality instruction, not coaching prose. Keep
+        # it deterministic so an LLM cannot accidentally recommend "0 lbs" or
+        # obscure an invalid-history warning.
+        if decision == Decision.NEEDS_STARTING_WEIGHT:
+            return self._template_reasoning(decision, reasoning_context, exercise_name)
+
         # Try LLM if available
         if self.client:
             try:
@@ -114,7 +120,25 @@ class ReasoningGenerator:
         exercise_name: str,
     ) -> str:
         """Deterministic template-based reasoning. Always works."""
+        if decision == Decision.NEEDS_STARTING_WEIGHT:
+            rep_range = ctx.get("rep_range", (6, 10))
+            if ctx.get("has_implausible_data"):
+                return (
+                    "Your previous weight or rep entry looks invalid, so it was not used. "
+                    f"Enter a starting weight you can lift for {rep_range[0]} reps with good form."
+                )
+            return (
+                f"First time doing {exercise_name}. "
+                f"Pick a starting weight you can do for {rep_range[0]} reps with good form."
+            )
+
         if decision == Decision.FIRST_SESSION:
+            if ctx.get("estimated_from_top_lifts"):
+                weight = ctx.get("estimated_weight", 0)
+                return (
+                    f"Based on the lift context you shared, {weight:g} lbs is a conservative "
+                    "starting estimate. Adjust it if your first set feels too heavy or light."
+                )
             return (
                 f"First session for {exercise_name}. "
                 f"Starting at the low end of your rep range to establish a baseline."

@@ -1,11 +1,17 @@
 """
 Per-exercise metadata for the deterministic progression engine.
 Maps exercise IDs to their properties (compound/isolation, equipment, increments).
-Unknown exercises fall back to DEFAULT_METADATA.
+
+Resolution order for unknown exercise IDs:
+1. EXERCISE_METADATA lookup (seeded catalog)
+2. User-provided exercise record (muscle_group, type fields from Exercise model)
+3. Name-keyword inference (squat/press → compound, curl/fly → isolation, etc.)
+4. DEFAULT_METADATA (conservative fallback: isolation, Machine, 5lb)
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict
+import re
 
 
 @dataclass(frozen=True)
@@ -25,6 +31,182 @@ DEFAULT_METADATA = ExerciseMetadata(
     min_increment_lb=5.0,
     is_unilateral=False,
 )
+
+
+# === Name-keyword inference patterns ===
+# Note: patterns use \w* after the keyword to handle plurals (e.g., "squats", "curls")
+
+# Keywords that indicate a compound movement
+_COMPOUND_KEYWORDS = re.compile(
+    r"\b(squats?|press(?:es)?|deadlifts?|rows?|pull[\s\-]?ups?|chin[\s\-]?ups?|dips?|"
+    r"lunges?|thrusts?|cleans?|snatch(?:es)?|bench|overhead|push[\s\-]?press|"
+    r"good[\s\-]?mornings?|step[\s\-]?ups?)\b",
+    re.IGNORECASE,
+)
+
+# Keywords that indicate an isolation movement
+_ISOLATION_KEYWORDS = re.compile(
+    r"\b(curls?|fl(?:y|ye)s?|raises?|extensions?|kickbacks?|pullovers?|shrugs?|"
+    r"laterals?|front[\s\-]?raises?|rear[\s\-]?delt|pushdowns?|crunches?|planks?)\b",
+    re.IGNORECASE,
+)
+
+# Equipment inference from exercise name
+_EQUIPMENT_PATTERNS = {
+    "Dumbbell": re.compile(r"\b(dumbbells?|db)\b", re.IGNORECASE),
+    "Barbell": re.compile(r"\b(barbells?|bb|ez[\s\-]?bar)\b", re.IGNORECASE),
+    "Cable": re.compile(r"\b(cables?)\b", re.IGNORECASE),
+    "Bodyweight": re.compile(r"\b(bodyweight|bw)\b|push[\s\-]?ups?|pull[\s\-]?ups?|chin[\s\-]?ups?|dips?\b", re.IGNORECASE),
+    "Machine": re.compile(r"\b(machines?|smith|hammer[\s\-]?strength|leg[\s\-]?press|hack)\b", re.IGNORECASE),
+}
+
+# Muscle group inference from exercise name
+# Order matters: more specific patterns first to avoid "press" matching shoulders
+# when it should be chest (bench press)
+_MUSCLE_GROUP_PATTERNS = {
+    "chest": re.compile(r"\b(bench|chest|pec)\b|push[\s\-]?ups?|fl(?:y|ye)s?\b", re.IGNORECASE),
+    "back": re.compile(r"\b(rows?|deadlifts?|lat|pulldowns?|back)\b|pull[\s\-]?ups?|chin[\s\-]?ups?", re.IGNORECASE),
+    "legs": re.compile(r"\b(squats?|lunges?|leg|quad|hamstring|calves?|calf|step[\s\-]?ups?)\b", re.IGNORECASE),
+    "glutes": re.compile(r"\b(glutes?|hip[\s\-]?thrusts?|bridges?|sumo|bulgarian)\b", re.IGNORECASE),
+    "biceps": re.compile(r"\b(biceps?|curls?|hammer)\b", re.IGNORECASE),
+    "triceps": re.compile(r"\b(triceps?|pushdowns?|skull|kickbacks?|extensions?)\b", re.IGNORECASE),
+    "shoulders": re.compile(r"\b(shoulders?|overhead|lateral[\s\-]?raises?|rear[\s\-]?delt|arnold|face[\s\-]?pulls?|military)\b", re.IGNORECASE),
+    "core": re.compile(r"\b(core|abs?|crunches?|planks?|sit[\s\-]?ups?)\b", re.IGNORECASE),
+}
+
+# Map user-facing muscle group strings to canonical names
+_MUSCLE_GROUP_ALIASES = {
+    "CHEST": "chest",
+    "BACK": "back",
+    "SHOULDERS": "shoulders",
+    "LEGS": "legs",
+    "BICEPS": "biceps",
+    "TRICEPS": "triceps",
+    "CORE / ABS": "core",
+    "CORE": "core",
+    "ABS": "core",
+    "GLUTES": "glutes",
+    "CALVES": "calves",
+    "CARDIO": "cardio",
+}
+
+# Map Exercise.type (WorkoutType) to equipment defaults
+_TYPE_TO_EQUIPMENT = {
+    "cardio": "Treadmill",
+    "strength": "Machine",  # Conservative default for strength
+    "custom": "Machine",
+}
+
+
+def _infer_compound_from_name(name: str) -> Optional[bool]:
+    """Infer compound/isolation from exercise name keywords."""
+    if _COMPOUND_KEYWORDS.search(name):
+        return True
+    if _ISOLATION_KEYWORDS.search(name):
+        return False
+    return None
+
+
+def _infer_equipment_from_name(name: str) -> Optional[str]:
+    """Infer equipment type from exercise name keywords."""
+    for equipment, pattern in _EQUIPMENT_PATTERNS.items():
+        if pattern.search(name):
+            return equipment
+    return None
+
+
+def _infer_muscle_group_from_name(name: str) -> Optional[str]:
+    """Infer muscle group from exercise name keywords."""
+    for group, pattern in _MUSCLE_GROUP_PATTERNS.items():
+        if pattern.search(name):
+            return group
+    return None
+
+
+def _resolve_muscle_group(raw: Optional[str]) -> str:
+    """Resolve a raw muscle_group string to a canonical name."""
+    if not raw:
+        return "unknown"
+    return _MUSCLE_GROUP_ALIASES.get(raw.upper(), raw.lower())
+
+
+def _increment_for_equipment(equipment: str) -> float:
+    """Get default increment for an equipment type."""
+    if equipment in ("Bodyweight", "Treadmill"):
+        return 0.0
+    return 5.0
+
+
+def resolve_exercise_metadata(
+    exercise_id: str,
+    exercise_name: str = "",
+    exercise_record: Optional[Dict] = None,
+) -> ExerciseMetadata:
+    """
+    Resolve metadata for any exercise, custom or default.
+
+    Resolution order:
+    1. Seeded EXERCISE_METADATA catalog (by ID)
+    2. User's exercise record fields (muscle_group, type)
+    3. Name-keyword inference
+    4. DEFAULT_METADATA
+
+    Args:
+        exercise_id: The exercise ID (may be a Firestore doc ID for custom exercises)
+        exercise_name: The display name of the exercise
+        exercise_record: Optional dict with the user's Exercise model fields
+            (muscle_group, type, name, is_custom)
+
+    Returns:
+        ExerciseMetadata with best-effort resolution
+    """
+    # 1. Check seeded catalog first
+    if exercise_id in EXERCISE_METADATA:
+        return EXERCISE_METADATA[exercise_id]
+
+    # 2. Try to build from exercise record + name inference
+    record = exercise_record or {}
+    name = exercise_name or record.get("name", "")
+
+    # Resolve compound/isolation
+    compound = _infer_compound_from_name(name)
+    if compound is None:
+        # Default to isolation (conservative — uses wider rep range)
+        compound = False
+
+    # Resolve muscle group
+    raw_muscle_group = record.get("muscle_group")
+    if raw_muscle_group:
+        muscle_group = _resolve_muscle_group(raw_muscle_group)
+    else:
+        muscle_group = _infer_muscle_group_from_name(name) or "unknown"
+
+    # Resolve equipment
+    equipment = _infer_equipment_from_name(name)
+    if not equipment:
+        exercise_type = record.get("type", "strength")
+        equipment = _TYPE_TO_EQUIPMENT.get(exercise_type, "Machine")
+
+    # Resolve increment
+    min_increment = _increment_for_equipment(equipment)
+
+    # Check for cardio
+    if muscle_group == "cardio" or record.get("type") == "cardio":
+        return ExerciseMetadata(
+            compound=False,
+            muscle_group="cardio",
+            equipment="Treadmill",
+            min_increment_lb=0.0,
+            is_unilateral=False,
+        )
+
+    return ExerciseMetadata(
+        compound=compound,
+        muscle_group=muscle_group,
+        equipment=equipment,
+        min_increment_lb=min_increment,
+        is_unilateral=False,
+    )
 
 
 # === Exercise Catalog ===
@@ -207,8 +389,9 @@ EXERCISE_METADATA: dict[str, ExerciseMetadata] = {
 
 def get_exercise_metadata(exercise_id: str) -> ExerciseMetadata:
     """
-    Get metadata for an exercise by ID.
+    Get metadata for an exercise by ID (catalog-only lookup).
     Returns DEFAULT_METADATA for unknown exercises.
+    For custom exercises, use resolve_exercise_metadata() instead.
     """
     return EXERCISE_METADATA.get(exercise_id, DEFAULT_METADATA)
 
@@ -218,11 +401,13 @@ def get_increment(exercise_id: str) -> float:
     return get_exercise_metadata(exercise_id).min_increment_lb
 
 
-def is_cardio(exercise_id: str) -> bool:
+def is_cardio(exercise_id: str, exercise_name: str = "", exercise_record: Optional[Dict] = None) -> bool:
     """Check if an exercise is a cardio exercise."""
-    return get_exercise_metadata(exercise_id).muscle_group == "cardio"
+    meta = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
+    return meta.muscle_group == "cardio"
 
 
-def is_bodyweight(exercise_id: str) -> bool:
+def is_bodyweight(exercise_id: str, exercise_name: str = "", exercise_record: Optional[Dict] = None) -> bool:
     """Check if an exercise is bodyweight-only (no external load progression)."""
-    return get_exercise_metadata(exercise_id).min_increment_lb == 0.0
+    meta = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
+    return meta.min_increment_lb == 0.0

@@ -7,20 +7,23 @@ Given exercise history + user goal, computes exact weight/reps for next session.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import math
 
 from .goal_configs import get_goal_config, GoalConfig, RepRangeConfig
 from .exercise_metadata import (
     get_exercise_metadata,
+    resolve_exercise_metadata,
     ExerciseMetadata,
     is_cardio,
     is_bodyweight,
 )
+from .weight_estimator import estimate_starting_weight
 
 
 class Decision(str, Enum):
     FIRST_SESSION = "first_session"
+    NEEDS_STARTING_WEIGHT = "needs_starting_weight"
     INCREASE_WEIGHT = "increase_weight"
     INCREASE_REPS = "increase_reps"
     MAINTAIN = "maintain"
@@ -81,6 +84,8 @@ class ProgressionEngine:
         num_sets: int = 3,
         day_intensity: Optional[str] = None,
         heavy_day_weight: Optional[float] = None,
+        exercise_record: Optional[Dict] = None,
+        top_lifts: Optional[Dict[str, Any]] = None,
     ) -> ProgressionResult:
         """
         Compute a deterministic recommendation for the next workout.
@@ -94,38 +99,65 @@ class ProgressionEngine:
             num_sets: Number of sets to recommend (from plan_target_sets)
             day_intensity: "heavy" | "light" | "normal" | None
             heavy_day_weight: For light days, the weight used on heavy day
+            exercise_record: Optional dict with exercise model fields
+                (muscle_group, type, name) for custom exercise resolution
+            top_lifts: Optional working weights for major compound lifts
 
         Returns:
             ProgressionResult with sets, decision, confidence, and reasoning_context
         """
-        metadata = get_exercise_metadata(exercise_id)
+        # Resolve metadata: catalog → exercise record → name inference → default
+        metadata = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
         goal_config = get_goal_config(user_goal)
         rep_range = self._get_rep_range(metadata, goal_config)
         increment = metadata.min_increment_lb
 
         # 1. Cardio?
-        if is_cardio(exercise_id):
+        if metadata.muscle_group == "cardio":
             return self._handle_cardio(recent_sessions, num_sets)
 
         # 2. Bodyweight (0 increment)?
-        if is_bodyweight(exercise_id):
+        if metadata.min_increment_lb == 0.0:
             return self._handle_bodyweight(recent_sessions, num_sets, rep_range, metadata)
 
-        # 3. No history? → FIRST_SESSION
+        # 3. No history? → NEEDS_STARTING_WEIGHT
         if not recent_sessions:
-            return self._handle_first_session(num_sets, rep_range)
+            estimated = estimate_starting_weight(exercise_id, exercise_name, top_lifts)
+            if estimated:
+                return self._handle_first_session_with_estimate(
+                    num_sets, rep_range, estimated
+                )
+            return self._handle_needs_starting_weight(num_sets, rep_range)
 
         # Get the latest session data
         latest = recent_sessions[0]
         latest_sets = latest.get("sets", [])
         if not latest_sets:
-            return self._handle_first_session(num_sets, rep_range)
+            estimated = estimate_starting_weight(exercise_id, exercise_name, top_lifts)
+            if estimated:
+                return self._handle_first_session_with_estimate(
+                    num_sets, rep_range, estimated
+                )
+            return self._handle_needs_starting_weight(num_sets, rep_range)
+
+        # 3b. Filter implausible data from latest sets
+        latest_sets, has_implausible = self._filter_implausible_sets(latest_sets, metadata)
+        if not latest_sets:
+            result = self._handle_needs_starting_weight(num_sets, rep_range)
+            if has_implausible:
+                result.reasoning_context["has_implausible_data"] = True
+                result.reasoning_context["reason"] = "invalid_history_needs_starting_weight"
+            return result
 
         # 4. Compute e1RM history and check for plateau/deload
         if len(recent_sessions) >= 3:
             e1rm_values = self._compute_e1rm_history(recent_sessions)
             if self._should_deload(e1rm_values, recent_sessions):
-                return self._handle_deload(latest_sets, num_sets, rep_range, increment, metadata)
+                result = self._handle_deload(latest_sets, num_sets, rep_range, increment, metadata)
+                if has_implausible:
+                    result.confidence = "low"
+                    result.reasoning_context["has_implausible_data"] = True
+                return result
 
         # 5. Light day?
         if day_intensity == "light":
@@ -138,43 +170,72 @@ class ProgressionEngine:
         if difficulties:
             if all(d == "failed" for d in difficulties):
                 # Count as failure immediately
-                return self._handle_failure(
+                result = self._handle_failure(
                     recent_sessions, num_sets, rep_range, increment, goal_config, metadata,
                     force_failure=True
                 )
+                if has_implausible:
+                    result.confidence = "low"
+                    result.reasoning_context["has_implausible_data"] = True
+                return result
             if (
                 all(d == "easy" for d in difficulties)
                 and goal_config.double_increment_on_easy
                 and self._all_sets_at_top(latest_sets, rep_range)
             ):
-                # Double increment
-                return self._handle_increase_weight(
-                    latest_sets, num_sets, rep_range, increment * 2, metadata
+                # DOCUMENTED EXCEPTION TO 10% JUMP GUARD:
+                # When ALL sets are rated "easy" AND at the top of the rep range,
+                # a double increment (2× base increment) is applied. This is an
+                # intentional coaching decision — if an all-easy top-out occurs,
+                # the weight was clearly too light and a single increment would
+                # under-challenge the user. Capped at exactly 2× base increment.
+                #
+                # For dumbbells (5 lb increments): max jump = 10 lbs (e.g., 75→85 = 13.3%)
+                # For barbells (5 lb base): max jump = 10 lbs
+                # For heavy barbells (10 lb increment): max jump = 20 lbs
+                #   → To prevent excessive absolute jumps on heavy barbell lifts,
+                #     cap the double increment at 10 lbs total regardless of base.
+                double_increment = min(increment * 2, 10.0)
+                result = self._handle_increase_weight(
+                    latest_sets, num_sets, rep_range, double_increment, metadata
                 )
+                if has_implausible:
+                    result.confidence = "low"
+                    result.reasoning_context["has_implausible_data"] = True
+                return result
 
         # 7. ALL sets hit rep_range.high? → INCREASE_WEIGHT
         if self._all_sets_at_top(latest_sets, rep_range):
-            return self._handle_increase_weight(
+            result = self._handle_increase_weight(
                 latest_sets, num_sets, rep_range, increment, metadata
             )
+            if has_implausible:
+                result.confidence = "low"
+                result.reasoning_context["has_implausible_data"] = True
+            return result
 
         # 8. Matched or beat previous session? → INCREASE_REPS
         if len(recent_sessions) >= 2:
             prev_sets = recent_sessions[1].get("sets", [])
             if self._matched_or_beat(latest_sets, prev_sets):
-                return self._handle_increase_reps(
+                result = self._handle_increase_reps(
                     latest_sets, num_sets, rep_range, metadata
                 )
             else:
                 # Failed to match — check consecutive failures
-                return self._handle_failure(
+                result = self._handle_failure(
                     recent_sessions, num_sets, rep_range, increment, goal_config, metadata
                 )
         else:
             # Only one session — try to increase reps
-            return self._handle_increase_reps(
+            result = self._handle_increase_reps(
                 latest_sets, num_sets, rep_range, metadata
             )
+
+        if has_implausible:
+            result.confidence = "low"
+            result.reasoning_context["has_implausible_data"] = True
+        return result
 
     # === Private Methods ===
 
@@ -184,8 +245,29 @@ class ProgressionEngine:
             return goal_config.compound_rep_range
         return goal_config.isolation_rep_range
 
+    def _handle_needs_starting_weight(self, num_sets: int, rep_range: RepRangeConfig) -> ProgressionResult:
+        """
+        No history — return a NEEDS_STARTING_WEIGHT status.
+        The frontend should render this as a "pick your starting weight" prompt
+        rather than displaying "0 lbs × 6" which looks broken.
+        """
+        return ProgressionResult(
+            # An empty list is intentional: zero is a valid bodyweight value but
+            # not a valid prescription for a weighted exercise. The API exposes
+            # suggested_reps separately so the UI can ask for a starting load.
+            sets=[],
+            decision=Decision.NEEDS_STARTING_WEIGHT,
+            confidence="low",
+            reasoning_context={
+                "reason": "needs_starting_weight",
+                "rep_range": (rep_range.low, rep_range.high),
+                "suggested_reps": rep_range.low,
+                "suggested_sets": num_sets,
+            },
+        )
+
     def _handle_first_session(self, num_sets: int, rep_range: RepRangeConfig) -> ProgressionResult:
-        """No history — recommend low end of rep range with 0 weight (user fills in)."""
+        """Backward-compat alias for bodyweight first sessions (weight=0 is valid)."""
         sets = [
             RecommendedSet(set_number=i + 1, reps=rep_range.low, weight=0)
             for i in range(num_sets)
@@ -199,6 +281,68 @@ class ProgressionEngine:
                 "rep_range": (rep_range.low, rep_range.high),
             },
         )
+
+    def _handle_first_session_with_estimate(
+        self,
+        num_sets: int,
+        rep_range: RepRangeConfig,
+        estimated_weight: float,
+    ) -> ProgressionResult:
+        """Seed a first weighted session from top-lift ratios."""
+        sets = [
+            RecommendedSet(
+                set_number=i + 1,
+                reps=rep_range.low,
+                weight=estimated_weight,
+            )
+            for i in range(num_sets)
+        ]
+        return ProgressionResult(
+            sets=sets,
+            decision=Decision.FIRST_SESSION,
+            confidence="medium",
+            reasoning_context={
+                "reason": "estimated_from_top_lifts",
+                "estimated_weight": estimated_weight,
+                "estimated_from_top_lifts": True,
+                "rep_range": (rep_range.low, rep_range.high),
+            },
+        )
+
+    def _filter_implausible_sets(self, sets: List[Dict], metadata=None) -> tuple:
+        """
+        Filter out implausible set data and flag the session.
+
+        Thresholds:
+        - Universal: weight ≤ 0 or > 1000 lb, reps > 50 or ≤ 0
+        - Outlier: weight > 5x median of other sets in the session
+
+        Returns (filtered_sets, has_implausible_flag).
+        """
+        filtered = []
+        has_implausible = False
+        for s in sets:
+            weight = s.get("weight", 0)
+            reps = s.get("reps", 0)
+            if weight <= 0 or weight > 1000 or reps > 50 or reps <= 0:
+                has_implausible = True
+                continue
+            filtered.append(s)
+
+        # Outlier check: if a set's weight is >5x the median of remaining sets, flag it
+        if len(filtered) >= 2:
+            weights = sorted(s.get("weight", 0) for s in filtered)
+            median_weight = weights[len(weights) // 2]
+            if median_weight > 0:
+                outlier_filtered = []
+                for s in filtered:
+                    if s.get("weight", 0) > median_weight * 5:
+                        has_implausible = True
+                    else:
+                        outlier_filtered.append(s)
+                filtered = outlier_filtered
+
+        return filtered, has_implausible
 
     def _handle_cardio(self, recent_sessions: List[Dict], num_sets: int) -> ProgressionResult:
         """Cardio progression: increase time by 1 min or speed by 0.5."""
@@ -462,14 +606,25 @@ class ProgressionEngine:
     ) -> ProgressionResult:
         """Matched previous — increase reps by 1 per set, capped at rep_range.high."""
         max_weight = max((s.get("weight", 0) for s in latest_sets), default=0)
+        # For padding: use the last available set's data for consistency
+        last_available = latest_sets[-1] if latest_sets else {}
+        last_reps = last_available.get("reps", rep_range.low)
+        resolution = self._weight_resolution(metadata)
+        last_weight = self._round_to_increment(
+            last_available.get("weight", max_weight), resolution
+        )
+
         new_sets = []
         for i in range(num_sets):
             if i < len(latest_sets):
                 prev_reps = latest_sets[i].get("reps", rep_range.low)
-                prev_weight = latest_sets[i].get("weight", max_weight)
+                prev_weight = self._round_to_increment(
+                    latest_sets[i].get("weight", max_weight), resolution
+                )
             else:
-                prev_reps = rep_range.low
-                prev_weight = max_weight
+                # Pad with last set's data for consistency (not rep_range.low)
+                prev_reps = last_reps
+                prev_weight = last_weight
             new_reps = min(prev_reps + 1, rep_range.high)
             new_sets.append(RecommendedSet(set_number=i + 1, reps=new_reps, weight=prev_weight))
 
@@ -514,15 +669,19 @@ class ProgressionEngine:
             # MAINTAIN: hold weight + reps from the best recent session
             best_session = self._find_best_recent_session(recent_sessions[:5])
             best_sets = best_session.get("sets", []) if best_session else latest_sets
+            # Pad with last available set for consistency
+            last_best = best_sets[-1] if best_sets else {}
 
+            resolution = self._weight_resolution(metadata)
             sets = []
             for i in range(num_sets):
                 if i < len(best_sets):
                     weight = best_sets[i].get("weight", max_weight)
                     reps = best_sets[i].get("reps", rep_range.low)
                 else:
-                    weight = max_weight
-                    reps = rep_range.low
+                    weight = last_best.get("weight", max_weight)
+                    reps = last_best.get("reps", rep_range.low)
+                weight = self._round_to_increment(weight, resolution)
                 sets.append(RecommendedSet(set_number=i + 1, reps=reps, weight=weight))
 
             return ProgressionResult(
@@ -542,15 +701,19 @@ class ProgressionEngine:
                 prev_sets = recent_sessions[1].get("sets", [])
             else:
                 prev_sets = latest_sets
+            # Pad with last available set for consistency
+            last_prev = prev_sets[-1] if prev_sets else {}
 
+            resolution = self._weight_resolution(metadata)
             sets = []
             for i in range(num_sets):
                 if i < len(prev_sets):
                     weight = prev_sets[i].get("weight", max_weight)
                     reps = prev_sets[i].get("reps", rep_range.low)
                 else:
-                    weight = max_weight
-                    reps = rep_range.low
+                    weight = last_prev.get("weight", max_weight)
+                    reps = last_prev.get("reps", rep_range.low)
+                weight = self._round_to_increment(weight, resolution)
                 sets.append(RecommendedSet(set_number=i + 1, reps=reps, weight=weight))
 
             return ProgressionResult(

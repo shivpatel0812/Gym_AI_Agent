@@ -2,6 +2,10 @@ import { useState, useEffect } from "react";
 import apiClient from "../lib/api-client";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
+import SplitSelector from "../components/plan/SplitSelector";
+import TopLiftsInput from "../components/plan/TopLiftsInput";
+import ExerciseSuggestions from "../components/plan/ExerciseSuggestions";
+import SplitRoutineInput from "../components/plan/SplitRoutineInput";
 import {
   MdArrowBack,
   MdArrowForward,
@@ -12,11 +16,20 @@ import {
   MdFitnessCenter,
   MdTimer,
   MdCalendarToday,
+  MdCheckCircle,
+  MdPlaylistAdd,
+  MdTune,
 } from "react-icons/md";
 import type {
   WorkoutPlan,
   PlanGenerationRequest,
   WorkoutPlanDay,
+  Split,
+  PlanCreationMode,
+  TopLifts,
+  ExerciseSuggestion,
+  ExerciseSuggestionGroup,
+  SplitRoutineExercise,
 } from "../types";
 
 const GOALS = [
@@ -27,9 +40,7 @@ const GOALS = [
 ];
 
 const SECONDARY_GOALS = [
-  "Lose weight",
-  "Gain muscle",
-  "Get stronger",
+  ...GOALS,
   "Improve overall health",
   "Reduce stress",
 ];
@@ -79,14 +90,103 @@ const DAYS_OF_WEEK = [
   "Sunday",
 ];
 
+const TOP_LEVEL_MODES: {
+  value: "generate" | "split_base";
+  title: string;
+  description: string;
+  icon: typeof MdAutoAwesome;
+}[] = [
+  {
+    value: "generate",
+    title: "Generate from scratch",
+    description: "AI designs the structure and exercises around your goals.",
+    icon: MdAutoAwesome,
+  },
+  {
+    value: "split_base",
+    title: "Use my split as a base",
+    description: "Start from a split you already have, then choose how to fill it in.",
+    icon: MdTune,
+  },
+];
+
+const SPLIT_SUB_MODES: {
+  value: Exclude<PlanCreationMode, "generate">;
+  title: string;
+  description: string;
+  icon: typeof MdAutoAwesome;
+}[] = [
+  {
+    value: "use_split",
+    title: "Customize with my info",
+    description:
+      "Pick the split, then enter your goals, schedule, and equipment so AI fills the exercises.",
+    icon: MdTune,
+  },
+  {
+    value: "adopt_split",
+    title: "Adopt my current routine",
+    description: "Keep the exercises from your recent split sessions exactly as-is.",
+    icon: MdCheckCircle,
+  },
+  {
+    value: "add_onto",
+    title: "Add onto what I do",
+    description: "Keep your routine and review a few gap-filling suggestions.",
+    icon: MdPlaylistAdd,
+  },
+];
+
+const TOP_LIFT_KEYS: (keyof TopLifts)[] = [
+  "bench_press",
+  "squat",
+  "deadlift",
+  "overhead_press",
+  "barbell_row",
+];
+
+const normalizeTopLifts = (raw: unknown): TopLifts => {
+  if (!raw || typeof raw !== "object") return {};
+  const source = raw as Record<string, unknown>;
+  const normalized: TopLifts = {};
+  TOP_LIFT_KEYS.forEach((key) => {
+    const value = source[key];
+    if (typeof value === "number" && value > 0) {
+      normalized[key] = { weight: value };
+    } else if (value && typeof value === "object") {
+      const entry = value as { weight?: unknown; reps?: unknown };
+      if (typeof entry.weight === "number" && entry.weight > 0) {
+        normalized[key] = {
+          weight: entry.weight,
+          reps:
+            typeof entry.reps === "number" && entry.reps > 0
+              ? entry.reps
+              : undefined,
+        };
+      }
+    }
+  });
+  return normalized;
+};
+
 export default function PlanGeneratorPage() {
   const [activePlan, setActivePlan] = useState<WorkoutPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(0);
   const [showWizard, setShowWizard] = useState(false);
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
   const [deleting, setDeleting] = useState(false);
+  const [splits, setSplits] = useState<Split[]>([]);
+  const [loadingSplits, setLoadingSplits] = useState(true);
+  const [suggestions, setSuggestions] = useState<ExerciseSuggestionGroup[]>([]);
+  const [selectedSuggestions, setSelectedSuggestions] = useState<
+    ExerciseSuggestion[]
+  >([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [splitRoutine, setSplitRoutine] = useState<
+    Record<string, SplitRoutineExercise[]>
+  >({});
 
   // Wizard form state
   const [form, setForm] = useState<PlanGenerationRequest>({
@@ -97,11 +197,52 @@ export default function PlanGeneratorPage() {
     available_equipment: [],
     preferred_workout_days: [],
     secondary_goals: [],
+    mode: "generate",
+    top_lifts: {},
   });
+
+  const usingSplitBase = form.mode !== "generate";
+  const selectedSplit = splits.find((split) => split.id === form.split_id);
+  const selectedSplitDays = Array.from(
+    new Set(
+      (selectedSplit?.days || [])
+        .map((day) => String(day).trim())
+        .filter(Boolean)
+    )
+  );
+
+  const routinePayload = usingSplitBase
+    ? selectedSplitDays.map((day) => ({
+        day,
+        exercises: splitRoutine[day] || [],
+      }))
+    : undefined;
+  const hasRoutineExercises = (routinePayload || []).some(
+    (day) => day.exercises.length > 0
+  );
 
   useEffect(() => {
     fetchActivePlan();
+    fetchSetupData();
   }, []);
+
+  const fetchSetupData = async () => {
+    try {
+      const [splitsRes, topLiftsRes] = await Promise.all([
+        apiClient.get("/api/splits"),
+        apiClient.get("/api/user-profile/top-lifts"),
+      ]);
+      setSplits(splitsRes.data || []);
+      const savedTopLifts = normalizeTopLifts(topLiftsRes.data?.top_lifts);
+      if (Object.keys(savedTopLifts).length) {
+        setForm((prev) => ({ ...prev, top_lifts: savedTopLifts }));
+      }
+    } catch (error) {
+      console.error("Error loading plan setup:", error);
+    } finally {
+      setLoadingSplits(false);
+    }
+  };
 
   const fetchActivePlan = async () => {
     try {
@@ -119,19 +260,81 @@ export default function PlanGeneratorPage() {
     }
   };
 
-  const handleGenerate = async () => {
+  const submitPlan = async () => {
     setGenerating(true);
     try {
-      const res = await apiClient.post("/api/workout-plan/generate", form);
+      const payload = {
+        ...form,
+        split_routine: hasRoutineExercises ? routinePayload : undefined,
+        accepted_additions:
+          form.mode === "add_onto" ? selectedSuggestions : undefined,
+      };
+      const res = await apiClient.post("/api/workout-plan/generate", payload);
       setActivePlan(res.data);
       setShowWizard(false);
-      setStep(1);
-    } catch (error) {
+      setShowSuggestions(false);
+      setStep(0);
+    } catch (error: any) {
       console.error("Error generating plan:", error);
-      alert("Failed to generate workout plan. Please try again.");
+      alert(
+        error?.response?.data?.detail ||
+          "Failed to generate workout plan. Please try again."
+      );
     } finally {
       setGenerating(false);
     }
+  };
+
+  const handleGenerate = async () => {
+    if (form.mode !== "add_onto") {
+      await submitPlan();
+      return;
+    }
+    setGenerating(true);
+    try {
+      const res = await apiClient.post(
+        "/api/workout-plan/suggest-additions",
+        {
+          split_id: form.split_id,
+          primary_goal: form.primary_goal,
+          available_equipment: form.available_equipment,
+          split_routine: hasRoutineExercises ? routinePayload : undefined,
+        }
+      );
+      const groups = (res.data?.suggestions || []) as ExerciseSuggestionGroup[];
+      setSuggestions(groups);
+      setSelectedSuggestions(
+        groups.flatMap((group) =>
+          group.exercises.map((exercise) => ({ ...exercise, day: group.day }))
+        )
+      );
+      setShowSuggestions(true);
+    } catch (error: any) {
+      console.error("Error suggesting additions:", error);
+      alert(
+        error?.response?.data?.detail ||
+          "Failed to review exercise additions. Please try again."
+      );
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const toggleSuggestion = (suggestion: ExerciseSuggestion) => {
+    setSelectedSuggestions((current) => {
+      const exists = current.some(
+        (item) =>
+          item.exercise_id === suggestion.exercise_id &&
+          item.day === suggestion.day
+      );
+      return exists
+        ? current.filter(
+            (item) =>
+              item.exercise_id !== suggestion.exercise_id ||
+              item.day !== suggestion.day
+          )
+        : [...current, suggestion];
+    });
   };
 
   const handleRegenerate = async () => {
@@ -192,16 +395,37 @@ export default function PlanGeneratorPage() {
     }));
   };
 
+  const selectPrimaryGoal = (goal: string) => {
+    setForm((prev) => ({
+      ...prev,
+      primary_goal: goal,
+      // A goal should not be selected as both primary and secondary.
+      secondary_goals: (prev.secondary_goals || []).filter(
+        (secondaryGoal) => secondaryGoal !== goal
+      ),
+    }));
+  };
+
   const toggleDayExpand = (dayName: string) => {
     setExpandedDays((prev) => ({ ...prev, [dayName]: !prev[dayName] }));
   };
 
   const canProceed = () => {
+    if (step === 0) {
+      if (form.mode === "generate") return true;
+      return !!form.split_id && usingSplitBase;
+    }
     if (step === 1) return !!form.primary_goal;
     if (step === 2)
       return !!form.preferred_workout_frequency && !!form.preferred_session_length;
     if (step === 3)
       return !!form.experience_level && form.available_equipment.length > 0;
+    if (step === 4) {
+      if (form.mode === "adopt_split" || form.mode === "add_onto") {
+        return hasRoutineExercises;
+      }
+      return true;
+    }
     return false;
   };
 
@@ -239,6 +463,66 @@ export default function PlanGeneratorPage() {
             100% { width: 100%; }
           }
         `}</style>
+      </div>
+    );
+  }
+
+  if (showSuggestions) {
+    return (
+      <div className="mx-auto max-w-[760px] p-4 sm:p-6 lg:p-8">
+        <button
+          type="button"
+          onClick={() => setShowSuggestions(false)}
+          className="mb-6 flex items-center gap-2 text-sm text-[#8E8E93] transition-colors hover:text-white"
+        >
+          <MdArrowBack size={18} />
+          Back to plan setup
+        </button>
+        <div className="mb-8">
+          <p className="mb-1 text-sm font-medium text-[#5EEAD4]">
+            Optional additions
+          </p>
+          <h1 className="text-3xl font-bold tracking-tight text-white">
+            Round out your routine
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-[#8E8E93]">
+            Your existing exercises stay untouched. Select only the additions
+            you want included.
+          </p>
+        </div>
+
+        {suggestions.length ? (
+          <ExerciseSuggestions
+            groups={suggestions}
+            selected={selectedSuggestions}
+            onToggle={toggleSuggestion}
+          />
+        ) : (
+          <Card>
+            <p className="font-semibold text-white">Your routine looks balanced.</p>
+            <p className="mt-1 text-sm text-[#8E8E93]">
+              No useful catalog additions were found. You can continue with the
+              routine as-is.
+            </p>
+          </Card>
+        )}
+
+        <div className="mt-8 flex flex-col-reverse justify-between gap-3 sm:flex-row">
+          <Button
+            variant="secondary"
+            onClick={() => setSelectedSuggestions([])}
+          >
+            Select none
+          </Button>
+          <Button onClick={submitPlan} icon={<MdCheckCircle />}>
+            Create Plan
+            {selectedSuggestions.length
+              ? ` with ${selectedSuggestions.length} addition${
+                  selectedSuggestions.length === 1 ? "" : "s"
+                }`
+              : ""}
+          </Button>
+        </div>
       </div>
     );
   }
@@ -425,19 +709,23 @@ export default function PlanGeneratorPage() {
             variant="secondary"
             onClick={() => {
               setShowWizard(true);
-              setStep(1);
+              setStep(0);
             }}
             icon={<MdRefresh />}
           >
             New Plan
           </Button>
-          <Button
-            variant="ai"
-            onClick={handleRegenerate}
-            icon={<MdAutoAwesome />}
-          >
-            Regenerate
-          </Button>
+          {(!activePlan.creation_mode ||
+            activePlan.creation_mode === "generate" ||
+            activePlan.creation_mode === "use_split") && (
+            <Button
+              variant="ai"
+              onClick={handleRegenerate}
+              icon={<MdAutoAwesome />}
+            >
+              Regenerate
+            </Button>
+          )}
           <Button
             variant="danger"
             onClick={handleDelete}
@@ -467,12 +755,15 @@ export default function PlanGeneratorPage() {
 
       <div className="mb-8">
         <p className="text-[#8E8E93] text-sm mb-1 font-medium">
-          Step {step} of 3
+          Step {step + 1} of 5
         </p>
         <h1 className="text-3xl font-bold text-white tracking-tight">
+          {step === 0 && "How should we build it?"}
           {step === 1 && "What's your goal?"}
           {step === 2 && "Your schedule"}
           {step === 3 && "Your setup"}
+          {step === 4 &&
+            (usingSplitBase ? "Your workouts" : "Your top lifts")}
         </h1>
       </div>
 
@@ -480,9 +771,182 @@ export default function PlanGeneratorPage() {
       <div className="w-full h-1 rounded-full bg-[#2A2D35] mb-8">
         <div
           className="h-full rounded-full bg-[#FF6B35] transition-all duration-300"
-          style={{ width: `${(step / 3) * 100}%` }}
+          style={{ width: `${((step + 1) / 5) * 100}%` }}
         />
       </div>
+
+      {/* Step 0: Creation mode */}
+      {step === 0 && (
+        <div className="space-y-6">
+          <div className="space-y-2">
+            {TOP_LEVEL_MODES.map((option) => {
+              const selected =
+                option.value === "generate"
+                  ? form.mode === "generate"
+                  : usingSplitBase;
+              const Icon = option.icon;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    setForm((prev) => ({
+                      ...prev,
+                      mode:
+                        option.value === "generate" ? "generate" : "use_split",
+                      split_id:
+                        option.value === "generate" ? undefined : prev.split_id,
+                    }));
+                    if (option.value === "generate") {
+                      setSplitRoutine({});
+                    }
+                    setShowSuggestions(false);
+                  }}
+                  className={`flex w-full items-start gap-3 rounded-xl border-2 p-4 text-left transition-all ${
+                    selected
+                      ? "border-[#FF6B35] bg-[#FF6B35]/10"
+                      : "border-[#2A2D35] bg-[#161A22] hover:border-[#3A3A3C]"
+                  }`}
+                >
+                  <span
+                    className={`mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${
+                      selected
+                        ? "bg-[#FF6B35]/15 text-[#FF6B35]"
+                        : "bg-[#0B0C10] text-[#636366]"
+                    }`}
+                  >
+                    <Icon size={20} />
+                  </span>
+                  <span>
+                    <span
+                      className={`block text-sm font-semibold ${
+                        selected ? "text-[#FF6B35]" : "text-white"
+                      }`}
+                    >
+                      {option.title}
+                    </span>
+                    <span className="mt-1 block text-xs leading-relaxed text-[#8E8E93]">
+                      {option.description}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {usingSplitBase && (
+            <div className="space-y-5 rounded-2xl border border-[#2A2D35] bg-[#0B0C10]/60 p-4">
+              <div>
+                <label className="mb-3 block text-sm font-semibold text-white">
+                  Choose a split
+                </label>
+                <SplitSelector
+                  splits={splits}
+                  selectedId={form.split_id}
+                  loading={loadingSplits}
+                  onSelect={(splitId) => {
+                    setForm((prev) => ({ ...prev, split_id: splitId }));
+                    const next = splits.find((split) => split.id === splitId);
+                    if (next) {
+                      const uniqueDays = Array.from(
+                        new Set(
+                          next.days
+                            .map((day) => String(day).trim())
+                            .filter(Boolean)
+                        )
+                      );
+                      setSplitRoutine((prev) => {
+                        const synced: Record<string, SplitRoutineExercise[]> =
+                          {};
+                        uniqueDays.forEach((day) => {
+                          synced[day] = prev[day] || [];
+                        });
+                        return synced;
+                      });
+                    }
+                  }}
+                  onCreated={(split) => {
+                    setSplits((prev) => [split, ...prev]);
+                    if (split.id) {
+                      setForm((prev) => ({ ...prev, split_id: split.id }));
+                    }
+                    const uniqueDays = Array.from(
+                      new Set(
+                        split.days
+                          .map((day) => String(day).trim())
+                          .filter(Boolean)
+                      )
+                    );
+                    const synced: Record<string, SplitRoutineExercise[]> = {};
+                    uniqueDays.forEach((day) => {
+                      synced[day] = [];
+                    });
+                    setSplitRoutine(synced);
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="mb-3 block text-sm font-semibold text-white">
+                  How should we use it?
+                </label>
+                <div className="space-y-2">
+                  {SPLIT_SUB_MODES.map((option) => {
+                    const selected = form.mode === option.value;
+                    const Icon = option.icon;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          setForm((prev) => ({
+                            ...prev,
+                            mode: option.value,
+                          }));
+                          setShowSuggestions(false);
+                        }}
+                        className={`flex w-full items-start gap-3 rounded-xl border-2 p-3.5 text-left transition-all ${
+                          selected
+                            ? "border-[#5EEAD4] bg-[#5EEAD4]/10"
+                            : "border-[#2A2D35] bg-[#161A22] hover:border-[#3A3A3C]"
+                        }`}
+                      >
+                        <span
+                          className={`mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${
+                            selected
+                              ? "bg-[#5EEAD4]/15 text-[#5EEAD4]"
+                              : "bg-[#0B0C10] text-[#636366]"
+                          }`}
+                        >
+                          <Icon size={18} />
+                        </span>
+                        <span>
+                          <span
+                            className={`block text-sm font-semibold ${
+                              selected ? "text-[#5EEAD4]" : "text-white"
+                            }`}
+                          >
+                            {option.title}
+                          </span>
+                          <span className="mt-1 block text-xs leading-relaxed text-[#8E8E93]">
+                            {option.description}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {(form.mode === "adopt_split" || form.mode === "add_onto") && (
+                  <p className="mt-3 text-xs leading-relaxed text-[#8E8E93]">
+                    GymAI reconstructs this routine from the exercises in your
+                    recent sessions for each split day.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Step 1: Goals */}
       {step === 1 && (
@@ -496,7 +960,7 @@ export default function PlanGeneratorPage() {
                 <button
                   key={goal}
                   type="button"
-                  onClick={() => setForm({ ...form, primary_goal: goal })}
+                  onClick={() => selectPrimaryGoal(goal)}
                   className={`px-4 py-4 rounded-xl text-left font-semibold text-sm transition-all ${
                     form.primary_goal === goal
                       ? "bg-[#FF6B35]/15 border-2 border-[#FF6B35] text-[#FF6B35]"
@@ -514,7 +978,9 @@ export default function PlanGeneratorPage() {
               Secondary goals (optional)
             </label>
             <div className="flex flex-wrap gap-2">
-              {SECONDARY_GOALS.map((goal) => {
+              {SECONDARY_GOALS.filter(
+                (goal) => goal !== form.primary_goal
+              ).map((goal) => {
                 const selected = (form.secondary_goals || []).includes(goal);
                 return (
                   <button
@@ -707,10 +1173,77 @@ export default function PlanGeneratorPage() {
         </div>
       )}
 
+      {/* Step 4: Routine exercises + optional top lifts */}
+      {step === 4 && (
+        <div className="space-y-8">
+          {usingSplitBase && (
+            <div>
+              <p className="mb-1 text-sm font-semibold text-white">
+                Exercises you currently do
+                {form.mode === "use_split" ? " (optional)" : ""}
+              </p>
+              <p className="mb-5 text-sm leading-relaxed text-[#8E8E93]">
+                {form.mode === "use_split"
+                  ? "You don’t need every exercise. A couple key lifts with weight (like bench, row, squat) is enough context for GymAI to build a full plan around your split."
+                  : form.mode === "add_onto"
+                    ? "Add the main lifts you already do. GymAI will keep them and suggest extras to fill gaps."
+                    : "Add the workouts for each day of your split. GymAI will adopt these as your plan."}
+              </p>
+              {selectedSplitDays.length ? (
+                <SplitRoutineInput
+                  dayNames={selectedSplitDays}
+                  value={splitRoutine}
+                  onChange={setSplitRoutine}
+                />
+              ) : (
+                <p className="text-sm text-[#8E8E93]">
+                  Select a split first so we know which days to fill in.
+                </p>
+              )}
+              {(form.mode === "adopt_split" || form.mode === "add_onto") &&
+                !hasRoutineExercises && (
+                  <p className="mt-3 text-xs text-[#FF6B35]">
+                    Add at least one exercise to continue with this option.
+                  </p>
+                )}
+              {form.mode === "use_split" && hasRoutineExercises && (
+                <p className="mt-3 text-xs text-[#8E8E93]">
+                  That amount of context is enough — GymAI will build out the
+                  rest of each day.
+                </p>
+              )}
+              {form.mode === "use_split" && !hasRoutineExercises && (
+                <p className="mt-3 text-xs text-[#8E8E93]">
+                  Optional. Skip this if you want, or add 1–2 key lifts with
+                  weight for better starting estimates.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <p className="mb-1 text-sm font-semibold text-white">
+              Recent lift context (optional)
+            </p>
+            <p className="mb-5 text-sm leading-relaxed text-[#8E8E93]">
+              Enter any set you remember—heavy or moderate, not necessarily a
+              max. GymAI uses the weight and optional reps as context for
+              conservative starting suggestions.
+            </p>
+            <TopLiftsInput
+              value={form.top_lifts || {}}
+              onChange={(topLifts) =>
+                setForm((prev) => ({ ...prev, top_lifts: topLifts }))
+              }
+            />
+          </div>
+        </div>
+      )}
+
       {/* Navigation buttons */}
       <div className="flex items-center justify-between mt-10">
         <div>
-          {step > 1 && (
+          {step > 0 && (
             <Button
               variant="secondary"
               onClick={() => setStep(step - 1)}
@@ -721,7 +1254,7 @@ export default function PlanGeneratorPage() {
           )}
         </div>
         <div>
-          {step < 3 ? (
+          {step < 4 ? (
             <Button
               onClick={() => setStep(step + 1)}
               disabled={!canProceed()}
@@ -735,7 +1268,11 @@ export default function PlanGeneratorPage() {
               disabled={!canProceed()}
               icon={<MdAutoAwesome />}
             >
-              Generate Plan
+              {form.mode === "add_onto"
+                ? "Review Additions"
+                : form.mode === "adopt_split"
+                  ? "Adopt Routine"
+                  : "Generate Plan"}
             </Button>
           )}
         </div>
