@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import apiClient from "../lib/api-client";
 import { MacroEntry, FoodItem, HydrationEntry } from "../types";
 import LogFoodForm, { MEALS } from "../components/nutrition/LogFoodModal";
-import { MdAdd, MdClose, MdKeyboardArrowUp, MdKeyboardArrowDown } from "react-icons/md";
+import { MdAdd, MdClose, MdEdit, MdKeyboardArrowUp, MdKeyboardArrowDown } from "react-icons/md";
 
 const TARGETS = {
   calories: 2200,
@@ -16,6 +16,145 @@ interface MealRow {
   food: FoodItem;
   entryId: string;
   indexInEntry: number;
+}
+
+function FoodRowEditor({
+  food,
+  onSave,
+  onCancel,
+}: {
+  food: FoodItem;
+  onSave: (next: FoodItem) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(food.name);
+  const [amount, setAmount] = useState(food.amount || "");
+  const [calories, setCalories] = useState(String(food.calories ?? ""));
+  const [protein, setProtein] = useState(String(food.protein ?? ""));
+  const [carbs, setCarbs] = useState(String(food.carbs ?? ""));
+  const [fats, setFats] = useState(String(food.fats ?? ""));
+
+  const parsedCalories = parseFloat(calories);
+  const parsedProtein = parseFloat(protein);
+  const canSave =
+    name.trim().length > 0 &&
+    Number.isFinite(parsedCalories) &&
+    parsedCalories >= 0 &&
+    Number.isFinite(parsedProtein) &&
+    parsedProtein >= 0;
+
+  const fieldClass =
+    "w-full h-10 px-3 rounded-lg bg-[#0F1117] border border-[#2A2D35] text-white text-sm placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/40";
+
+  return (
+    <div className="col-span-12 px-5 py-4 bg-[#0F1117]/40 space-y-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-1.5">
+            Food
+          </p>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className={fieldClass}
+          />
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-1.5">
+            Amount
+          </p>
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="e.g. 200g"
+            className={fieldClass}
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-1.5">
+            Calories
+          </p>
+          <input
+            type="number"
+            min="0"
+            value={calories}
+            onChange={(e) => setCalories(e.target.value)}
+            className={fieldClass}
+          />
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-1.5">
+            Protein
+          </p>
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            value={protein}
+            onChange={(e) => setProtein(e.target.value)}
+            className={fieldClass}
+          />
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-1.5">
+            Carbs
+          </p>
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            value={carbs}
+            onChange={(e) => setCarbs(e.target.value)}
+            className={fieldClass}
+          />
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-1.5">
+            Fat
+          </p>
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            value={fats}
+            onChange={(e) => setFats(e.target.value)}
+            className={fieldClass}
+          />
+        </div>
+      </div>
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-3.5 py-2 rounded-lg text-sm font-semibold text-[#8E8E93] hover:text-white"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={!canSave}
+          onClick={() => {
+            const nextCarbs = parseFloat(carbs);
+            const nextFats = parseFloat(fats);
+            onSave({
+              ...food,
+              name: name.trim(),
+              amount: amount.trim() || undefined,
+              calories: Math.round(parsedCalories),
+              protein: Math.round(parsedProtein * 10) / 10,
+              carbs: Number.isFinite(nextCarbs) && nextCarbs >= 0 ? Math.round(nextCarbs * 10) / 10 : 0,
+              fats: Number.isFinite(nextFats) && nextFats >= 0 ? Math.round(nextFats * 10) / 10 : 0,
+            });
+          }}
+          className="px-4 py-2 rounded-lg bg-[#FF6B35] text-white text-sm font-semibold hover:bg-[#E85A2A] disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function toDateKey(d: Date) {
@@ -82,6 +221,10 @@ export default function NutritionPage() {
   const [loggingMeal, setLoggingMeal] = useState<string | null>(null);
   const [collapsedMeals, setCollapsedMeals] = useState<Record<string, boolean>>({});
   const [waterDraft, setWaterDraft] = useState("0");
+  const [editingFood, setEditingFood] = useState<{
+    entryId: string;
+    indexInEntry: number;
+  } | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -221,6 +364,23 @@ export default function NutritionPage() {
       fetchAll();
     } catch (error) {
       console.error("Error removing food:", error);
+    }
+  };
+
+  const updateFood = async (row: MealRow, next: FoodItem) => {
+    try {
+      const entry = dayEntries.find((e) => e.id === row.entryId);
+      if (!entry?.id) return;
+      const newItems = [...(entry.food_items || [])];
+      newItems[row.indexInEntry] = next;
+      await apiClient.put(`/api/macros/${entry.id}`, {
+        date: entry.date,
+        food_items: newItems,
+      });
+      setEditingFood(null);
+      fetchAll();
+    } catch (error) {
+      console.error("Error updating food:", error);
     }
   };
 
@@ -554,18 +714,41 @@ export default function NutritionPage() {
                       <div className="col-span-1 text-right">F</div>
                     </div>
                     <div className="divide-y divide-[#2A2D35]/60">
-                      {rows.map((row, i) => (
+                      {rows.map((row, i) => {
+                        const isEditing =
+                          editingFood?.entryId === row.entryId &&
+                          editingFood?.indexInEntry === row.indexInEntry;
+                        return (
+                        <div key={`${row.entryId}-${row.indexInEntry}-${i}`}>
+                        {isEditing ? (
+                          <FoodRowEditor
+                            food={row.food}
+                            onSave={(next) => updateFood(row, next)}
+                            onCancel={() => setEditingFood(null)}
+                          />
+                        ) : (
                         <div
-                          key={i}
                           className="group grid grid-cols-12 gap-2 px-5 py-3 items-center"
                         >
                           <div className="col-span-7 sm:col-span-5 flex items-center gap-2 min-w-0">
                             <button
                               onClick={() => removeFood(row)}
-                              className="opacity-0 group-hover:opacity-100 text-[#636366] hover:text-red-400 transition-all flex-shrink-0"
+                              className="text-[#636366] hover:text-red-400 transition-colors flex-shrink-0"
                               title="Remove"
                             >
                               <MdClose size={14} />
+                            </button>
+                            <button
+                              onClick={() =>
+                                setEditingFood({
+                                  entryId: row.entryId,
+                                  indexInEntry: row.indexInEntry,
+                                })
+                              }
+                              className="text-[#636366] hover:text-[#FF6B35] transition-colors flex-shrink-0"
+                              title="Edit"
+                            >
+                              <MdEdit size={14} />
                             </button>
                             <div className="min-w-0">
                               <p className="text-sm font-medium text-white truncate">
@@ -594,7 +777,10 @@ export default function NutritionPage() {
                             {Math.round(row.food.fats || 0)}g
                           </div>
                         </div>
-                      ))}
+                        )}
+                        </div>
+                        );
+                      })}
                     </div>
 
                     {/* Total row */}
