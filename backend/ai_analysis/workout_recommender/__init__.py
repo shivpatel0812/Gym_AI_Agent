@@ -61,6 +61,21 @@ class WorkoutRecommender:
             openai_client=self.client, model=self.model
         )
 
+    def _get_exercise_history(self, exercise_id: str, days: int = 30) -> List[Dict]:
+        """Extract per-exercise session data within a lookback window."""
+        sessions = self.data_fetcher.get_recent_workout_sessions(days)
+        result = []
+        for session in sessions:
+            for ex in session.get("exercises", []):
+                if ex.get("exercise_id") == exercise_id:
+                    result.append({
+                        "date": session.get("date"),
+                        "sets": ex.get("sets", []),
+                        "time": ex.get("time"),
+                        "speed": ex.get("speed"),
+                    })
+        return result
+
     def get_or_create_summary(self, force_refresh: bool = False) -> Dict:
         """
         Get the existing summary or create a new one if needed.
@@ -140,19 +155,10 @@ class WorkoutRecommender:
         Returns:
             Recommendation dict with suggested sets/reps/weight
         """
-        # Get recent performance for this exercise
-        recent_sessions = self.data_fetcher.get_recent_workout_sessions(30)
-        recent_exercise_data = []
-
-        for session in recent_sessions:
-            for ex in session.get("exercises", []):
-                if ex.get("exercise_id") == exercise_id:
-                    recent_exercise_data.append({
-                        "date": session.get("date"),
-                        "sets": ex.get("sets", []),
-                        "time": ex.get("time"),
-                        "speed": ex.get("speed")
-                    })
+        # Look back 30 days first; if no data for this exercise, widen to 180
+        recent_exercise_data = self._get_exercise_history(exercise_id, days=30)
+        if not recent_exercise_data:
+            recent_exercise_data = self._get_exercise_history(exercise_id, days=180)
 
         # Get user profile for goals
         profile = self.data_fetcher.get_user_profile()
@@ -160,6 +166,23 @@ class WorkoutRecommender:
 
         # Determine number of sets (from plan or default)
         num_sets = plan_target_sets or 3
+
+        # Custom exercises are stored below the authenticated user's document.
+        # Seeded default exercises are not Firestore documents and safely fall
+        # through to the deterministic catalog/name resolver.
+        exercise_record = None
+        try:
+            ex_doc = (
+                self.db.collection("users")
+                .document(self.user_id)
+                .collection("exercises")
+                .document(exercise_id)
+                .get()
+            )
+            if ex_doc.exists:
+                exercise_record = ex_doc.to_dict()
+        except Exception:
+            pass  # Not critical — will fall back to name inference
 
         # Use deterministic progression engine for all cases
         progression_result = self.progression_engine.compute_recommendation(
@@ -170,6 +193,8 @@ class WorkoutRecommender:
             num_sets=num_sets,
             day_intensity=day_intensity,
             heavy_day_weight=None,
+            exercise_record=exercise_record,
+            top_lifts=profile.get("top_lifts") if profile else None,
         )
 
         # Generate reasoning text (LLM-optional, template fallback)
@@ -181,13 +206,29 @@ class WorkoutRecommender:
 
         # Build response in the same shape as before for frontend compatibility
         # Frontend reads: response.data.recommendation.sets as [{set_number, reps, weight}]
-        if progression_result.sets:
+        from .progression_engine import Decision
+
+        if progression_result.decision == Decision.NEEDS_STARTING_WEIGHT:
+            # Special status: frontend should render an input prompt, not "0 lbs"
+            recommendation = {
+                "sets": [s.to_dict() for s in progression_result.sets],
+                "reasoning": reasoning,
+                "progression_type": progression_result.decision.value,
+                "confidence": progression_result.confidence,
+                "needs_starting_weight": True,
+                "suggested_reps": progression_result.reasoning_context.get("suggested_reps"),
+                "suggested_sets": progression_result.reasoning_context.get("suggested_sets"),
+                "rep_range": progression_result.reasoning_context.get("rep_range"),
+            }
+        elif progression_result.sets:
             recommendation = {
                 "sets": [s.to_dict() for s in progression_result.sets],
                 "reasoning": reasoning,
                 "progression_type": progression_result.decision.value,
                 "confidence": progression_result.confidence,
             }
+            if progression_result.reasoning_context.get("estimated_from_top_lifts"):
+                recommendation["estimated_from_top_lifts"] = True
         else:
             # Cardio case
             recommendation = {
@@ -197,6 +238,10 @@ class WorkoutRecommender:
                 "progression_type": progression_result.decision.value,
                 "confidence": progression_result.confidence,
             }
+
+        # Flag implausible data in response
+        if progression_result.reasoning_context.get("has_implausible_data"):
+            recommendation["has_implausible_data"] = True
 
         return {
             "status": "success",

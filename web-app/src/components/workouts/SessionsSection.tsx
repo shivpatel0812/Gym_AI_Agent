@@ -1782,7 +1782,7 @@ export default function SessionsSection({
                                               reps
                                             </span>
                                           </p>
-                                          {set.weight != null && (
+                                          {set.weight != null && set.weight > 0 && (
                                             <p className="text-sm font-bold text-[#5EEAD4]">
                                               {set.weight} lbs
                                             </p>
