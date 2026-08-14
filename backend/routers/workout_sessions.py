@@ -208,21 +208,30 @@ async def get_workout_sessions(user_id: str = Depends(get_user_id), date_filter:
 
 @router.post("")
 async def create_workout_session(session: WorkoutSession, user_id: str = Depends(get_user_id)):
-    session_dict = session.dict(exclude={"id"})
-    session_dict["created_at"] = datetime.now().isoformat()
-    doc_ref = db.collection("users").document(user_id).collection("workout_sessions").document()
-    doc_ref.set(session_dict)
-    return {"id": doc_ref.id, **session_dict}
+    try:
+        session_dict = session.model_dump(exclude={"id"}) if hasattr(session, "model_dump") else session.dict(exclude={"id"})
+        session_dict["created_at"] = datetime.now().isoformat()
+        doc_ref = db.collection("users").document(user_id).collection("workout_sessions").document()
+        doc_ref.set(session_dict)
+        return {"id": doc_ref.id, **session_dict}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving workout session: {str(e)}")
 
 @router.put("/{session_id}")
 async def update_workout_session(session_id: str, session: WorkoutSession, user_id: str = Depends(get_user_id)):
-    session_dict = session.dict(exclude={"id"})
-    session_dict["updated_at"] = datetime.now().isoformat()
-    doc_ref = db.collection("users").document(user_id).collection("workout_sessions").document(session_id)
-    if not doc_ref.get().exists:
-        raise HTTPException(status_code=404, detail="Workout session not found")
-    doc_ref.update(session_dict)
-    return {"id": session_id, **session_dict}
+    try:
+        session_dict = session.model_dump(exclude={"id"}) if hasattr(session, "model_dump") else session.dict(exclude={"id"})
+        session_dict["updated_at"] = datetime.now().isoformat()
+        doc_ref = db.collection("users").document(user_id).collection("workout_sessions").document(session_id)
+        # merge write so a race with first-time auto-save doesn't 404
+        doc_ref.set(session_dict, merge=True)
+        return {"id": session_id, **session_dict}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating workout session: {str(e)}")
 
 @router.delete("/{session_id}")
 async def delete_workout_session(session_id: str, user_id: str = Depends(get_user_id)):

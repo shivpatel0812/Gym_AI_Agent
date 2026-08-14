@@ -18,6 +18,8 @@ allow_all_origins = "*" in cors_origins or (len(cors_origins) == 1 and cors_orig
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins if not allow_all_origins else ["*"],
+    # Keep Vercel frontends working even if CORS_ALLOWED_ORIGINS is localhost-only
+    allow_origin_regex=None if allow_all_origins else r"https://([a-z0-9-]+\.)*vercel\.app",
     allow_credentials=not allow_all_origins,  # Can't use credentials with wildcard
     allow_methods=["*"],
     allow_headers=["*"],

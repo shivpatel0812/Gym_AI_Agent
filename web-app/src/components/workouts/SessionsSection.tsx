@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
+import axios from "axios";
 import apiClient from "@/lib/api-client";
-import { WorkoutSession, Exercise, Split, SessionExercise, TodaysWorkout } from "@/types";
+import { WorkoutSession, WorkoutSet, Exercise, Split, SessionExercise, TodaysWorkout } from "@/types";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import {
@@ -21,6 +22,7 @@ import {
   MdFitnessCenter,
   MdPlayArrow,
   MdSelfImprovement,
+  MdCalendarToday,
 } from "react-icons/md";
 import defaultExercises, {
   categoryToMuscleGroup,
@@ -43,6 +45,62 @@ interface SessionsSectionProps {
   editSessionId?: string | null;
   onSessionMetaChange?: (subtitle: string | null) => void;
   onSessionSummaryChange?: (data: SessionSummaryData | null) => void;
+}
+
+type SessionFormData = {
+  date: string;
+  split_id: string;
+  split_name: string;
+  split_day: string;
+  exercises: SessionExercise[];
+  notes: string;
+};
+
+function isValidSet(set: WorkoutSet) {
+  const reps = Number(set.reps) || 0;
+  const weight = Number(set.weight);
+  return reps > 0 || (Number.isFinite(weight) && weight > 0);
+}
+
+function buildSessionPayload(formData: SessionFormData) {
+  const filteredExercises = formData.exercises
+    .map((ex) => {
+      if (ex.sets && Array.isArray(ex.sets)) {
+        const validSets = ex.sets.filter(isValidSet);
+        if (validSets.length > 0 || ex.time !== undefined || ex.speed !== undefined) {
+          return { ...ex, sets: validSets };
+        }
+        return null;
+      }
+      return ex;
+    })
+    .filter((ex): ex is SessionExercise => ex !== null);
+
+  return {
+    date: formData.date,
+    split_id: formData.split_id || undefined,
+    split_name: formData.split_name || undefined,
+    split_day: formData.split_day || undefined,
+    exercises: filteredExercises,
+    notes: formData.notes || undefined,
+  };
+}
+
+function getApiErrorMessage(error: unknown, fallback: string) {
+  if (axios.isAxiosError(error)) {
+    if (!error.response) {
+      return "Cannot reach the server. If this is production, the API URL or proxy may be misconfigured.";
+    }
+    const detail = error.response.data?.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => item?.msg || JSON.stringify(item))
+        .join("; ");
+    }
+    return `${fallback} (${error.response.status})`;
+  }
+  return fallback;
 }
 
 export default function SessionsSection({
@@ -74,6 +132,7 @@ export default function SessionsSection({
   const [showDayDropdown, setShowDayDropdown] = useState(false);
   const splitDropdownRef = useRef<HTMLDivElement>(null);
   const dayDropdownRef = useRef<HTMLDivElement>(null);
+  const dateInputRef = useRef<HTMLInputElement>(null);
   const [exerciseSearchQuery, setExerciseSearchQuery] = useState("");
   const exerciseDropdownRef = useRef<HTMLDivElement>(null);
   const exerciseSelectionRef = useRef<HTMLDivElement>(null);
@@ -81,6 +140,7 @@ export default function SessionsSection({
   const [maxExerciseData, setMaxExerciseData] = useState<Record<string, any>>({});
   const [aiRecommendations, setAiRecommendations] = useState<Record<string, any>>({});
   const [aiRecommendationLoading, setAiRecommendationLoading] = useState<Record<string, boolean>>({});
+  const [startingWeights, setStartingWeights] = useState<Record<string, string>>({});
   const [collapsedExercises, setCollapsedExercises] = useState<Record<number, boolean>>({});
   const [showExercisePicker, setShowExercisePicker] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
@@ -89,6 +149,8 @@ export default function SessionsSection({
   const [equipmentFilter, setEquipmentFilter] = useState<string | null>(null);
   const [showSessionDetails, setShowSessionDetails] = useState(false);
   const [isAutoSaving, setIsAutoSaving] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [aiSummaryStatus, setAiSummaryStatus] = useState<{
@@ -136,7 +198,7 @@ export default function SessionsSection({
 
       setFormData({
         date: new Date().toISOString().split("T")[0],
-        split_id: "",
+        split_id: todayData.split_id || "",
         split_name: todayData.plan_name || "",
         split_day: todayData.day_name || "",
         exercises: planExercises,
@@ -211,54 +273,23 @@ export default function SessionsSection({
   }, [formData.exercises, formData.date, formData.split_name, formData.split_day, formData.notes, showForm, editingSessionId]);
 
   const performAutoSave = async () => {
-    // Don't auto-save if no exercises
     if (formData.exercises.length === 0) {
+      return;
+    }
+
+    const payload = buildSessionPayload(formData);
+    if (payload.exercises.length === 0) {
       return;
     }
 
     setIsAutoSaving(true);
     try {
-      // Filter out empty sets (0 reps and no weight) before saving
-      const filteredExercises = formData.exercises.map(ex => {
-        if (ex.sets && Array.isArray(ex.sets)) {
-          // Filter out sets with 0 reps and no weight
-          const validSets = ex.sets.filter(set => {
-            const reps = set.reps || 0;
-            const weight = set.weight;
-            // Keep sets that have at least reps > 0 OR weight > 0
-            return reps > 0 || (weight !== undefined && weight !== null && weight > 0);
-          });
-          
-          // Only include exercise if it has valid sets (or is cardio)
-          if (validSets.length > 0 || ex.time !== undefined || ex.speed !== undefined) {
-            return { ...ex, sets: validSets };
-          }
-          return null; // Exclude exercises with no valid sets
-        }
-        return ex; // Keep cardio exercises or exercises without sets array
-      }).filter(ex => ex !== null); // Remove null entries
-      
-      // Don't save if no exercises have valid data
-      if (filteredExercises.length === 0) {
-        setIsAutoSaving(false);
-        return;
-      }
-      
-      const payload = {
-        date: formData.date,
-        split_name: formData.split_name || undefined,
-        split_day: formData.split_day || undefined,
-        exercises: filteredExercises,
-        notes: formData.notes || undefined,
-      };
-
       if (editingSessionId) {
         await apiClient.put(
           `/api/workout-sessions/${editingSessionId}`,
           payload
         );
       } else {
-        // For new sessions, create it and store the ID for future auto-saves
         const response = await apiClient.post("/api/workout-sessions", payload);
         if (response.data && response.data.id) {
           setEditingSessionId(response.data.id);
@@ -266,10 +297,11 @@ export default function SessionsSection({
       }
 
       setLastSaved(new Date());
-      // Refresh sessions list to show updates
+      setSaveError(null);
       fetchSessions();
     } catch (error) {
       console.error("Error auto-saving session:", error);
+      setSaveError(getApiErrorMessage(error, "Auto-save failed"));
     } finally {
       setIsAutoSaving(false);
     }
@@ -517,35 +549,15 @@ export default function SessionsSection({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      // Filter out empty sets (0 reps and no weight) before saving
-      const filteredExercises = formData.exercises.map(ex => {
-        if (ex.sets && Array.isArray(ex.sets)) {
-          // Filter out sets with 0 reps and no weight
-          const validSets = ex.sets.filter(set => {
-            const reps = set.reps || 0;
-            const weight = set.weight;
-            // Keep sets that have at least reps > 0 OR weight > 0
-            return reps > 0 || (weight !== undefined && weight !== null && weight > 0);
-          });
-          
-          // Only include exercise if it has valid sets (or is cardio)
-          if (validSets.length > 0 || ex.time !== undefined || ex.speed !== undefined) {
-            return { ...ex, sets: validSets };
-          }
-          return null; // Exclude exercises with no valid sets
-        }
-        return ex; // Keep cardio exercises or exercises without sets array
-      }).filter(ex => ex !== null); // Remove null entries
-      
-      const payload = {
-        date: formData.date,
-        split_name: formData.split_name || undefined,
-        split_day: formData.split_day || undefined,
-        exercises: filteredExercises,
-        notes: formData.notes || undefined,
-      };
+    const payload = buildSessionPayload(formData);
+    if (payload.exercises.length === 0) {
+      setSaveError("Add at least one set with reps or weight before saving.");
+      return;
+    }
 
+    setIsSaving(true);
+    setSaveError(null);
+    try {
       if (editingSessionId) {
         await apiClient.put(
           `/api/workout-sessions/${editingSessionId}`,
@@ -555,12 +567,14 @@ export default function SessionsSection({
         await apiClient.post("/api/workout-sessions", payload);
       }
 
-      // Keep recommendations after saving
       resetForm();
       fetchSessions();
       fetchTodaysPlan();
     } catch (error) {
       console.error("Error saving session:", error);
+      setSaveError(getApiErrorMessage(error, "Could not save workout"));
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -588,6 +602,8 @@ export default function SessionsSection({
     // Clear auto-save state
     setLastSaved(null);
     setIsAutoSaving(false);
+    setIsSaving(false);
+    setSaveError(null);
     if (autoSaveTimeoutRef.current) {
       clearTimeout(autoSaveTimeoutRef.current);
     }
@@ -652,6 +668,28 @@ export default function SessionsSection({
         reps: s.reps || 0,
         weight: s.weight,
         completed: undefined,
+      })),
+    };
+    setFormData({ ...formData, exercises: newExercises });
+  };
+
+  const applyStartingWeight = (exerciseId: string, exerciseIdx: number) => {
+    const rec = aiRecommendations[exerciseId];
+    const startingWeight = Number(startingWeights[exerciseId]);
+    if (!rec?.needs_starting_weight || !Number.isFinite(startingWeight) || startingWeight <= 0) {
+      return;
+    }
+
+    const setCount = Math.max(1, rec.suggested_sets || 3);
+    const reps = Math.max(1, rec.suggested_reps || 6);
+    const newExercises = [...formData.exercises];
+    newExercises[exerciseIdx] = {
+      ...newExercises[exerciseIdx],
+      sets: Array.from({ length: setCount }, (_, i) => ({
+        set_number: i + 1,
+        reps,
+        weight: startingWeight,
+        completed: false,
       })),
     };
     setFormData({ ...formData, exercises: newExercises });
@@ -947,6 +985,31 @@ export default function SessionsSection({
                   <h3 className="text-base sm:text-lg font-bold text-white">
                     {formData.split_name || formData.split_day || "Workout Session"}
                   </h3>
+                  <div className="relative mt-1.5 inline-flex max-w-full items-center">
+                    <div className="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center gap-1.5 pl-2.5">
+                      <MdCalendarToday size={14} className="text-[#FF6B35]" />
+                    </div>
+                    <input
+                      ref={dateInputRef}
+                      type="date"
+                      value={formData.date}
+                      onChange={(e) =>
+                        setFormData({ ...formData, date: e.target.value })
+                      }
+                      onClick={(e) => {
+                        const input = e.currentTarget;
+                        try {
+                          if (typeof input.showPicker === "function") {
+                            input.showPicker();
+                          }
+                        } catch {
+                          // Native picker will still open from the click.
+                        }
+                      }}
+                      className="h-9 min-w-[11.5rem] cursor-pointer rounded-lg border border-[#2A2D35] bg-[#0B0C10] pl-8 pr-2 text-xs font-semibold text-white outline-none transition-colors [color-scheme:dark] hover:border-[#FF6B35]/50 focus:border-[#FF6B35]"
+                      aria-label="Workout date"
+                    />
+                  </div>
                   {sessionStartTime && (
                     <p className="text-xs text-[#8E8E93] mt-0.5">
                       Started{" "}
@@ -998,13 +1061,16 @@ export default function SessionsSection({
                       preventDefault: () => {},
                     } as React.FormEvent)
                   }
-                  disabled={formData.exercises.length === 0}
+                  disabled={formData.exercises.length === 0 || isSaving}
                   className="px-4 py-2 rounded-xl bg-[#FF6B35] text-white text-sm font-semibold hover:bg-[#FF6B35]/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
-                  Save Workout
+                  {isSaving ? "Saving..." : "Save Workout"}
                 </button>
               </div>
             </div>
+            {saveError && (
+              <p className="mt-3 text-xs text-[#EF4444]">{saveError}</p>
+            )}
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -1506,7 +1572,10 @@ export default function SessionsSection({
                   const aiRec = aiRecommendations[ex.exercise_id];
                   const aiLoading = aiRecommendationLoading[ex.exercise_id];
                   const bestSetLabel = getBestSetLabel(maxData);
-                  const confPct = aiRec ? confidencePct(aiRec.confidence) : null;
+                  const confPct =
+                    aiRec && !aiRec.needs_starting_weight
+                      ? confidencePct(aiRec.confidence)
+                      : null;
 
                   return (
                     <div
@@ -1640,6 +1709,57 @@ export default function SessionsSection({
                                   )}
                                 </div>
 
+                                {aiRec.needs_starting_weight && (
+                                  <div className="mb-3 rounded-xl border border-[#5EEAD4]/30 bg-[#0B0C10]/60 p-3 sm:p-4">
+                                    <p className="text-sm font-semibold text-white">
+                                      Choose your starting weight
+                                    </p>
+                                    <p className="mt-1 text-xs leading-relaxed text-[#8E8E93]">
+                                      {aiRec.has_implausible_data
+                                        ? "Your previous entry looked invalid, so it was ignored. "
+                                        : "There is no usable weighted history for this exercise yet. "}
+                                      Pick a weight you can control for{" "}
+                                      {aiRec.suggested_reps || 6} reps with good form.
+                                    </p>
+                                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                                      <div className="relative flex-1">
+                                        <input
+                                          type="number"
+                                          min="0.5"
+                                          step="0.5"
+                                          value={startingWeights[ex.exercise_id] || ""}
+                                          onChange={(event) =>
+                                            setStartingWeights((prev) => ({
+                                              ...prev,
+                                              [ex.exercise_id]: event.target.value,
+                                            }))
+                                          }
+                                          placeholder="Enter starting weight"
+                                          aria-label={`Starting weight for ${ex.exercise_name}`}
+                                          className="w-full rounded-xl border border-[#2A2D35] bg-[#0B0C10] px-3 py-2.5 pr-12 text-sm text-white outline-none transition-colors placeholder:text-[#636366] focus:border-[#5EEAD4]/60"
+                                        />
+                                        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#636366]">
+                                          lbs
+                                        </span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          applyStartingWeight(ex.exercise_id, idx)
+                                        }
+                                        disabled={
+                                          !startingWeights[ex.exercise_id] ||
+                                          Number(startingWeights[ex.exercise_id]) <= 0
+                                        }
+                                        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-[#5EEAD4]/40 bg-[#5EEAD4]/10 px-4 py-2.5 text-xs font-semibold text-[#5EEAD4] transition-colors hover:bg-[#5EEAD4]/15 disabled:cursor-not-allowed disabled:opacity-40 sm:text-sm"
+                                      >
+                                        <MdBolt size={15} />
+                                        Use starting weight
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+
                                 {aiRec.sets && Array.isArray(aiRec.sets) && (
                                   <div className="flex gap-2 mb-3">
                                     {aiRec.sets.slice(0, 3).map(
@@ -1676,7 +1796,9 @@ export default function SessionsSection({
                                       {aiRec.reasoning}
                                     </p>
                                   )}
-                                  {aiRec.sets && Array.isArray(aiRec.sets) && (
+                                  {!aiRec.needs_starting_weight &&
+                                    aiRec.sets &&
+                                    Array.isArray(aiRec.sets) && (
                                     <button
                                       type="button"
                                       onClick={() =>
