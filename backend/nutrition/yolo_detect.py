@@ -1,17 +1,16 @@
 """
 YOLO food detection module - CPU-safe, production-ready
 """
-from ultralytics import YOLO
 from PIL import Image
-import os
 
 # Initialize model once (lazy loading)
 _model = None
 
 def get_model():
-    """Lazy load YOLO model to avoid loading on import"""
+    """Lazy load YOLO model to avoid loading torch on API startup."""
     global _model
     if _model is None:
+        from ultralytics import YOLO
         _model = YOLO("yolov8n.pt")  # nano = fastest + cheapest
     return _model
 
