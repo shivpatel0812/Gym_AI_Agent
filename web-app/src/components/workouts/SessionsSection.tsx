@@ -97,6 +97,37 @@ function setsFromLastWorkout(lastData: any, targetCount = 3): WorkoutSet[] | nul
   return mapped.slice(0, targetCount).map((s, i) => ({ ...s, set_number: i + 1 }));
 }
 
+function lastWorkingSets(lastData: any): { reps: number; weight?: number }[] {
+  const raw = lastData?.exercise_data?.sets;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(isValidSet).map((s: any) => ({
+    reps: Number(s.reps) || 0,
+    weight: s.weight != null && s.weight !== "" ? Number(s.weight) : undefined,
+  }));
+}
+
+function formatLastPerformance(lastData: any): string | null {
+  const ex = lastData?.exercise_data;
+  if (!ex) return null;
+  if (ex.time || ex.speed) {
+    const parts: string[] = [];
+    if (ex.time) parts.push(`${ex.time} min`);
+    if (ex.speed) parts.push(`${ex.speed} mph`);
+    return parts.length ? parts.join(" · ") : null;
+  }
+  const sets = lastWorkingSets(lastData);
+  if (sets.length === 0) return null;
+  return sets
+    .map((s, i) => {
+      const load =
+        s.weight != null && s.weight > 0
+          ? `${s.reps}×${s.weight} lbs`
+          : `${s.reps} reps`;
+      return `S${i + 1} ${load}`;
+    })
+    .join(" · ");
+}
+
 function lastWorkoutHasWeight(lastData: any): boolean {
   const sets = lastData?.exercise_data?.sets;
   if (!Array.isArray(sets)) return false;
@@ -230,6 +261,9 @@ export default function SessionsSection({
   const [startingWeights, setStartingWeights] = useState<Record<string, string>>({});
   const [collapsedExercises, setCollapsedExercises] = useState<Record<number, boolean>>({});
   const [showExercisePicker, setShowExercisePicker] = useState(false);
+  const [pickerAnchor, setPickerAnchor] = useState<"top" | "bottom">("top");
+  const fetchedLastRef = useRef<Set<string>>(new Set());
+  const shouldScrollPickerRef = useRef(false);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [pickerMode, setPickerMode] = useState<"browse" | "search">("browse");
   const [selectedBodyPart, setSelectedBodyPart] = useState<string | null>(null);
@@ -241,7 +275,12 @@ export default function SessionsSection({
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingRecApplyRef = useRef<Set<string>>(new Set());
-  const [aiSummaryStatus, setAiSummaryStatus] = useState<{
+  const formDataRef = useRef(formData);
+  const editingSessionIdRef = useRef(editingSessionId);
+  const autoSaveChainRef = useRef(Promise.resolve(true));
+  formDataRef.current = formData;
+  editingSessionIdRef.current = editingSessionId;
+  const [, setAiSummaryStatus] = useState<{
     hasSetup: boolean;
     needsSetup: boolean;
     isGenerating: boolean;
@@ -344,6 +383,15 @@ export default function SessionsSection({
     }
   }, []);
 
+  const fetchSessions = useCallback(async () => {
+    try {
+      const res = await apiClient.get("/api/workout-sessions");
+      setSessions(res.data);
+    } catch (error) {
+      console.error("Error fetching sessions:", error);
+    }
+  }, []);
+
   useEffect(() => {
     fetchSessions();
     checkAiSummaryStatus();
@@ -355,66 +403,96 @@ export default function SessionsSection({
     }
   }, []);
 
-  // Auto-save functionality
+  const performAutoSave = useCallback(async (opts?: { silent?: boolean }) => {
+    const run = async () => {
+      const data = formDataRef.current;
+      if (data.exercises.length === 0) {
+        return false;
+      }
+
+      const payload = buildSessionPayload(data);
+      if (payload.exercises.length === 0) {
+        return false;
+      }
+
+      if (!opts?.silent) setIsAutoSaving(true);
+      try {
+        const sessionId = editingSessionIdRef.current;
+        if (sessionId) {
+          await apiClient.put(`/api/workout-sessions/${sessionId}`, payload);
+        } else {
+          const response = await apiClient.post("/api/workout-sessions", payload);
+          if (response.data && response.data.id) {
+            editingSessionIdRef.current = response.data.id;
+            setEditingSessionId(response.data.id);
+          }
+        }
+
+        setLastSaved(new Date());
+        setSaveError(null);
+        fetchSessions();
+        return true;
+      } catch (error) {
+        console.error("Error auto-saving session:", error);
+        setSaveError(getApiErrorMessage(error, "Auto-save failed"));
+        return false;
+      } finally {
+        if (!opts?.silent) setIsAutoSaving(false);
+      }
+    };
+
+    const queued = autoSaveChainRef.current.then(run, run);
+    autoSaveChainRef.current = queued.then(
+      () => true,
+      () => true
+    );
+    return queued;
+  }, [fetchSessions]);
+
+  // Auto-save as you log. You should not need to press Save Workout.
   useEffect(() => {
-    // Only auto-save if there are exercises and form is visible
     if (!showForm || formData.exercises.length === 0) {
       return;
     }
 
-    // Clear existing timeout
     if (autoSaveTimeoutRef.current) {
       clearTimeout(autoSaveTimeoutRef.current);
     }
 
-    // Set new timeout for auto-save (2 seconds after last change)
-    autoSaveTimeoutRef.current = setTimeout(async () => {
-      await performAutoSave();
-    }, 2000);
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      void performAutoSave();
+    }, 800);
 
-    // Cleanup on unmount
     return () => {
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.exercises, formData.date, formData.split_name, formData.split_day, formData.notes, showForm, editingSessionId]);
+  }, [
+    formData.exercises,
+    formData.date,
+    formData.split_name,
+    formData.split_day,
+    formData.notes,
+    showForm,
+    performAutoSave,
+  ]);
 
-  const performAutoSave = async () => {
-    if (formData.exercises.length === 0) {
-      return;
-    }
-
-    const payload = buildSessionPayload(formData);
-    if (payload.exercises.length === 0) {
-      return;
-    }
-
-    setIsAutoSaving(true);
-    try {
-      if (editingSessionId) {
-        await apiClient.put(
-          `/api/workout-sessions/${editingSessionId}`,
-          payload
-        );
-      } else {
-        const response = await apiClient.post("/api/workout-sessions", payload);
-        if (response.data && response.data.id) {
-          setEditingSessionId(response.data.id);
-        }
-      }
-
-      setLastSaved(new Date());
-      setSaveError(null);
-      fetchSessions();
-    } catch (error) {
-      console.error("Error auto-saving session:", error);
-      setSaveError(getApiErrorMessage(error, "Auto-save failed"));
-    } finally {
-      setIsAutoSaving(false);
-    }
-  };
+  useEffect(() => {
+    const flush = () => {
+      void performAutoSave({ silent: true });
+    };
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onHide);
+      flush();
+    };
+  }, [performAutoSave]);
 
   // Check AI recommendation status and auto-trigger if needed
   const checkAiSummaryStatus = async () => {
@@ -566,15 +644,6 @@ export default function SessionsSection({
     };
   }, [showSplitDropdown, showDayDropdown, showExercisePicker]);
 
-  const fetchSessions = async () => {
-    try {
-      const res = await apiClient.get("/api/workout-sessions");
-      setSessions(res.data);
-    } catch (error) {
-      console.error("Error fetching sessions:", error);
-    }
-  };
-
   const allExercises = useMemo(() => {
     const defaultExercisesList = defaultExercises.map((ex) => ({
       id: ex.id,
@@ -674,7 +743,7 @@ export default function SessionsSection({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = buildSessionPayload(formData);
+    const payload = buildSessionPayload(formDataRef.current);
     if (payload.exercises.length === 0) {
       setSaveError("Add at least one set with reps or weight before saving.");
       return;
@@ -683,15 +752,11 @@ export default function SessionsSection({
     setIsSaving(true);
     setSaveError(null);
     try {
-      if (editingSessionId) {
-        await apiClient.put(
-          `/api/workout-sessions/${editingSessionId}`,
-          payload
-        );
-      } else {
-        await apiClient.post("/api/workout-sessions", payload);
+      const saved = await performAutoSave();
+      if (!saved && !editingSessionIdRef.current) {
+        setSaveError("Could not save workout");
+        return;
       }
-
       resetForm();
       fetchSessions();
       fetchTodaysPlan();
@@ -722,6 +787,7 @@ export default function SessionsSection({
     setEquipmentFilter(null);
     setLastExerciseData({});
     setMaxExerciseData({});
+    fetchedLastRef.current = new Set();
     // Don't clear recommendations - keep them visible
     setAiRecommendationLoading({});
     // Clear auto-save state
@@ -734,8 +800,11 @@ export default function SessionsSection({
     }
   };
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
+    await performAutoSave();
     resetForm();
+    fetchSessions();
+    fetchTodaysPlan();
   };
 
   const handleEdit = (session: WorkoutSession) => {
@@ -1033,6 +1102,44 @@ export default function SessionsSection({
     { id: "CORE", label: "Core" },
   ];
 
+  const openExercisePicker = (anchor: "top" | "bottom" = "top") => {
+    shouldScrollPickerRef.current = true;
+    setPickerAnchor(anchor);
+    setShowExercisePicker(true);
+    setPickerMode("browse");
+    setSelectedBodyPart(null);
+    setEquipmentFilter(null);
+  };
+
+  useEffect(() => {
+    if (!showExercisePicker || !shouldScrollPickerRef.current) return;
+    shouldScrollPickerRef.current = false;
+    const id = window.setTimeout(() => {
+      exerciseSelectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    }, 50);
+    return () => window.clearTimeout(id);
+  }, [showExercisePicker, pickerAnchor]);
+
+  useEffect(() => {
+    if (!showForm) return;
+    formData.exercises.forEach((ex) => {
+      const id = ex.exercise_id;
+      if (!id || fetchedLastRef.current.has(id)) return;
+      fetchedLastRef.current.add(id);
+      apiClient
+        .get(`/api/workout-sessions/last-exercise/${id}`)
+        .then((res) => {
+          if (res.data) {
+            setLastExerciseData((prev) => ({ ...prev, [id]: res.data }));
+          }
+        })
+        .catch(() => {});
+    });
+  }, [showForm, formData.exercises]);
+
   // matchesCategoryFilter and filteredPickerExercises removed - filtering is now inline in the picker
 
   return (
@@ -1186,6 +1293,8 @@ export default function SessionsSection({
                     ? "Saving..."
                     : lastSaved
                     ? `Saved ${lastSaved.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                    : formData.exercises.length > 0
+                    ? "Auto-saves as you log"
                     : ""}
                 </span>
               </div>
@@ -1205,7 +1314,7 @@ export default function SessionsSection({
                 disabled={formData.exercises.length === 0 || isSaving}
                 className="ml-auto px-4 py-2 rounded-xl bg-[#FF6B35] text-white text-sm font-semibold hover:bg-[#FF6B35]/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
-                {isSaving ? "Saving..." : "Save Workout"}
+                {isSaving ? "Finishing..." : "Finish Workout"}
               </button>
             </div>
             {saveError && (
@@ -1399,11 +1508,15 @@ export default function SessionsSection({
                   onChange={(e) => {
                     setExerciseSearchQuery(e.target.value);
                     if (e.target.value) {
+                      setPickerAnchor("top");
                       setShowExercisePicker(true);
                       setPickerMode("search");
                     }
                   }}
-                  onFocus={() => setShowExercisePicker(true)}
+                  onFocus={() => {
+                    setPickerAnchor("top");
+                    setShowExercisePicker(true);
+                  }}
                   placeholder="Search exercises..."
                   className="w-full h-11 pl-10 pr-4 rounded-xl bg-[#161A22] border border-[#2A2D35] text-white placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
                 />
@@ -1432,19 +1545,11 @@ export default function SessionsSection({
               </div>
             </div>
 
+            <div className="flex flex-col gap-4">
             <button
               type="button"
-              onClick={() => {
-                setShowExercisePicker(true);
-                setPickerMode("browse");
-                setSelectedBodyPart(null);
-                setEquipmentFilter(null);
-                exerciseSelectionRef.current?.scrollIntoView({
-                  behavior: "smooth",
-                  block: "nearest",
-                });
-              }}
-              className="w-full py-3 rounded-xl border border-dashed border-[#3A3A3C] text-[#8E8E93] hover:text-[#FF6B35] hover:border-[#FF6B35]/40 text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+              onClick={() => openExercisePicker("top")}
+              className="order-1 w-full py-3 rounded-xl border border-dashed border-[#3A3A3C] text-[#8E8E93] hover:text-[#FF6B35] hover:border-[#FF6B35]/40 text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
             >
               <MdAdd size={18} /> Add exercise
             </button>
@@ -1453,7 +1558,9 @@ export default function SessionsSection({
             {showExercisePicker && (
               <div
                 ref={exerciseSelectionRef}
-                className="rounded-2xl border border-[#2A2D35] bg-[#161A22] overflow-hidden"
+                className={`rounded-2xl border border-[#2A2D35] bg-[#161A22] overflow-hidden ${
+                  pickerAnchor === "bottom" ? "order-6" : "order-2"
+                }`}
               >
                 {/* Header */}
                 <div className="flex items-center justify-between px-4 py-3 border-b border-[#2A2D35]">
@@ -1695,7 +1802,7 @@ export default function SessionsSection({
             )}
 
               {/* List of Added Exercises */}
-              <div className="space-y-4">
+              <div className="order-3 space-y-4">
                 {formData.exercises.map((ex, idx) => {
                   const exerciseSets = Array.isArray(ex.sets) ? ex.sets : [];
                   const isCardio = ex.hasOwnProperty("time") || ex.hasOwnProperty("speed");
@@ -1708,6 +1815,7 @@ export default function SessionsSection({
                   );
                   const roleLabel = getExerciseRole(idx);
                   const lastData = lastExerciseData[ex.exercise_id];
+                  const lastSets = lastWorkingSets(lastData);
                   const maxData = maxExerciseData[ex.exercise_id];
                   const aiRec = aiRecommendations[ex.exercise_id];
                   const aiLoading = aiRecommendationLoading[ex.exercise_id];
@@ -1746,6 +1854,12 @@ export default function SessionsSection({
                           <p className="text-xs text-[#8E8E93] mt-0.5">
                             {categoryLabel} · {roleLabel}
                           </p>
+                          {formatLastPerformance(lastData) && (
+                            <p className="text-xs text-[#5EEAD4]/90 mt-0.5 leading-relaxed">
+                              Last {formatShortDate(lastData.date)}:{" "}
+                              {formatLastPerformance(lastData)}
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-2.5 flex-shrink-0">
@@ -1829,31 +1943,10 @@ export default function SessionsSection({
                                       </span>
                                     )}
                                   </div>
-                                  {lastData && (
+                                  {lastData && formatLastPerformance(lastData) && (
                                     <p className="text-[11px] text-[#636366]">
-                                      Last: {formatShortDate(lastData.date)}
-                                      {lastData.exercise_data?.sets &&
-                                        Array.isArray(
-                                          lastData.exercise_data.sets
-                                        ) &&
-                                        lastData.exercise_data.sets[0] && (
-                                          <>
-                                            {" · "}
-                                            {
-                                              lastData.exercise_data.sets.length
-                                            }{" "}
-                                            set
-                                            {" · "}
-                                            {
-                                              lastData.exercise_data.sets[0]
-                                                .reps
-                                            }{" "}
-                                            reps
-                                            {lastData.exercise_data.sets[0]
-                                              .weight != null &&
-                                              ` @ ${lastData.exercise_data.sets[0].weight} lbs`}
-                                          </>
-                                        )}
+                                      Last: {formatShortDate(lastData.date)} ·{" "}
+                                      {formatLastPerformance(lastData)}
                                     </p>
                                   )}
                                 </div>
@@ -2082,13 +2175,32 @@ export default function SessionsSection({
                               </div>
 
                               <div className="space-y-1.5">
-                                {exerciseSets.map((set, setIdx) => (
+                                {exerciseSets.map((set, setIdx) => {
+                                  const lastSet = lastSets[setIdx];
+                                  const lastRepsHint =
+                                    lastSet && lastSet.reps > 0
+                                      ? String(lastSet.reps)
+                                      : "—";
+                                  const lastWeightHint =
+                                    lastSet && lastSet.weight != null && lastSet.weight > 0
+                                      ? String(lastSet.weight)
+                                      : "—";
+                                  return (
                                   <div
                                     key={setIdx}
                                     className="grid grid-cols-12 gap-2 sm:gap-3 items-center"
                                   >
-                                    <div className="col-span-1 text-sm font-medium text-[#8E8E93]">
-                                      {set.set_number}
+                                    <div className="col-span-1">
+                                      <div className="text-sm font-medium text-[#8E8E93]">
+                                        {set.set_number}
+                                      </div>
+                                      {lastSet && (
+                                        <div className="text-[9px] leading-tight text-[#636366]">
+                                          {lastSet.weight != null && lastSet.weight > 0
+                                            ? `${lastSet.reps}×${lastSet.weight}`
+                                            : `${lastSet.reps}r`}
+                                        </div>
+                                      )}
                                     </div>
                                     <div className="col-span-3">
                                       <input
@@ -2118,7 +2230,7 @@ export default function SessionsSection({
                                           });
                                         }}
                                         onFocus={(e) => e.target.select()}
-                                        placeholder="—"
+                                        placeholder={lastRepsHint}
                                         className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
                                       />
                                     </div>
@@ -2146,7 +2258,7 @@ export default function SessionsSection({
                                             exercises: newExercises,
                                           });
                                         }}
-                                        placeholder="—"
+                                        placeholder={lastWeightHint}
                                         className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
                                       />
                                     </div>
@@ -2234,7 +2346,8 @@ export default function SessionsSection({
                                       </button>
                                     </div>
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
 
                               <button
@@ -2270,6 +2383,15 @@ export default function SessionsSection({
                   );
                 })}
               </div>
+
+            <button
+              type="button"
+              onClick={() => openExercisePicker("bottom")}
+              className="order-5 w-full py-3 rounded-xl border border-dashed border-[#3A3A3C] text-[#8E8E93] hover:text-[#FF6B35] hover:border-[#FF6B35]/40 text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+            >
+              <MdAdd size={18} /> Add exercise
+            </button>
+            </div>
 
           </form>
         </div>
