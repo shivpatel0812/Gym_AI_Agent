@@ -1,11 +1,16 @@
+print("GymAI boot: start", flush=True)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
-from routers import exercises, splits, workout_sessions, physical_activities, macros, stress, body_feelings, wellness_survey, sleep, hydration, ai_analysis, user_profile, workout_plan
-import db
 
 load_dotenv()
+print("GymAI boot: loading db", flush=True)
+import db
+print("GymAI boot: loading routers", flush=True)
+from routers import exercises, splits, workout_sessions, physical_activities, macros, stress, body_feelings, wellness_survey, sleep, hydration, ai_analysis, user_profile, workout_plan
+print("GymAI boot: app configured", flush=True)
 
 app = FastAPI()
 
