@@ -2,14 +2,14 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import apiClient from "../lib/api-client";
 import { MacroEntry, FoodItem, HydrationEntry } from "../types";
 import LogFoodForm, { MEALS } from "../components/nutrition/LogFoodModal";
-import { MdAdd, MdClose } from "react-icons/md";
+import { MdAdd, MdClose, MdKeyboardArrowUp, MdKeyboardArrowDown } from "react-icons/md";
 
 const TARGETS = {
   calories: 2200,
   protein: 175,
   carbs: 240,
   fats: 80,
-  water: 8, // glasses
+  water: 16, // cups
 };
 
 interface MealRow {
@@ -81,6 +81,7 @@ export default function NutritionPage() {
   const [selectedDate, setSelectedDate] = useState(() => toDateKey(new Date()));
   const [loggingMeal, setLoggingMeal] = useState<string | null>(null);
   const [collapsedMeals, setCollapsedMeals] = useState<Record<string, boolean>>({});
+  const [waterDraft, setWaterDraft] = useState("0");
 
   const fetchAll = useCallback(async () => {
     try {
@@ -167,6 +168,10 @@ export default function NutritionPage() {
   );
   const glasses = Math.round(hydrationForDay?.amount_cups || 0);
 
+  useEffect(() => {
+    setWaterDraft(String(glasses));
+  }, [glasses, selectedDate]);
+
   const mealGroups = useMemo(() => {
     const groups: Record<string, MealRow[]> = {};
     for (const row of dayRows) {
@@ -243,6 +248,12 @@ export default function NutritionPage() {
     const target = meal || firstEmpty || MEALS[0].id;
     setLoggingMeal(target);
     setCollapsedMeals((prev) => ({ ...prev, [target]: false }));
+  };
+
+  const commitWater = (value: number) => {
+    const next = Math.max(0, Math.round(value));
+    setWaterDraft(String(next));
+    if (next !== glasses) setWater(next);
   };
 
   const pct = Math.min(
@@ -403,30 +414,65 @@ export default function NutritionPage() {
             </div>
 
             {/* Water */}
-            <div className="lg:self-end">
+            <div className="lg:self-end w-full max-w-xs">
               <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-2.5">
                 Water
               </p>
-              <div className="flex gap-1.5">
-                {Array.from({ length: TARGETS.water }).map((_, i) => {
-                  const filled = i < glasses;
-                  return (
-                    <button
-                      key={i}
-                      onClick={() => setWater(i + 1 === glasses ? i : i + 1)}
-                      className={`w-7 h-9 rounded-md transition-colors ${
-                        filled
-                          ? "bg-[#38BDF8]"
-                          : "bg-[#1C1C1E] border border-[#2A2D35] hover:border-[#38BDF8]/50"
-                      }`}
-                      title={`${i + 1} glass${i > 0 ? "es" : ""}`}
-                    />
-                  );
-                })}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center rounded-xl border border-[#2A2D35] bg-[#0F1117] overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => commitWater(glasses - 1)}
+                    disabled={glasses <= 0}
+                    className="w-10 h-11 flex items-center justify-center text-[#8E8E93] hover:text-white hover:bg-[#1C1C1E] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Decrease cups"
+                  >
+                    <MdKeyboardArrowDown size={22} />
+                  </button>
+                  <input
+                    type="number"
+                    min="0"
+                    inputMode="numeric"
+                    value={waterDraft}
+                    onChange={(e) => setWaterDraft(e.target.value)}
+                    onBlur={() => {
+                      const parsed = parseFloat(waterDraft);
+                      commitWater(Number.isFinite(parsed) ? parsed : glasses);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                    className="w-14 h-11 bg-transparent text-center text-lg font-bold text-[#38BDF8] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none"
+                    aria-label="Total cups"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => commitWater(glasses + 1)}
+                    className="w-10 h-11 flex items-center justify-center text-[#8E8E93] hover:text-white hover:bg-[#1C1C1E] transition-colors"
+                    aria-label="Increase cups"
+                  >
+                    <MdKeyboardArrowUp size={22} />
+                  </button>
+                </div>
+                <p className="text-sm text-[#8E8E93]">
+                  <span className="text-white font-semibold">{glasses}</span>
+                  {" / "}
+                  {TARGETS.water} cups
+                </p>
               </div>
-              <p className="text-sm text-[#8E8E93] mt-2">
-                <span className="text-[#38BDF8] font-bold">{glasses}</span> /{" "}
-                {TARGETS.water} glasses
+              <div className="mt-3 h-2 rounded-full bg-[#2A2D35] overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-[#38BDF8] transition-all duration-300"
+                  style={{
+                    width: `${Math.min((glasses / TARGETS.water) * 100, 100)}%`,
+                  }}
+                />
+              </div>
+              <p className="text-[11px] text-[#636366] mt-1.5">
+                Target {TARGETS.water} cups
+                {glasses >= TARGETS.water ? " · Hit" : ""}
               </p>
             </div>
           </div>
