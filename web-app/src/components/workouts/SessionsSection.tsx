@@ -65,6 +65,57 @@ function isValidSet(set: WorkoutSet) {
   return reps > 0 || (Number.isFinite(weight) && weight > 0);
 }
 
+function isLastWorkoutRecent(lastData: any, maxDays = 30): boolean {
+  const dateStr = lastData?.date;
+  if (!dateStr) return false;
+  const parsed = new Date(`${String(dateStr).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return false;
+  const days = (Date.now() - parsed.getTime()) / (1000 * 60 * 60 * 24);
+  return days >= 0 && days <= maxDays;
+}
+
+function setsFromLastWorkout(lastData: any, targetCount = 3): WorkoutSet[] | null {
+  if (!isLastWorkoutRecent(lastData)) return null;
+  const raw = lastData?.exercise_data?.sets;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const usable = raw.filter(isValidSet);
+  if (usable.length === 0) return null;
+  const mapped: WorkoutSet[] = usable.map((s: any, i: number) => ({
+    set_number: i + 1,
+    reps: Number(s.reps) || 0,
+    weight: s.weight != null && s.weight !== "" ? Number(s.weight) : undefined,
+    completed: false,
+  }));
+  while (mapped.length < targetCount) {
+    const last = mapped[mapped.length - 1];
+    mapped.push({
+      ...last,
+      set_number: mapped.length + 1,
+      completed: false,
+    });
+  }
+  return mapped.slice(0, targetCount).map((s, i) => ({ ...s, set_number: i + 1 }));
+}
+
+function lastWorkoutHasWeight(lastData: any): boolean {
+  const sets = lastData?.exercise_data?.sets;
+  if (!Array.isArray(sets)) return false;
+  return sets.some((s: any) => Number(s.weight) > 0);
+}
+
+function recHasWeightedSets(rec: any): boolean {
+  return Array.isArray(rec?.sets) && rec.sets.some((s: any) => Number(s.weight) > 0);
+}
+
+function mapRecSets(rec: any): WorkoutSet[] {
+  return rec.sets.map((s: any, i: number) => ({
+    set_number: s.set_number || i + 1,
+    reps: s.reps || 0,
+    weight: s.weight,
+    completed: false,
+  }));
+}
+
 function buildSessionPayload(formData: SessionFormData) {
   const filteredExercises = formData.exercises
     .map((ex) => {
@@ -189,6 +240,7 @@ export default function SessionsSection({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingRecApplyRef = useRef<Set<string>>(new Set());
   const [aiSummaryStatus, setAiSummaryStatus] = useState<{
     hasSetup: boolean;
     needsSetup: boolean;
@@ -207,8 +259,26 @@ export default function SessionsSection({
       const todayData = res.data;
       if (todayData.status !== "workout_day" || !todayData.exercises) return;
 
-      // Pre-populate session form with plan exercises
-      const planExercises = todayData.exercises.map((ex: any) => {
+      const lastResults = await Promise.all(
+        todayData.exercises.map(async (ex: any) => {
+          try {
+            const response = await apiClient.get(
+              `/api/workout-sessions/last-exercise/${ex.exercise_id}`
+            );
+            return response.data || null;
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      const lastById: Record<string, any> = {};
+      todayData.exercises.forEach((ex: any, idx: number) => {
+        if (lastResults[idx]) lastById[ex.exercise_id] = lastResults[idx];
+      });
+      setLastExerciseData((prev) => ({ ...prev, ...lastById }));
+
+      const planExercises = todayData.exercises.map((ex: any, idx: number) => {
         const isCardio = ex.exercise_id?.startsWith("default-cardio");
         if (isCardio) {
           return {
@@ -218,13 +288,16 @@ export default function SessionsSection({
             speed: undefined,
           };
         }
-        // Create empty sets matching plan prescription
-        const sets = Array.from({ length: ex.sets || 3 }, (_, i) => ({
-          set_number: i + 1,
-          reps: 0,
-          weight: undefined,
-          completed: false,
-        }));
+        const lastSets = setsFromLastWorkout(lastResults[idx], ex.sets || 3);
+        const sets =
+          lastSets ||
+          Array.from({ length: ex.sets || 3 }, (_, i) => ({
+            set_number: i + 1,
+            reps: 0,
+            weight: undefined,
+            completed: false,
+          }));
+        pendingRecApplyRef.current.add(ex.exercise_id);
         return {
           exercise_id: ex.exercise_id,
           exercise_name: ex.exercise_name,
@@ -392,13 +465,7 @@ export default function SessionsSection({
     planTargetReps?: number,
     planNotes?: string
   ) => {
-    // Don't fetch if AI isn't set up
-    if (!aiSummaryStatus.hasSetup && !aiSummaryStatus.needsSetup) {
-      return;
-    }
-
     setAiRecommendationLoading(prev => ({ ...prev, [exerciseId]: true }));
-
     try {
       // Send exercises already done in current workout (for fatigue consideration)
       const currentExercises = formData.exercises.map(ex => ({
@@ -419,10 +486,27 @@ export default function SessionsSection({
       });
 
       if (response.data && response.data.status === "success") {
+        const rec = response.data.recommendation;
         setAiRecommendations(prev => ({
           ...prev,
-          [exerciseId]: response.data.recommendation
+          [exerciseId]: rec
         }));
+        if (recHasWeightedSets(rec) && pendingRecApplyRef.current.has(exerciseId)) {
+          setFormData((prev) => {
+            if (!prev.exercises.some((ex) => ex.exercise_id === exerciseId)) {
+              return prev;
+            }
+            pendingRecApplyRef.current.delete(exerciseId);
+            return {
+              ...prev,
+              exercises: prev.exercises.map((ex) =>
+                ex.exercise_id === exerciseId
+                  ? { ...ex, sets: mapRecSets(rec) }
+                  : ex
+              ),
+            };
+          });
+        }
       }
     } catch (error) {
       console.log("No AI recommendation available for this exercise");
@@ -530,21 +614,20 @@ export default function SessionsSection({
     const isCardio = selectedExercise?.category === "CARDIO";
     const positionInWorkout = formData.exercises.length; // Position is the current length (0-indexed)
     
-    // Fetch last time this exercise was done
+    let lastData: any = null;
     try {
       const response = await apiClient.get(`/api/workout-sessions/last-exercise/${exerciseId}`);
       if (response.data) {
+        lastData = response.data;
         setLastExerciseData(prev => ({
           ...prev,
           [exerciseId]: response.data
         }));
       }
     } catch (error) {
-      // Silently fail if no previous data exists
       console.log("No previous exercise data found");
     }
     
-    // Fetch all-time max for this exercise
     try {
       const maxResponse = await apiClient.get(`/api/workout-sessions/max-exercise/${exerciseId}`);
       if (maxResponse.data) {
@@ -554,13 +637,14 @@ export default function SessionsSection({
         }));
       }
     } catch (error) {
-      // Silently fail if no max data exists
       console.log("No max exercise data found");
     }
-    
-    // Fetch AI recommendation for this exercise
-    fetchAiRecommendation(exerciseId, exerciseName, positionInWorkout);
-    
+
+    if (!isCardio) {
+      pendingRecApplyRef.current.add(exerciseId);
+    }
+
+    const lastSets = !isCardio ? setsFromLastWorkout(lastData, 3) : null;
     setFormData({
       ...formData,
       exercises: [
@@ -575,10 +659,15 @@ export default function SessionsSection({
           : {
               exercise_id: exerciseId,
               exercise_name: exerciseName,
-              sets: [{ set_number: 1, reps: 0, weight: undefined }],
+              sets: lastSets || [
+                { set_number: 1, reps: 0, weight: undefined },
+                { set_number: 2, reps: 0, weight: undefined },
+                { set_number: 3, reps: 0, weight: undefined },
+              ],
             },
       ],
     });
+    fetchAiRecommendation(exerciseId, exerciseName, positionInWorkout);
     setExerciseSearchQuery("");
     setCategoryFilter(null);
   };
@@ -1769,7 +1858,9 @@ export default function SessionsSection({
                                   )}
                                 </div>
 
-                                {aiRec.needs_starting_weight && (
+                                {aiRec.needs_starting_weight &&
+                                  !(lastWorkoutHasWeight(lastData) && isLastWorkoutRecent(lastData)) &&
+                                  !recHasWeightedSets(aiRec) && (
                                   <div className="mb-3 rounded-xl border border-[#5EEAD4]/30 bg-[#0B0C10]/60 p-3 sm:p-4">
                                     <p className="text-sm font-semibold text-white">
                                       Choose your starting weight
@@ -1856,7 +1947,10 @@ export default function SessionsSection({
                                       {aiRec.reasoning}
                                     </p>
                                   )}
-                                  {!aiRec.needs_starting_weight &&
+                                  {(!aiRec.needs_starting_weight ||
+                                    recHasWeightedSets(aiRec) ||
+                                    (lastWorkoutHasWeight(lastData) &&
+                                      isLastWorkoutRecent(lastData))) &&
                                     aiRec.sets &&
                                     Array.isArray(aiRec.sets) && (
                                     <button

@@ -3,6 +3,7 @@ from ai_analysis.workout_recommender.progression_engine import (
     ProgressionEngine,
 )
 from ai_analysis.workout_recommender.weight_estimator import (
+    estimate_comeback_weight,
     estimate_starting_weight,
 )
 
@@ -73,3 +74,31 @@ def test_unknown_first_session_still_requests_starting_weight():
 
     assert result.decision == Decision.NEEDS_STARTING_WEIGHT
     assert result.sets == []
+
+
+def test_estimate_comeback_weight_discounts_stale_session():
+    assert estimate_comeback_weight(75, 191) == 55
+
+
+def test_stale_history_fills_three_current_working_sets():
+    engine = ProgressionEngine()
+    result = engine.compute_recommendation(
+        exercise_id="default-chest-db-incline-press",
+        exercise_name="Incline Dumbbell Press",
+        user_goal="Build Muscle",
+        recent_sessions=[],
+        num_sets=3,
+        stale_last_session={
+            "date": "2020-01-01",
+            "sets": [
+                {"set_number": 1, "reps": 6, "weight": 75},
+                {"set_number": 2, "reps": 6, "weight": 75},
+                {"set_number": 3, "reps": 6, "weight": 75},
+            ],
+        },
+    )
+
+    assert result.decision == Decision.FIRST_SESSION
+    assert [item.weight for item in result.sets] == [55, 55, 55]
+    assert [item.reps for item in result.sets] == [6, 6, 6]
+    assert result.reasoning_context["estimated_from_stale_history"] is True

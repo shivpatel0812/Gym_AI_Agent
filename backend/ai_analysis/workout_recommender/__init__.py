@@ -61,19 +61,47 @@ class WorkoutRecommender:
             openai_client=self.client, model=self.model
         )
 
-    def _get_exercise_history(self, exercise_id: str, days: int = 30) -> List[Dict]:
-        """Extract per-exercise session data within a lookback window."""
-        sessions = self.data_fetcher.get_recent_workout_sessions(days)
+    def _normalize_exercise_sets(self, ex: Dict) -> List[Dict]:
+        sets = ex.get("sets")
+        if isinstance(sets, list) and sets:
+            normalized = []
+            for i, raw in enumerate(sets):
+                if not isinstance(raw, dict):
+                    continue
+                normalized.append({
+                    "set_number": raw.get("set_number") or i + 1,
+                    "reps": raw.get("reps") or 0,
+                    "weight": raw.get("weight"),
+                    "rpe": raw.get("rpe"),
+                    "completed": raw.get("completed"),
+                    "difficulty": raw.get("difficulty"),
+                })
+            return normalized
+        if ex.get("reps") or ex.get("weight"):
+            return [{
+                "set_number": 1,
+                "reps": ex.get("reps") or 0,
+                "weight": ex.get("weight"),
+            }]
+        return []
+
+    def _get_exercise_history(self, exercise_id: str, days: Optional[int] = 30) -> List[Dict]:
+        """Extract per-exercise session data, newest first."""
+        if days is None:
+            sessions = self.data_fetcher.get_all_workout_sessions()
+        else:
+            sessions = self.data_fetcher.get_recent_workout_sessions(days)
         result = []
         for session in sessions:
             for ex in session.get("exercises", []):
                 if ex.get("exercise_id") == exercise_id:
                     result.append({
                         "date": session.get("date"),
-                        "sets": ex.get("sets", []),
+                        "sets": self._normalize_exercise_sets(ex),
                         "time": ex.get("time"),
                         "speed": ex.get("speed"),
                     })
+        result.sort(key=lambda item: item.get("date") or "", reverse=True)
         return result
 
     def get_or_create_summary(self, force_refresh: bool = False) -> Dict:
@@ -155,10 +183,12 @@ class WorkoutRecommender:
         Returns:
             Recommendation dict with suggested sets/reps/weight
         """
-        # Look back 30 days first; if no data for this exercise, widen to 180
+        # Progress only from the last 30 days. Older sessions are a comeback estimate.
         recent_exercise_data = self._get_exercise_history(exercise_id, days=30)
+        stale_last_session = None
         if not recent_exercise_data:
-            recent_exercise_data = self._get_exercise_history(exercise_id, days=180)
+            all_history = self._get_exercise_history(exercise_id, days=None)
+            stale_last_session = all_history[0] if all_history else None
 
         # Get user profile for goals
         profile = self.data_fetcher.get_user_profile()
@@ -195,6 +225,7 @@ class WorkoutRecommender:
             heavy_day_weight=None,
             exercise_record=exercise_record,
             top_lifts=profile.get("top_lifts") if profile else None,
+            stale_last_session=stale_last_session,
         )
 
         # Generate reasoning text (LLM-optional, template fallback)
@@ -229,6 +260,8 @@ class WorkoutRecommender:
             }
             if progression_result.reasoning_context.get("estimated_from_top_lifts"):
                 recommendation["estimated_from_top_lifts"] = True
+            if progression_result.reasoning_context.get("estimated_from_stale_history"):
+                recommendation["estimated_from_stale_history"] = True
         else:
             # Cardio case
             recommendation = {

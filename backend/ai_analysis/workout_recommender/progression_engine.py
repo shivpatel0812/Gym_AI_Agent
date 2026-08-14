@@ -18,7 +18,13 @@ from .exercise_metadata import (
     is_cardio,
     is_bodyweight,
 )
-from .weight_estimator import estimate_starting_weight
+from .weight_estimator import (
+    days_since_session,
+    estimate_comeback_weight,
+    estimate_starting_weight,
+    last_working_reps,
+    last_working_weight,
+)
 
 
 class Decision(str, Enum):
@@ -86,6 +92,7 @@ class ProgressionEngine:
         heavy_day_weight: Optional[float] = None,
         exercise_record: Optional[Dict] = None,
         top_lifts: Optional[Dict[str, Any]] = None,
+        stale_last_session: Optional[Dict] = None,
     ) -> ProgressionResult:
         """
         Compute a deterministic recommendation for the next workout.
@@ -120,14 +127,17 @@ class ProgressionEngine:
         if metadata.min_increment_lb == 0.0:
             return self._handle_bodyweight(recent_sessions, num_sets, rep_range, metadata)
 
-        # 3. No history? → NEEDS_STARTING_WEIGHT
+        # 3. No history in the last 30 days → estimate 3 sets they can hit now
         if not recent_sessions:
-            estimated = estimate_starting_weight(exercise_id, exercise_name, top_lifts)
-            if estimated:
-                return self._handle_first_session_with_estimate(
-                    num_sets, rep_range, estimated
-                )
-            return self._handle_needs_starting_weight(num_sets, rep_range)
+            return self._estimate_current_working_sets(
+                exercise_id=exercise_id,
+                exercise_name=exercise_name,
+                num_sets=num_sets,
+                rep_range=rep_range,
+                increment=increment,
+                top_lifts=top_lifts,
+                stale_last_session=stale_last_session,
+            )
 
         # Get the latest session data
         latest = recent_sessions[0]
@@ -282,31 +292,80 @@ class ProgressionEngine:
             },
         )
 
+    def _estimate_current_working_sets(
+        self,
+        exercise_id: str,
+        exercise_name: str,
+        num_sets: int,
+        rep_range: RepRangeConfig,
+        increment: float,
+        top_lifts: Optional[Dict[str, Any]],
+        stale_last_session: Optional[Dict],
+    ) -> ProgressionResult:
+        """Fill 3 current working sets when there is no recent session."""
+        if stale_last_session:
+            stale_sets = stale_last_session.get("sets") or []
+            days_ago = days_since_session(stale_last_session.get("date"))
+            comeback = estimate_comeback_weight(
+                last_working_weight(stale_sets),
+                days_ago,
+                increment=increment or 5.0,
+            )
+            if comeback:
+                reps = last_working_reps(stale_sets) or rep_range.low
+                return self._handle_first_session_with_estimate(
+                    num_sets,
+                    rep_range,
+                    comeback,
+                    suggested_reps=reps,
+                    extra_context={
+                        "reason": "estimated_comeback",
+                        "estimated_from_stale_history": True,
+                        "days_since_last": days_ago,
+                        "prev_weight": last_working_weight(stale_sets),
+                    },
+                )
+
+        estimated = estimate_starting_weight(exercise_id, exercise_name, top_lifts)
+        if estimated:
+            return self._handle_first_session_with_estimate(
+                num_sets, rep_range, estimated
+            )
+        return self._handle_needs_starting_weight(num_sets, rep_range)
+
     def _handle_first_session_with_estimate(
         self,
         num_sets: int,
         rep_range: RepRangeConfig,
         estimated_weight: float,
+        suggested_reps: Optional[int] = None,
+        extra_context: Optional[Dict] = None,
     ) -> ProgressionResult:
-        """Seed a first weighted session from top-lift ratios."""
+        """Seed a first weighted session from last-known load or top-lift ratios."""
+        reps = suggested_reps or rep_range.low
         sets = [
             RecommendedSet(
                 set_number=i + 1,
-                reps=rep_range.low,
+                reps=reps,
                 weight=estimated_weight,
             )
             for i in range(num_sets)
         ]
+        context = {
+            "reason": "estimated_from_top_lifts",
+            "estimated_weight": estimated_weight,
+            "estimated_from_top_lifts": True,
+            "rep_range": (rep_range.low, rep_range.high),
+        }
+        if extra_context:
+            context.update(extra_context)
+            if extra_context.get("estimated_from_stale_history"):
+                context["estimated_from_top_lifts"] = False
         return ProgressionResult(
             sets=sets,
             decision=Decision.FIRST_SESSION,
             confidence="medium",
-            reasoning_context={
-                "reason": "estimated_from_top_lifts",
-                "estimated_weight": estimated_weight,
-                "estimated_from_top_lifts": True,
-                "rep_range": (rep_range.low, rep_range.high),
-            },
+            reasoning_context=context,
         )
 
     def _filter_implausible_sets(self, sets: List[Dict], metadata=None) -> tuple:

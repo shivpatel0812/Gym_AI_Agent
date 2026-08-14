@@ -133,6 +133,17 @@ class ReasoningGenerator:
             )
 
         if decision == Decision.FIRST_SESSION:
+            if ctx.get("estimated_from_stale_history"):
+                weight = ctx.get("estimated_weight", 0)
+                prev = ctx.get("prev_weight")
+                days = ctx.get("days_since_last")
+                gap = f" after {days} days off" if days else ""
+                prev_bit = f" Last time was {prev:g} lbs." if prev else ""
+                return (
+                    f"No session in the last 30 days{gap}. "
+                    f"Starting with 3 sets at {weight:g} lbs — a conservative load you should be able to hit now."
+                    f"{prev_bit}"
+                )
             if ctx.get("estimated_from_top_lifts"):
                 weight = ctx.get("estimated_weight", 0)
                 return (

@@ -1,6 +1,7 @@
 """Conservative first-session weight estimates derived from a user's top lifts."""
 
-from typing import Any, Dict, Optional
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional
 import math
 
 from .exercise_metadata import resolve_exercise_metadata
@@ -118,3 +119,59 @@ def estimate_starting_weight(
     if estimate <= 0:
         return None
     return max(5.0, math.floor(estimate / 5.0 + 0.5) * 5.0)
+
+
+def days_since_session(date_str: Optional[str], today: Optional[date] = None) -> Optional[int]:
+    if not date_str:
+        return None
+    try:
+        session_date = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return ((today or date.today()) - session_date).days
+
+
+def last_working_weight(sets: Optional[List[Dict]]) -> Optional[float]:
+    for raw in sets or []:
+        if not isinstance(raw, dict):
+            continue
+        weight = raw.get("weight")
+        if isinstance(weight, (int, float)) and weight > 0:
+            return float(weight)
+    return None
+
+
+def last_working_reps(sets: Optional[List[Dict]]) -> Optional[int]:
+    for raw in sets or []:
+        if not isinstance(raw, dict):
+            continue
+        reps = raw.get("reps")
+        if isinstance(reps, (int, float)) and reps > 0:
+            return int(reps)
+    return None
+
+
+def _comeback_factor(days_since: int) -> float:
+    if days_since <= 30:
+        return 1.0
+    if days_since <= 60:
+        return 0.90
+    if days_since <= 120:
+        return 0.85
+    if days_since <= 180:
+        return 0.80
+    return 0.75
+
+
+def estimate_comeback_weight(
+    last_weight: Optional[float],
+    days_since: Optional[int],
+    increment: float = 5.0,
+) -> Optional[float]:
+    """Estimate a current working weight from a stale last session."""
+    if not isinstance(last_weight, (int, float)) or last_weight <= 0:
+        return None
+    gap = 90 if days_since is None else max(0, days_since)
+    step = increment if increment and increment > 0 else 5.0
+    estimate = float(last_weight) * _comeback_factor(gap)
+    return max(step, math.floor(estimate / step + 0.5) * step)
