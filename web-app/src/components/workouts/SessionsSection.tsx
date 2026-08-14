@@ -89,7 +89,7 @@ function buildSessionPayload(formData: SessionFormData) {
 function getApiErrorMessage(error: unknown, fallback: string) {
   if (axios.isAxiosError(error)) {
     if (!error.response) {
-      return "Cannot reach the server. If this is production, the API URL or proxy may be misconfigured.";
+      return "Cannot reach the server. Check that the API is up and CORS allows this site.";
     }
     const detail = error.response.data?.detail;
     if (typeof detail === "string") return detail;
@@ -97,6 +97,9 @@ function getApiErrorMessage(error: unknown, fallback: string) {
       return detail
         .map((item) => item?.msg || JSON.stringify(item))
         .join("; ");
+    }
+    if (error.response.status === 404) {
+      return "Save endpoint not found. The app may be calling the wrong API URL.";
     }
     return `${fallback} (${error.response.status})`;
   }

@@ -2,11 +2,11 @@ import axios from 'axios';
 import { auth } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
-// Production uses same-origin `/api` so Vercel can proxy to the backend
-// (avoids localhost fallback and CORS issues). Local dev still hits :8000.
-const apiBaseUrl = import.meta.env.PROD
-  ? ""
-  : import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const apiBaseUrl =
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.DEV
+    ? "http://localhost:8000"
+    : "https://gymaiagent-production.up.railway.app");
 
 const apiClient = axios.create({
   baseURL: apiBaseUrl,
