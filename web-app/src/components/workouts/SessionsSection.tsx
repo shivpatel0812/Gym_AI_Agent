@@ -62,36 +62,71 @@ type SessionFormData = {
   split_day: string;
   exercises: SessionExercise[];
   notes: string;
-  cardio_sport: string;
-  cardio_minutes: string;
-  cardio_intensity: number;
-  cardio_fatigue: number;
 };
 
-const CARDIO_SPORTS = [
-  "Basketball",
-  "Soccer",
-  "Football",
-  "Tennis",
-  "Running",
-  "Cycling",
-  "Swimming",
-  "Hiking",
-  "Walking",
-  "Pickup",
-  "Other",
-];
+function isCardioExercise(ex: SessionExercise) {
+  return (
+    Boolean(ex.exercise_id?.startsWith("default-cardio")) ||
+    Object.prototype.hasOwnProperty.call(ex, "time") ||
+    Object.prototype.hasOwnProperty.call(ex, "speed") ||
+    Object.prototype.hasOwnProperty.call(ex, "intensity") ||
+    Object.prototype.hasOwnProperty.call(ex, "fatigue")
+  );
+}
 
-const PRESET_CARDIO_SPORTS = CARDIO_SPORTS.filter((s) => s !== "Other");
+function isTreadmillCardio(ex: SessionExercise) {
+  const id = ex.exercise_id || "";
+  return (
+    id === "default-cardio-incline-walk" ||
+    id === "default-cardio-run" ||
+    id === "default-cardio-normal-walk"
+  );
+}
 
-function isCustomCardioSport(sport: string) {
-  return Boolean(sport) && !PRESET_CARDIO_SPORTS.includes(sport);
+function isSportCardio(ex: SessionExercise) {
+  return Boolean(ex.exercise_id?.startsWith("default-cardio-sport")) ||
+    (isCardioExercise(ex) && !isTreadmillCardio(ex));
+}
+
+function sportIdFromName(name: string) {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `default-cardio-sport-${slug || "other"}`;
+}
+
+function migrateSessionCardioToExercises(session: WorkoutSession): SessionExercise[] {
+  const exercises = [...(session.exercises || [])];
+  const sport = (session.cardio_sport || "").trim();
+  if (!sport && session.cardio_minutes == null) return exercises;
+
+  const alreadyLogged = exercises.some(
+    (ex) =>
+      isSportCardio(ex) ||
+      (sport && ex.exercise_name.toLowerCase() === sport.toLowerCase())
+  );
+  if (alreadyLogged) return exercises;
+
+  const catalogMatch = defaultExercises.find(
+    (ex) => ex.category === "CARDIO" && ex.name.toLowerCase() === sport.toLowerCase()
+  );
+  exercises.unshift({
+    exercise_id: catalogMatch?.id || sportIdFromName(sport || "Other Sport"),
+    exercise_name: sport || "Cardio",
+    time: session.cardio_minutes,
+    intensity: session.cardio_intensity ?? 5,
+    fatigue: session.cardio_fatigue ?? 5,
+  });
+  return exercises;
 }
 
 function hasCardioLog(data: {
+  exercises?: SessionExercise[];
   cardio_sport?: string;
   cardio_minutes?: string | number;
 }) {
+  if (data.exercises?.some(isCardioExercise)) return true;
   const sport = String(data.cardio_sport || "").trim();
   const minutes = Number(data.cardio_minutes);
   return Boolean(sport) || (Number.isFinite(minutes) && minutes > 0);
@@ -366,10 +401,6 @@ function emptySessionForm(): SessionFormData {
     split_day: "",
     exercises: [],
     notes: "",
-    cardio_sport: "",
-    cardio_minutes: "",
-    cardio_intensity: 5,
-    cardio_fatigue: 5,
   };
 }
 
@@ -379,13 +410,8 @@ function sessionToForm(session: WorkoutSession): SessionFormData {
     split_id: session.split_id || "",
     split_name: session.split_name || "",
     split_day: session.split_day || "",
-    exercises: session.exercises || [],
+    exercises: migrateSessionCardioToExercises(session),
     notes: session.notes || "",
-    cardio_sport: session.cardio_sport || "",
-    cardio_minutes:
-      session.cardio_minutes != null ? String(session.cardio_minutes) : "",
-    cardio_intensity: session.cardio_intensity ?? 5,
-    cardio_fatigue: session.cardio_fatigue ?? 5,
   };
 }
 
@@ -397,7 +423,12 @@ function buildSessionPayload(
     .map((ex) => {
       if (ex.sets && Array.isArray(ex.sets)) {
         const validSets = ex.sets.filter(isValidSet);
-        if (validSets.length > 0 || ex.time !== undefined || ex.speed !== undefined) {
+        if (
+          validSets.length > 0 ||
+          ex.time !== undefined ||
+          ex.speed !== undefined ||
+          isCardioExercise(ex)
+        ) {
           return { ...ex, sets: validSets };
         }
         return null;
@@ -406,9 +437,7 @@ function buildSessionPayload(
     })
     .filter((ex): ex is SessionExercise => ex !== null);
 
-  const minutes = Number(formData.cardio_minutes);
-  const sport = formData.cardio_sport.trim();
-  const hasCardio = Boolean(sport) || (Number.isFinite(minutes) && minutes > 0);
+  const firstSport = filteredExercises.find(isSportCardio);
 
   return {
     date: formData.date,
@@ -417,10 +446,13 @@ function buildSessionPayload(
     split_day: formData.split_day || undefined,
     exercises: filteredExercises,
     notes: formData.notes || undefined,
-    cardio_sport: hasCardio ? sport || null : null,
-    cardio_minutes: hasCardio && Number.isFinite(minutes) && minutes > 0 ? minutes : null,
-    cardio_intensity: hasCardio ? formData.cardio_intensity : null,
-    cardio_fatigue: hasCardio ? formData.cardio_fatigue : null,
+    cardio_sport: firstSport?.exercise_name || null,
+    cardio_minutes:
+      firstSport?.time != null && Number.isFinite(firstSport.time) && firstSport.time > 0
+        ? firstSport.time
+        : null,
+    cardio_intensity: firstSport?.intensity ?? null,
+    cardio_fatigue: firstSport?.fatigue ?? null,
     timer_accumulated_ms: timer?.accumulatedMs ?? 0,
     timer_running_since: timer?.runningSince
       ? new Date(timer.runningSince).toISOString()
@@ -590,11 +622,12 @@ export default function SessionsSection({
       const planExercises = todayData.exercises.map((ex: any, idx: number) => {
         const isCardio = ex.exercise_id?.startsWith("default-cardio");
         if (isCardio) {
+          const sport = String(ex.exercise_id || "").startsWith("default-cardio-sport");
           return {
             exercise_id: ex.exercise_id,
             exercise_name: ex.exercise_name,
             time: undefined,
-            speed: undefined,
+            ...(sport ? { intensity: 5, fatigue: 5 } : { speed: undefined }),
           };
         }
         const lastSets = setsFromLastWorkout(lastResults[idx], ex.sets || 3);
@@ -741,10 +774,6 @@ export default function SessionsSection({
     formData.split_name,
     formData.split_day,
     formData.notes,
-    formData.cardio_sport,
-    formData.cardio_minutes,
-    formData.cardio_intensity,
-    formData.cardio_fatigue,
     showForm,
     performAutoSave,
   ]);
@@ -1024,8 +1053,13 @@ export default function SessionsSection({
           ? {
               exercise_id: exerciseId,
               exercise_name: exerciseName,
-              time: undefined,
-              speed: undefined,
+              time: lastData?.time,
+              ...(exerciseId.startsWith("default-cardio-sport")
+                ? {
+                    intensity: lastData?.intensity ?? 5,
+                    fatigue: lastData?.fatigue ?? 5,
+                  }
+                : { speed: lastData?.speed }),
             }
           : {
               exercise_id: exerciseId,
@@ -1702,134 +1736,6 @@ export default function SessionsSection({
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
-            <div className="rounded-2xl border border-[#2A2D35] bg-[#161A22] p-4 space-y-4">
-              <div>
-                <h3 className="text-sm font-bold text-white">Cardio / Sports</h3>
-                <p className="text-xs text-[#8E8E93] mt-0.5">
-                  Optional — sport, time, intensity, and how tired you felt.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {CARDIO_SPORTS.map((sport) => {
-                  const selected =
-                    sport === "Other"
-                      ? isCustomCardioSport(formData.cardio_sport)
-                      : formData.cardio_sport === sport;
-                  return (
-                    <button
-                      key={sport}
-                      type="button"
-                      onClick={() =>
-                        setFormData({
-                          ...formData,
-                          cardio_sport: selected
-                            ? ""
-                            : sport === "Other"
-                            ? "Other"
-                            : sport,
-                        })
-                      }
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
-                        selected
-                          ? "bg-[#FF6B35]/20 border-[#FF6B35] text-white"
-                          : "bg-[#0B0C10] border-[#2A2D35] text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40"
-                      }`}
-                    >
-                      {sport}
-                    </button>
-                  );
-                })}
-              </div>
-              {isCustomCardioSport(formData.cardio_sport) && (
-                  <Input
-                    label="Sport"
-                    value={
-                      formData.cardio_sport === "Other"
-                        ? ""
-                        : formData.cardio_sport
-                    }
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        cardio_sport: e.target.value || "Other",
-                      })
-                    }
-                    placeholder="What did you play?"
-                    className="bg-[#0B0C10] border border-[#2A2D35] text-[#FFFFFF] placeholder:text-[#636366]"
-                  />
-                )}
-              <Input
-                label="Time (minutes)"
-                type="number"
-                min={0}
-                inputMode="numeric"
-                value={formData.cardio_minutes}
-                onChange={(e) =>
-                  setFormData({ ...formData, cardio_minutes: e.target.value })
-                }
-                placeholder="e.g. 45"
-                className="bg-[#0B0C10] border border-[#2A2D35] text-[#FFFFFF] placeholder:text-[#636366]"
-              />
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs sm:text-sm font-semibold text-white">
-                    Intensity
-                  </label>
-                  <span className="text-sm font-bold text-[#FF6B35] tabular-nums">
-                    {formData.cardio_intensity}/10
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={10}
-                  step={1}
-                  value={formData.cardio_intensity}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      cardio_intensity: Number(e.target.value),
-                    })
-                  }
-                  className="w-full accent-[#FF6B35]"
-                  aria-label="Cardio intensity from 1 to 10"
-                />
-                <div className="flex justify-between text-[11px] text-[#636366] mt-1">
-                  <span>Easy</span>
-                  <span>Max</span>
-                </div>
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs sm:text-sm font-semibold text-white">
-                    How tired do you feel?
-                  </label>
-                  <span className="text-sm font-bold text-[#FF6B35] tabular-nums">
-                    {formData.cardio_fatigue}/10
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={10}
-                  step={1}
-                  value={formData.cardio_fatigue}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      cardio_fatigue: Number(e.target.value),
-                    })
-                  }
-                  className="w-full accent-[#FF6B35]"
-                  aria-label="How tired you feel from 1 to 10"
-                />
-                <div className="flex justify-between text-[11px] text-[#636366] mt-1">
-                  <span>Fresh</span>
-                  <span>Exhausted</span>
-                </div>
-              </div>
-            </div>
-
             <button
               type="button"
               onClick={() => setShowSessionDetails(!showSessionDetails)}
@@ -2312,7 +2218,9 @@ export default function SessionsSection({
               <div className="order-3 space-y-4">
                 {formData.exercises.map((ex, idx) => {
                   const exerciseSets = Array.isArray(ex.sets) ? ex.sets : [];
-                  const isCardio = ex.hasOwnProperty("time") || ex.hasOwnProperty("speed");
+                  const isCardio = isCardioExercise(ex);
+                  const sportCardio = isSportCardio(ex);
+                  const treadmillCardio = isTreadmillCardio(ex);
                   const isCollapsed = collapsedExercises[idx] ?? false;
                   const completedCount = getCompletedSetCount(exerciseSets);
                   const totalSetCount = exerciseSets.length;
@@ -2368,7 +2276,8 @@ export default function SessionsSection({
                           <p className="text-xs text-[#8E8E93] mt-0.5">
                             {categoryLabel} · {roleLabel}
                           </p>
-                          {formatLastPerformance(lastData) && (
+                          {formatLastPerformance(lastData) &&
+                            (!aiRec || isCollapsed) && (
                             <p className="text-xs text-[#5EEAD4]/90 mt-0.5 leading-relaxed">
                               Last {formatShortDate(lastData.date)}:{" "}
                               {formatLastPerformance(lastData)}
@@ -2633,6 +2542,34 @@ export default function SessionsSection({
                           <div className="px-4 sm:px-5 py-4 space-y-3">
                           {isCardio ? (
                             <div className="space-y-4">
+                              {ex.exercise_id === "default-cardio-sport-other" && (
+                                <div>
+                                  <label className="block text-[10px] font-bold text-[#636366] uppercase tracking-wide mb-2">
+                                    Sport
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={
+                                      ex.exercise_name === "Other Sport"
+                                        ? ""
+                                        : ex.exercise_name
+                                    }
+                                    onChange={(e) => {
+                                      const newExercises = [...formData.exercises];
+                                      newExercises[idx] = {
+                                        ...newExercises[idx],
+                                        exercise_name: e.target.value || "Other Sport",
+                                      };
+                                      setFormData({
+                                        ...formData,
+                                        exercises: newExercises,
+                                      });
+                                    }}
+                                    placeholder="What did you play?"
+                                    className="w-full px-4 py-3 rounded-xl bg-[#0B0C10] border border-[#2A2D35] text-white placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/50"
+                                  />
+                                </div>
+                              )}
                               <div>
                                 <label className="block text-[10px] font-bold text-[#636366] uppercase tracking-wide mb-2">
                                   Time (minutes)
@@ -2653,10 +2590,11 @@ export default function SessionsSection({
                                       exercises: newExercises,
                                     });
                                   }}
-                                  placeholder="—"
+                                  placeholder="e.g. 45"
                                   className="w-full px-4 py-3 rounded-xl bg-[#0B0C10] border border-[#2A2D35] text-white placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/50"
                                 />
                               </div>
+                              {treadmillCardio && (
                               <div>
                                 <label className="block text-[10px] font-bold text-[#636366] uppercase tracking-wide mb-2">
                                   Speed (mph)
@@ -2681,6 +2619,79 @@ export default function SessionsSection({
                                   className="w-full px-4 py-3 rounded-xl bg-[#0B0C10] border border-[#2A2D35] text-white placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/50"
                                 />
                               </div>
+                              )}
+                              {sportCardio && (
+                                <>
+                                  <div>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                      <label className="text-[10px] font-bold text-[#636366] uppercase tracking-wide">
+                                        Intensity
+                                      </label>
+                                      <span className="text-sm font-bold text-[#FF6B35] tabular-nums">
+                                        {ex.intensity ?? 5}/10
+                                      </span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={1}
+                                      max={10}
+                                      step={1}
+                                      value={ex.intensity ?? 5}
+                                      onChange={(e) => {
+                                        const newExercises = [...formData.exercises];
+                                        newExercises[idx] = {
+                                          ...newExercises[idx],
+                                          intensity: Number(e.target.value),
+                                        };
+                                        setFormData({
+                                          ...formData,
+                                          exercises: newExercises,
+                                        });
+                                      }}
+                                      className="w-full accent-[#FF6B35]"
+                                      aria-label="Intensity from 1 to 10"
+                                    />
+                                    <div className="flex justify-between text-[11px] text-[#636366] mt-1">
+                                      <span>Easy</span>
+                                      <span>Max</span>
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                      <label className="text-[10px] font-bold text-[#636366] uppercase tracking-wide">
+                                        How tired do you feel?
+                                      </label>
+                                      <span className="text-sm font-bold text-[#FF6B35] tabular-nums">
+                                        {ex.fatigue ?? 5}/10
+                                      </span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={1}
+                                      max={10}
+                                      step={1}
+                                      value={ex.fatigue ?? 5}
+                                      onChange={(e) => {
+                                        const newExercises = [...formData.exercises];
+                                        newExercises[idx] = {
+                                          ...newExercises[idx],
+                                          fatigue: Number(e.target.value),
+                                        };
+                                        setFormData({
+                                          ...formData,
+                                          exercises: newExercises,
+                                        });
+                                      }}
+                                      className="w-full accent-[#FF6B35]"
+                                      aria-label="How tired you feel from 1 to 10"
+                                    />
+                                    <div className="flex justify-between text-[11px] text-[#636366] mt-1">
+                                      <span>Fresh</span>
+                                      <span>Exhausted</span>
+                                    </div>
+                                  </div>
+                                </>
+                              )}
                             </div>
                           ) : (
                             <>
@@ -2889,7 +2900,9 @@ export default function SessionsSection({
           )}
 
           {sessions.map((session) => {
-            const exerciseCount = session.exercises?.length || 0;
+            const listedExercises = migrateSessionCardioToExercises(session);
+            const exerciseCount = listedExercises.length;
+            const sportEx = listedExercises.find(isSportCardio);
 
             return (
               <button
@@ -2905,12 +2918,10 @@ export default function SessionsSection({
                     </h3>
                     <p className="text-sm text-[#8E8E93] mt-0.5">
                       {exerciseCount} exercise{exerciseCount !== 1 ? "s" : ""}
-                      {session.cardio_sport || session.cardio_minutes
+                      {sportEx
                         ? ` · ${[
-                            session.cardio_sport,
-                            session.cardio_minutes
-                              ? `${session.cardio_minutes} min`
-                              : "",
+                            sportEx.exercise_name,
+                            sportEx.time ? `${sportEx.time} min` : "",
                           ]
                             .filter(Boolean)
                             .join(" · ")}`

@@ -148,13 +148,24 @@ DEFAULT_EXERCISES = [
     {"id": "default-cardio-incline-walk", "name": "Incline Walk", "category": "CARDIO", "equipment": "Treadmill"},
     {"id": "default-cardio-run", "name": "Run", "category": "CARDIO", "equipment": "Treadmill"},
     {"id": "default-cardio-normal-walk", "name": "Normal Walk", "category": "CARDIO", "equipment": "Treadmill"},
+    {"id": "default-cardio-sport-basketball", "name": "Basketball", "category": "CARDIO", "equipment": "Sport"},
+    {"id": "default-cardio-sport-soccer", "name": "Soccer", "category": "CARDIO", "equipment": "Sport"},
+    {"id": "default-cardio-sport-football", "name": "Football", "category": "CARDIO", "equipment": "Sport"},
+    {"id": "default-cardio-sport-tennis", "name": "Tennis", "category": "CARDIO", "equipment": "Sport"},
+    {"id": "default-cardio-sport-running", "name": "Running", "category": "CARDIO", "equipment": "Sport"},
+    {"id": "default-cardio-sport-cycling", "name": "Cycling", "category": "CARDIO", "equipment": "Sport"},
+    {"id": "default-cardio-sport-swimming", "name": "Swimming", "category": "CARDIO", "equipment": "Sport"},
+    {"id": "default-cardio-sport-hiking", "name": "Hiking", "category": "CARDIO", "equipment": "Sport"},
+    {"id": "default-cardio-sport-walking", "name": "Walking", "category": "CARDIO", "equipment": "Sport"},
+    {"id": "default-cardio-sport-pickup", "name": "Pickup", "category": "CARDIO", "equipment": "Sport"},
+    {"id": "default-cardio-sport-other", "name": "Other Sport", "category": "CARDIO", "equipment": "Sport"},
 ]
 
 # Build a lookup dict for fast ID validation
 EXERCISE_BY_ID = {ex["id"]: ex for ex in DEFAULT_EXERCISES}
 
 EQUIPMENT_MAP = {
-    "Full Gym": ["Dumbbell", "Barbell", "Cable", "Machine", "Bodyweight", "Treadmill", "Weighted"],
+    "Full Gym": ["Dumbbell", "Barbell", "Cable", "Machine", "Bodyweight", "Treadmill", "Weighted", "Sport"],
     "Dumbbells Only": ["Dumbbell", "Bodyweight"],
     "Barbell + Rack": ["Barbell", "Bodyweight"],
     "Cable Machine": ["Cable", "Bodyweight"],
@@ -170,8 +181,12 @@ def filter_exercises_by_equipment(available_equipment: list[str]) -> list[dict]:
         allowed.update(EQUIPMENT_MAP.get(eq, []))
     if not allowed:
         # Default to full gym if nothing specified
-        allowed = {"Dumbbell", "Barbell", "Cable", "Machine", "Bodyweight", "Treadmill", "Weighted"}
-    return [ex for ex in DEFAULT_EXERCISES if ex["equipment"] in allowed]
+        allowed = {"Dumbbell", "Barbell", "Cable", "Machine", "Bodyweight", "Treadmill", "Weighted", "Sport"}
+    return [
+        ex
+        for ex in DEFAULT_EXERCISES
+        if ex["equipment"] in allowed or ex["equipment"] == "Sport"
+    ]
 
 
 def validate_exercise_id(exercise_id: str) -> bool:

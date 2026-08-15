@@ -53,6 +53,8 @@ export interface SessionExercise {
   weight?: number;
   time?: number;
   speed?: number;
+  intensity?: number;
+  fatigue?: number;
   notes?: string;
   is_custom?: boolean;
   ai_recommendation?: ExerciseAiRecommendation;
