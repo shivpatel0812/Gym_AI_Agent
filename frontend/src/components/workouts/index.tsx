@@ -1,12 +1,19 @@
 import { useState, useEffect } from "react";
-import { StyleSheet, ScrollView, View, Text, TouchableOpacity, Platform, StatusBar } from "react-native";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  StyleSheet,
+  ScrollView,
+  View,
+  Text,
+  TouchableOpacity,
+  Platform,
+  StatusBar,
+} from "react-native";
 import apiClient from "../../api/client";
 import { Exercise, Split } from "./types";
 import ExercisesSection from "./ExercisesSection";
 import SplitsSection from "./SplitsSection";
 import SessionsSection from "./SessionsSection";
-import { colors, spacing, borderRadius } from "../../theme";
+import { colors, spacing } from "../../theme";
 
 type TabType = "exercises" | "splits" | "sessions";
 
@@ -26,7 +33,7 @@ export default function Workouts() {
       setExercises(Array.isArray(res.data) ? res.data : []);
     } catch (error) {
       console.error("Error fetching exercises:", error);
-      setExercises([]); // Ensure it's always an array
+      setExercises([]);
     }
   };
 
@@ -36,9 +43,15 @@ export default function Workouts() {
       setSplits(Array.isArray(res.data) ? res.data : []);
     } catch (error) {
       console.error("Error fetching splits:", error);
-      setSplits([]); // Ensure it's always an array
+      setSplits([]);
     }
   };
+
+  const tabs: { id: TabType; label: string }[] = [
+    { id: "sessions", label: "Sessions" },
+    { id: "exercises", label: "Exercises" },
+    { id: "splits", label: "Splits" },
+  ];
 
   return (
     <View style={styles.container}>
@@ -46,57 +59,34 @@ export default function Workouts() {
         <Text style={styles.title}>Workouts</Text>
       </View>
       <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === "sessions" && styles.tabActive]}
-          onPress={() => setActiveTab("sessions")}
-        >
-          <MaterialCommunityIcons
-            name={activeTab === "sessions" ? "calendar" : "calendar-outline"}
-            size={20}
-            color={activeTab === "sessions" ? colors.accentPrimary : colors.textSecondary}
-            style={styles.tabIcon}
-          />
-          <Text style={[styles.tabText, activeTab === "sessions" && styles.tabTextActive]}>
-            Sessions
-          </Text>
-          {activeTab === "sessions" && <View style={styles.tabIndicator} />}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === "exercises" && styles.tabActive]}
-          onPress={() => setActiveTab("exercises")}
-        >
-          <MaterialCommunityIcons
-            name={activeTab === "exercises" ? "dumbbell" : "dumbbell"}
-            size={20}
-            color={activeTab === "exercises" ? colors.accentPrimary : colors.textSecondary}
-            style={styles.tabIcon}
-          />
-          <Text style={[styles.tabText, activeTab === "exercises" && styles.tabTextActive]}>
-            Exercises
-          </Text>
-          {activeTab === "exercises" && <View style={styles.tabIndicator} />}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === "splits" && styles.tabActive]}
-          onPress={() => setActiveTab("splits")}
-        >
-          <MaterialCommunityIcons
-            name={activeTab === "splits" ? "format-list-bulleted" : "format-list-bulleted"}
-            size={20}
-            color={activeTab === "splits" ? colors.accentPrimary : colors.textSecondary}
-            style={styles.tabIcon}
-          />
-          <Text style={[styles.tabText, activeTab === "splits" && styles.tabTextActive]}>
-            Splits
-          </Text>
-          {activeTab === "splits" && <View style={styles.tabIndicator} />}
-        </TouchableOpacity>
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.id;
+          return (
+            <TouchableOpacity
+              key={tab.id}
+              style={styles.tab}
+              onPress={() => setActiveTab(tab.id)}
+            >
+              <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
+                {tab.label}
+              </Text>
+              {isActive && <View style={styles.tabIndicator} />}
+            </TouchableOpacity>
+          );
+        })}
       </View>
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {activeTab === "sessions" && <SessionsSection exercises={exercises} splits={splits} />}
-        {activeTab === "exercises" && <ExercisesSection onExercisesUpdate={fetchExercises} />}
-        {activeTab === "splits" && <SplitsSection onSplitsUpdate={fetchSplits} />}
-      </ScrollView>
+      {activeTab === "sessions" ? (
+        <SessionsSection exercises={exercises} splits={splits} />
+      ) : (
+        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+          {activeTab === "exercises" && (
+            <ExercisesSection onExercisesUpdate={fetchExercises} />
+          )}
+          {activeTab === "splits" && (
+            <SplitsSection onSplitsUpdate={fetchSplits} />
+          )}
+        </ScrollView>
+      )}
     </View>
   );
 }
@@ -107,7 +97,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   header: {
-    paddingTop: Platform.OS === "ios" ? 60 : StatusBar.currentHeight ? StatusBar.currentHeight + 16 : 16,
+    paddingTop:
+      Platform.OS === "ios"
+        ? 60
+        : StatusBar.currentHeight
+        ? StatusBar.currentHeight + 16
+        : 16,
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.md,
   },
@@ -115,44 +110,35 @@ const styles = StyleSheet.create({
     fontSize: 32,
     fontWeight: "700",
     color: colors.textPrimary,
-    textAlign: "left",
   },
   tabBar: {
     flexDirection: "row",
-    backgroundColor: colors.cardBackground,
+    gap: 24,
+    paddingHorizontal: spacing.lg,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    paddingHorizontal: spacing.sm,
+    marginBottom: 4,
   },
   tab: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    alignItems: "center",
+    paddingVertical: 12,
     position: "relative",
   },
-  tabActive: {
-    backgroundColor: colors.cardBackground,
-  },
-  tabIcon: {
-    marginBottom: spacing.xs,
-  },
   tabText: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: "600",
     color: colors.textSecondary,
   },
   tabTextActive: {
-    color: colors.accentPrimary,
+    color: colors.textPrimary,
   },
   tabIndicator: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    height: 3,
+    height: 2,
     backgroundColor: colors.accentPrimary,
-    borderTopLeftRadius: borderRadius.sm,
-    borderTopRightRadius: borderRadius.sm,
+    borderRadius: 999,
   },
   content: {
     flex: 1,

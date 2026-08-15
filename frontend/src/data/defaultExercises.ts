@@ -49,13 +49,10 @@ const defaultExercises: DefaultExercise[] = [
   { name: "Hammer Curls", category: "BICEPS", equipment: "Dumbbell", id: "default-biceps-db-hammer" },
   { name: "Incline Dumbbell Curls", category: "BICEPS", equipment: "Dumbbell", id: "default-biceps-db-incline" },
   { name: "Concentration Curls", category: "BICEPS", equipment: "Dumbbell", id: "default-biceps-db-concentration" },
-  { name: "Preacher Curl", category: "BICEPS", equipment: "Dumbbell", id: "default-biceps-db-preacher" },
   { name: "Barbell Curls", category: "BICEPS", equipment: "Barbell", id: "default-biceps-bb-curls" },
   { name: "EZ-Bar Curls", category: "BICEPS", equipment: "Barbell", id: "default-biceps-bb-ez-bar" },
   { name: "Preacher Curls (EZ or Barbell)", category: "BICEPS", equipment: "Barbell", id: "default-biceps-bb-preacher" },
   { name: "Cable Curls", category: "BICEPS", equipment: "Cable", id: "default-biceps-cable-curls" },
-  { name: "Front Bicep Cable Curl", category: "BICEPS", equipment: "Cable", id: "default-biceps-cable-front" },
-  { name: "Cable Reverse Curl", category: "BICEPS", equipment: "Cable", id: "default-biceps-cable-reverse" },
   { name: "Rope Hammer Curls", category: "BICEPS", equipment: "Cable", id: "default-biceps-cable-rope-hammer" },
   { name: "Single-Arm Cable Curls", category: "BICEPS", equipment: "Cable", id: "default-biceps-cable-single-arm" },
   { name: "Bicep Curl Machine", category: "BICEPS", equipment: "Machine", id: "default-biceps-machine-curls" },
@@ -142,6 +139,18 @@ const defaultExercises: DefaultExercise[] = [
   { name: "Incline Walk", category: "CARDIO", equipment: "Treadmill", id: "default-cardio-incline-walk" },
   { name: "Run", category: "CARDIO", equipment: "Treadmill", id: "default-cardio-run" },
   { name: "Normal Walk", category: "CARDIO", equipment: "Treadmill", id: "default-cardio-normal-walk" },
+
+  { name: "Basketball", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-basketball" },
+  { name: "Soccer", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-soccer" },
+  { name: "Football", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-football" },
+  { name: "Tennis", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-tennis" },
+  { name: "Running", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-running" },
+  { name: "Cycling", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-cycling" },
+  { name: "Swimming", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-swimming" },
+  { name: "Hiking", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-hiking" },
+  { name: "Walking", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-walking" },
+  { name: "Pickup", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-pickup" },
+  { name: "Other Sport", category: "CARDIO", equipment: "Sport", id: "default-cardio-sport-other" },
 ];
 
 export const categories = ["CHEST", "SHOULDERS", "BICEPS", "TRICEPS", "BACK", "LEGS", "GLUTES", "CALVES", "CORE / ABS", "CARDIO"];

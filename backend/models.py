@@ -93,6 +93,7 @@ class SavedFood(BaseModel):
 
 class FoodEstimateRequest(BaseModel):
     query: str
+    name: Optional[str] = None
 
 
 class MacroEntry(BaseModel):

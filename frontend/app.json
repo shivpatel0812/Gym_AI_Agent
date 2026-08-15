@@ -4,10 +4,10 @@
     "slug": "gymai",
     "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "splash": {
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0B0C10"
     },
     "assetBundlePatterns": [
       "**/*"

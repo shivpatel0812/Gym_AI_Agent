@@ -93,6 +93,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
   const [customFats, setCustomFats] = useState("");
   const [customFiber, setCustomFiber] = useState("");
   const [customAmount, setCustomAmount] = useState("");
+  const [photoTitle, setPhotoTitle] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoNote, setPhotoNote] = useState("");
@@ -308,39 +309,73 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
     setPhotoError(null);
   };
 
-  const handleAnalyzePhoto = async () => {
-    if (!photoFile) return;
+  const applyEstimateToCustom = (item: {
+    name?: string;
+    amount?: string;
+    serving?: string;
+    calories?: number;
+    protein?: number;
+    carbs?: number;
+    fats?: number;
+    fiber?: number;
+  }) => {
+    const title = photoTitle.trim();
+    setCustomName(title || item.name || "Meal");
+    setCustomAmount(item.amount || item.serving || "");
+    setCustomCalories(String(Math.round(Number(item.calories) || 0)));
+    setCustomProtein(String(Number(item.protein) || 0));
+    setCustomCarbs(String(Number(item.carbs) || 0));
+    setCustomFats(String(Number(item.fats) || 0));
+    setCustomFiber(String(Number(item.fiber) || 0));
+    setFromPhoto(true);
+    setMode("custom");
+  };
+
+  const handleEstimateMacros = async () => {
+    const note = photoNote.trim();
+    const title = photoTitle.trim();
+    if (!photoFile && note.length < 2) return;
     setAnalyzing(true);
     setPhotoError(null);
     try {
-      const payload = new FormData();
-      payload.append("file", photoFile);
-      const note = photoNote.trim();
-      if (note) payload.append("description", note);
+      if (photoFile) {
+        const payload = new FormData();
+        payload.append("file", photoFile);
+        if (note) payload.append("description", note);
+        if (title) payload.append("title", title);
 
-      const response = await apiClient.post("/api/macros/analyze-image", payload, {
-        timeout: 60000,
-      });
-      const item = response.data?.food || response.data?.food_items?.[0];
-      if (!item) {
-        setPhotoError(
-          response.data?.message || "Could not estimate macros. Try a clearer photo or add what it is."
-        );
+        const response = await apiClient.post("/api/macros/analyze-image", payload, {
+          timeout: 60000,
+        });
+        const item = response.data?.food || response.data?.food_items?.[0];
+        if (!item) {
+          setPhotoError(
+            response.data?.message ||
+              "Could not estimate macros. Try a clearer photo or add a description."
+          );
+          return;
+        }
+        applyEstimateToCustom({
+          ...item,
+          name: title || item.name,
+        });
         return;
       }
 
-      setCustomName(item.name || note || "Meal");
-      setCustomAmount(item.amount || "");
-      setCustomCalories(String(Math.round(Number(item.calories) || 0)));
-      setCustomProtein(String(Number(item.protein) || 0));
-      setCustomCarbs(String(Number(item.carbs) || 0));
-      setCustomFats(String(Number(item.fats) || 0));
-      setCustomFiber(String(Number(item.fiber) || 0));
-      setFromPhoto(true);
-      setMode("custom");
+      const res = await apiClient.post(
+        "/api/macros/estimate-food",
+        { query: note, name: title || undefined },
+        { timeout: 30000 }
+      );
+      const item = toFoodDbItem(res.data);
+      if (!item.name) {
+        setPhotoError("Could not estimate that food. Add more detail.");
+        return;
+      }
+      applyEstimateToCustom(item);
     } catch (error: any) {
       setPhotoError(
-        error.response?.data?.detail || "Failed to analyze photo. Please try again."
+        error.response?.data?.detail || "Could not estimate macros. Please try again."
       );
     } finally {
       setAnalyzing(false);
@@ -663,7 +698,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       {mode === "photo" && (
         <div className="space-y-4">
           <p className="text-sm text-[#8E8E93]">
-            Snap the meal, say what it is, then GPT fills estimated macros.
+            Photo is optional. Title is what gets logged. Description is what GPT uses to estimate — skip the photo to save cost.
           </p>
 
           {!photoPreview ? (
@@ -705,14 +740,27 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
 
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-2">
-              What is it?
+              Food title
             </p>
             <input
               type="text"
+              value={photoTitle}
+              onChange={(e) => setPhotoTitle(e.target.value)}
+              placeholder="e.g. Frankie"
+              className="w-full h-12 px-4 rounded-xl bg-[#0F1117] border border-[#2A2D35] text-white text-sm placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
+            />
+          </div>
+
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-2">
+              Description
+            </p>
+            <textarea
               value={photoNote}
               onChange={(e) => setPhotoNote(e.target.value)}
-              placeholder="e.g. Chipotle chicken bowl, extra rice"
-              className="w-full h-12 px-4 rounded-xl bg-[#0F1117] border border-[#2A2D35] text-white text-sm placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
+              placeholder="e.g. Indian vegetarian frankie, I had 3, with chutney"
+              rows={3}
+              className="w-full px-4 py-3 rounded-xl bg-[#0F1117] border border-[#2A2D35] text-white text-sm placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40 resize-none"
             />
           </div>
 
@@ -722,11 +770,15 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
 
           <button
             type="button"
-            onClick={handleAnalyzePhoto}
-            disabled={!photoFile || analyzing}
+            onClick={handleEstimateMacros}
+            disabled={(!photoFile && photoNote.trim().length < 2) || analyzing}
             className="w-full py-3.5 rounded-xl bg-[#FF6B35] text-white font-bold hover:bg-[#E85A2A] disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-orange"
           >
-            {analyzing ? "Estimating macros..." : "Estimate macros"}
+            {analyzing
+              ? "Estimating macros..."
+              : photoFile
+              ? "Estimate from photo"
+              : "Estimate from description"}
           </button>
         </div>
       )}
@@ -735,7 +787,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         <>
           {fromPhoto && (
             <p className="text-xs text-[#5EEAD4]">
-              Filled from your photo — edit anything that looks off, then add.
+            Filled from your estimate — edit anything that looks off, then add.
             </p>
           )}
           <div>

@@ -35,7 +35,7 @@ def _num(value, default=0):
         return default
 
 
-def estimate_food_from_query(query: str) -> Optional[Dict]:
+def estimate_food_from_query(query: str, name: Optional[str] = None) -> Optional[Dict]:
     client = get_openai_client()
     if not client:
         print("Warning: OPENAI_API_KEY not set. Skipping food estimate.")
@@ -46,13 +46,20 @@ def estimate_food_from_query(query: str) -> Optional[Dict]:
         return None
 
     try:
-        prompt = f"""The user is logging food by typing: "{q}"
+        title_line = (
+            f'The logged food title should be: "{name.strip()}". Use that as "name".\n'
+            if (name or "").strip()
+            else ""
+        )
+        prompt = f"""The user is logging food.
+
+{title_line}Description of what they ate (use this for portion size and ingredients): "{q}"
 
 Estimate nutrition for the exact amount they described (e.g. "2 belvita crackers" = two crackers, not 100g).
 
 Return JSON only:
 {{
-  "name": "canonical product or food name, without the count if possible",
+  "name": "short food title for the log, without the count if possible",
   "serving": "the amount they described, e.g. 2 crackers",
   "grams": number,
   "calories": number,
@@ -78,7 +85,7 @@ If grams are unknown, estimate. aliases should include the original query and si
             return None
 
         fats = parsed.get("fats", parsed.get("fat"))
-        name = str(parsed.get("name") or q).strip()[:120] or q
+        name = str((name or "").strip() or parsed.get("name") or q).strip()[:120] or q
         serving = str(parsed.get("serving") or q).strip()[:80] or q
         grams = _num(parsed.get("grams"), 100) or 100
         aliases = parsed.get("aliases") if isinstance(parsed.get("aliases"), list) else []

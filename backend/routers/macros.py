@@ -189,7 +189,7 @@ async def estimate_food(payload: FoodEstimateRequest, user_id: str = Depends(get
         best["from_cache"] = True
         return best
 
-    estimated = estimate_food_from_query(query)
+    estimated = estimate_food_from_query(query, name=payload.name)
     if not estimated:
         raise HTTPException(
             status_code=502,
