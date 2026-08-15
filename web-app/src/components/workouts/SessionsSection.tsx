@@ -16,7 +16,6 @@ import {
   MdArrowBack,
   MdChevronRight,
   MdBolt,
-  MdCheck,
   MdSwapHoriz,
   MdExpandMore,
   MdFitnessCenter,
@@ -95,6 +94,94 @@ function setsFromLastWorkout(lastData: any, targetCount = 3): WorkoutSet[] | nul
     });
   }
   return mapped.slice(0, targetCount).map((s, i) => ({ ...s, set_number: i + 1 }));
+}
+
+function normalizeLastExerciseData(lastData: any) {
+  if (!lastData?.exercise_data) return lastData;
+  const ex = lastData.exercise_data;
+  if (Array.isArray(ex.sets) && ex.sets.length > 0) return lastData;
+  if (ex.reps || ex.weight) {
+    const count =
+      typeof ex.sets === "number" && ex.sets > 0 ? Number(ex.sets) : 1;
+    return {
+      ...lastData,
+      exercise_data: {
+        ...ex,
+        sets: Array.from({ length: count }, (_, i) => ({
+          set_number: i + 1,
+          reps: Number(ex.reps) || 0,
+          weight: ex.weight,
+        })),
+      },
+    };
+  }
+  return lastData;
+}
+
+function exerciseMatchesLast(ex: any, exerciseId?: string, exerciseName?: string) {
+  if (exerciseId && ex?.exercise_id === exerciseId) return true;
+  if (
+    exerciseName &&
+    String(ex?.exercise_name || "").trim().toLowerCase() ===
+      exerciseName.trim().toLowerCase()
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function findLastExerciseFromSessions(
+  sessions: { id?: string; date?: string; created_at?: string; exercises?: any[] }[],
+  exerciseId: string,
+  exerciseName: string,
+  excludeSessionId?: string | null
+) {
+  const matches: any[] = [];
+  for (const session of sessions) {
+    if (!session?.id || session.id === excludeSessionId) continue;
+    const ex = (session.exercises || []).find((item) =>
+      exerciseMatchesLast(item, exerciseId, exerciseName)
+    );
+    if (!ex) continue;
+    matches.push(
+      normalizeLastExerciseData({
+        session_id: session.id,
+        date: session.date,
+        created_at: (session as any).created_at,
+        exercise_data: ex,
+      })
+    );
+  }
+  matches.sort((a, b) =>
+    `${b.date || ""}|${b.created_at || ""}`.localeCompare(
+      `${a.date || ""}|${a.created_at || ""}`
+    )
+  );
+  return matches[0] || null;
+}
+
+function resolveLastExercise(
+  apiLast: any,
+  sessions: { id?: string; date?: string; created_at?: string; exercises?: any[] }[],
+  exerciseId: string,
+  exerciseName: string,
+  excludeSessionId?: string | null
+) {
+  const normalizedApi = normalizeLastExerciseData(apiLast);
+  if (
+    normalizedApi &&
+    normalizedApi.session_id &&
+    normalizedApi.session_id !== excludeSessionId &&
+    formatLastPerformance(normalizedApi)
+  ) {
+    return normalizedApi;
+  }
+  return findLastExerciseFromSessions(
+    sessions,
+    exerciseId,
+    exerciseName,
+    excludeSessionId
+  );
 }
 
 function lastWorkingSets(lastData: any): { reps: number; weight?: number }[] {
@@ -971,9 +1058,7 @@ export default function SessionsSection({
     for (const ex of formData.exercises) {
       if (Array.isArray(ex.sets) && ex.sets.length > 0) {
         totalSets += ex.sets.length;
-        const completed = ex.sets.filter(
-          (s) => s.completed !== false && ((s.reps || 0) > 0 || (s.weight || 0) > 0)
-        ).length;
+        const completed = ex.sets.filter(isValidSet).length;
         doneSets += completed;
         if (completed > 0) doneExercises += 1;
       } else if (ex.time) {
@@ -1126,12 +1211,7 @@ export default function SessionsSection({
 
   const getCompletedSetCount = (sets: SessionExercise["sets"]) => {
     if (!Array.isArray(sets)) return 0;
-    return sets.filter(
-      (s) =>
-        s.completed === true ||
-        (s.completed !== false &&
-          ((s.reps || 0) > 0 || (s.weight || 0) > 0))
-    ).length;
+    return sets.filter(isValidSet).length;
   };
 
   const categoryFilterPills = [
@@ -1858,12 +1938,13 @@ export default function SessionsSection({
                     ex.exercise_name
                   );
                   const roleLabel = getExerciseRole(idx);
-                  const lastDataRaw = lastExerciseData[ex.exercise_id];
-                  const lastData =
-                    lastDataRaw?.session_id &&
-                    lastDataRaw.session_id === editingSessionId
-                      ? null
-                      : lastDataRaw;
+                  const lastData = resolveLastExercise(
+                    lastExerciseData[ex.exercise_id],
+                    sessions,
+                    ex.exercise_id,
+                    ex.exercise_name,
+                    editingSessionId
+                  );
                   const lastSets = lastWorkingSets(lastData);
                   const maxData = maxExerciseData[ex.exercise_id];
                   const aiRec =
@@ -2222,10 +2303,9 @@ export default function SessionsSection({
                             <>
                               <div className="grid grid-cols-12 gap-2 sm:gap-3 text-[10px] font-bold text-[#636366] uppercase tracking-wide">
                                 <div className="col-span-1">Set</div>
-                                <div className="col-span-3">Reps</div>
-                                <div className="col-span-3">Weight (lbs)</div>
+                                <div className="col-span-4">Reps</div>
+                                <div className="col-span-4">Weight (lbs)</div>
                                 <div className="col-span-2">RPE</div>
-                                <div className="col-span-2 text-center">Done</div>
                                 <div className="col-span-1" />
                               </div>
 
@@ -2257,7 +2337,7 @@ export default function SessionsSection({
                                         </div>
                                       )}
                                     </div>
-                                    <div className="col-span-3">
+                                    <div className="col-span-4">
                                       <input
                                         type="number"
                                         value={set.reps === 0 ? "" : set.reps}
@@ -2289,7 +2369,7 @@ export default function SessionsSection({
                                         className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
                                       />
                                     </div>
-                                    <div className="col-span-3">
+                                    <div className="col-span-4">
                                       <input
                                         type="number"
                                         value={set.weight || ""}
@@ -2347,47 +2427,6 @@ export default function SessionsSection({
                                         placeholder="—"
                                         className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
                                       />
-                                    </div>
-                                    <div className="col-span-2 flex justify-center">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          const newExercises = [
-                                            ...formData.exercises,
-                                          ];
-                                          const newSets = [...exerciseSets];
-                                          const next =
-                                            set.completed === true
-                                              ? false
-                                              : true;
-                                          newSets[setIdx] = {
-                                            ...newSets[setIdx],
-                                            completed: next,
-                                          };
-                                          newExercises[idx] = {
-                                            ...newExercises[idx],
-                                            sets: newSets,
-                                          };
-                                          setFormData({
-                                            ...formData,
-                                            exercises: newExercises,
-                                          });
-                                        }}
-                                        className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
-                                          set.completed === true
-                                            ? "bg-[#FF6B35] text-white"
-                                            : "bg-[#161A22] border border-[#3A3A3C] text-transparent hover:border-[#FF6B35]/40"
-                                        }`}
-                                      >
-                                        <MdCheck
-                                          size={18}
-                                          className={
-                                            set.completed === true
-                                              ? "opacity-100"
-                                              : "opacity-0"
-                                          }
-                                        />
-                                      </button>
                                     </div>
                                     <div className="col-span-1 flex justify-center">
                                       <button
