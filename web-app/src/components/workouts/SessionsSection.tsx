@@ -147,6 +147,32 @@ function mapRecSets(rec: any): WorkoutSet[] {
   }));
 }
 
+function toStoredRecommendation(rec: any) {
+  if (!rec || typeof rec !== "object") return undefined;
+  return {
+    sets: rec.sets,
+    reasoning: rec.reasoning,
+    progression_type: rec.progression_type,
+    confidence: rec.confidence,
+    needs_starting_weight: rec.needs_starting_weight,
+    estimated_from_stale_history: rec.estimated_from_stale_history,
+    estimated_from_top_lifts: rec.estimated_from_top_lifts,
+    time: rec.time,
+    speed: rec.speed,
+    generated_at: rec.generated_at || new Date().toISOString(),
+  };
+}
+
+function hydrateAiRecommendations(exercises: SessionExercise[]) {
+  const out: Record<string, any> = {};
+  for (const ex of exercises) {
+    if (ex.exercise_id && ex.ai_recommendation) {
+      out[ex.exercise_id] = ex.ai_recommendation;
+    }
+  }
+  return out;
+}
+
 function buildSessionPayload(formData: SessionFormData) {
   const filteredExercises = formData.exercises
     .map((ex) => {
@@ -292,6 +318,14 @@ export default function SessionsSection({
 
   const [searchParams, setSearchParams] = useSearchParams();
 
+  const lastExerciseUrl = (exerciseId: string) => {
+    const sessionId = editingSessionIdRef.current;
+    const query = sessionId
+      ? `?exclude_session_id=${encodeURIComponent(sessionId)}`
+      : "";
+    return `/api/workout-sessions/last-exercise/${exerciseId}${query}`;
+  };
+
   const handleStartPlan = useCallback(async () => {
     try {
       const res = await apiClient.get("/api/workout-plan/today");
@@ -301,9 +335,7 @@ export default function SessionsSection({
       const lastResults = await Promise.all(
         todayData.exercises.map(async (ex: any) => {
           try {
-            const response = await apiClient.get(
-              `/api/workout-sessions/last-exercise/${ex.exercise_id}`
-            );
+            const response = await apiClient.get(lastExerciseUrl(ex.exercise_id));
             return response.data || null;
           } catch {
             return null;
@@ -565,26 +597,33 @@ export default function SessionsSection({
 
       if (response.data && response.data.status === "success") {
         const rec = response.data.recommendation;
+        const stored = toStoredRecommendation(rec);
         setAiRecommendations(prev => ({
           ...prev,
           [exerciseId]: rec
         }));
-        if (recHasWeightedSets(rec) && pendingRecApplyRef.current.has(exerciseId)) {
-          setFormData((prev) => {
-            if (!prev.exercises.some((ex) => ex.exercise_id === exerciseId)) {
-              return prev;
-            }
+        setFormData((prev) => {
+          if (!prev.exercises.some((ex) => ex.exercise_id === exerciseId)) {
+            return prev;
+          }
+          const shouldApplySets =
+            recHasWeightedSets(rec) && pendingRecApplyRef.current.has(exerciseId);
+          if (shouldApplySets) {
             pendingRecApplyRef.current.delete(exerciseId);
-            return {
-              ...prev,
-              exercises: prev.exercises.map((ex) =>
-                ex.exercise_id === exerciseId
-                  ? { ...ex, sets: mapRecSets(rec) }
-                  : ex
-              ),
-            };
-          });
-        }
+          }
+          return {
+            ...prev,
+            exercises: prev.exercises.map((ex) =>
+              ex.exercise_id === exerciseId
+                ? {
+                    ...ex,
+                    ai_recommendation: stored,
+                    ...(shouldApplySets ? { sets: mapRecSets(rec) } : {}),
+                  }
+                : ex
+            ),
+          };
+        });
       }
     } catch (error) {
       console.log("No AI recommendation available for this exercise");
@@ -605,6 +644,7 @@ export default function SessionsSection({
           exercises: sessionToEdit.exercises || [],
           notes: sessionToEdit.notes || "",
         });
+        setAiRecommendations(hydrateAiRecommendations(sessionToEdit.exercises || []));
         setEditingSessionId(sessionToEdit.id || null);
         setShowForm(true);
       }
@@ -685,7 +725,7 @@ export default function SessionsSection({
     
     let lastData: any = null;
     try {
-      const response = await apiClient.get(`/api/workout-sessions/last-exercise/${exerciseId}`);
+      const response = await apiClient.get(lastExerciseUrl(exerciseId));
       if (response.data) {
         lastData = response.data;
         setLastExerciseData(prev => ({
@@ -787,8 +827,8 @@ export default function SessionsSection({
     setEquipmentFilter(null);
     setLastExerciseData({});
     setMaxExerciseData({});
+    setAiRecommendations({});
     fetchedLastRef.current = new Set();
-    // Don't clear recommendations - keep them visible
     setAiRecommendationLoading({});
     // Clear auto-save state
     setLastSaved(null);
@@ -816,6 +856,7 @@ export default function SessionsSection({
       exercises: session.exercises || [],
       notes: session.notes || "",
     });
+    setAiRecommendations(hydrateAiRecommendations(session.exercises || []));
     setEditingSessionId(session.id || null);
     setShowForm(true);
   };
@@ -1068,7 +1109,8 @@ export default function SessionsSection({
   };
 
   const formatShortDate = (dateString: string) => {
-    const date = new Date(dateString);
+    const date = new Date(`${String(dateString).slice(0, 10)}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return dateString;
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   };
 
@@ -1127,18 +1169,20 @@ export default function SessionsSection({
     if (!showForm) return;
     formData.exercises.forEach((ex) => {
       const id = ex.exercise_id;
-      if (!id || fetchedLastRef.current.has(id)) return;
-      fetchedLastRef.current.add(id);
+      if (!id) return;
+      const cacheKey = `${id}:${editingSessionId || ""}`;
+      if (fetchedLastRef.current.has(cacheKey)) return;
+      fetchedLastRef.current.add(cacheKey);
       apiClient
-        .get(`/api/workout-sessions/last-exercise/${id}`)
+        .get(lastExerciseUrl(id))
         .then((res) => {
-          if (res.data) {
+          if (res.data && res.data.session_id !== editingSessionIdRef.current) {
             setLastExerciseData((prev) => ({ ...prev, [id]: res.data }));
           }
         })
         .catch(() => {});
     });
-  }, [showForm, formData.exercises]);
+  }, [showForm, formData.exercises, editingSessionId]);
 
   // matchesCategoryFilter and filteredPickerExercises removed - filtering is now inline in the picker
 
@@ -1814,10 +1858,16 @@ export default function SessionsSection({
                     ex.exercise_name
                   );
                   const roleLabel = getExerciseRole(idx);
-                  const lastData = lastExerciseData[ex.exercise_id];
+                  const lastDataRaw = lastExerciseData[ex.exercise_id];
+                  const lastData =
+                    lastDataRaw?.session_id &&
+                    lastDataRaw.session_id === editingSessionId
+                      ? null
+                      : lastDataRaw;
                   const lastSets = lastWorkingSets(lastData);
                   const maxData = maxExerciseData[ex.exercise_id];
-                  const aiRec = aiRecommendations[ex.exercise_id];
+                  const aiRec =
+                    aiRecommendations[ex.exercise_id] || ex.ai_recommendation;
                   const aiLoading = aiRecommendationLoading[ex.exercise_id];
                   const bestSetLabel = getBestSetLabel(maxData);
                   const confPct =
@@ -1937,6 +1987,11 @@ export default function SessionsSection({
                                     <span className="text-[10px] font-bold tracking-[0.14em] uppercase text-[#5EEAD4]">
                                       ✦ AI Coach
                                     </span>
+                                    {aiRec.generated_at && (
+                                      <span className="text-[10px] font-semibold text-[#5EEAD4]/70">
+                                        Saved with this session
+                                      </span>
+                                    )}
                                     {confPct && (
                                       <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-[#5EEAD4]/15 text-[#5EEAD4] border border-[#5EEAD4]/30">
                                         {confPct} confidence
@@ -2483,6 +2538,11 @@ export default function SessionsSection({
                             <p className="text-xs text-[#8E8E93] mt-1">
                               {formatExerciseSummary(ex)}
                             </p>
+                            {ex.ai_recommendation?.reasoning && (
+                              <p className="text-[11px] text-[#5EEAD4]/80 mt-1.5 line-clamp-2">
+                                {ex.ai_recommendation.reasoning}
+                              </p>
+                            )}
                           </div>
                         ))}
                       </div>

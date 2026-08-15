@@ -32,6 +32,19 @@ export interface WorkoutSet {
   difficulty?: 'easy' | 'solid' | 'grind' | 'failed';
 }
 
+export interface ExerciseAiRecommendation {
+  sets?: { set_number?: number; reps?: number; weight?: number }[];
+  reasoning?: string;
+  progression_type?: string;
+  confidence?: string;
+  needs_starting_weight?: boolean;
+  estimated_from_stale_history?: boolean;
+  estimated_from_top_lifts?: boolean;
+  time?: number;
+  speed?: number;
+  generated_at?: string;
+}
+
 export interface SessionExercise {
   exercise_id: string;
   exercise_name: string;
@@ -42,6 +55,7 @@ export interface SessionExercise {
   speed?: number;
   notes?: string;
   is_custom?: boolean;
+  ai_recommendation?: ExerciseAiRecommendation;
 }
 
 export interface WorkoutSession {

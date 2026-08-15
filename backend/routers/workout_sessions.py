@@ -243,32 +243,33 @@ async def delete_workout_session(session_id: str, user_id: str = Depends(get_use
 
 @router.get("/last-exercise/{exercise_id}")
 async def get_last_exercise_session(
-    exercise_id: str, 
-    user_id: str = Depends(get_user_id)
+    exercise_id: str,
+    user_id: str = Depends(get_user_id),
+    exclude_session_id: Optional[str] = Query(None),
 ):
     """
     Get the most recent workout session that contains a specific exercise.
-    Returns the session date and the exercise details (sets, reps, weight).
+    Excludes the in-progress session so "last" is not the workout being edited.
     """
     sessions_ref = db.collection("users").document(user_id).collection("workout_sessions")
     all_sessions = list(sessions_ref.stream())
     
-    # Find sessions containing this exercise, sorted by date (most recent first)
     matching_sessions = []
     for session in all_sessions:
+        if exclude_session_id and session.id == exclude_session_id:
+            continue
         session_data = session.to_dict()
         exercises = session_data.get("exercises", [])
         
-        # Check if this exercise is in the session
         for exercise in exercises:
             if exercise.get("exercise_id") == exercise_id:
                 matching_sessions.append({
                     "session_id": session.id,
                     "date": session_data.get("date"),
                     "created_at": session_data.get("created_at"),
-                    "exercise_data": exercise,  # Contains sets, reps, weight, etc.
+                    "exercise_data": exercise,
                 })
-                break  # Found it in this session, move to next session
+                break
     
     if not matching_sessions:
         return None
