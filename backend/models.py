@@ -93,6 +93,9 @@ class SavedFood(BaseModel):
 
 class FoodEstimateRequest(BaseModel):
     query: str
+
+
+class MacroEntry(BaseModel):
     id: Optional[str] = None
     date: str
     food_items: List[FoodItem]
