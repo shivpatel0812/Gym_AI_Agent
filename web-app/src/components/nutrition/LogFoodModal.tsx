@@ -1,7 +1,40 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { FoodItem } from "@/types";
 import foodDatabase, { FoodDbItem } from "@/data/foodDatabase";
-import { MdClose, MdSearch } from "react-icons/md";
+import apiClient from "@/lib/api-client";
+import { MdClose, MdSearch, MdPhotoCamera, MdImage } from "react-icons/md";
+
+async function compressImage(file: File): Promise<File> {
+  const maxWidth = 1280;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Could not read photo"));
+      image.src = url;
+    });
+    let width = img.width;
+    let height = img.height;
+    if (width > maxWidth) {
+      height = Math.round((height * maxWidth) / width);
+      width = maxWidth;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(img, 0, 0, width, height);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.82)
+    );
+    if (!blob) return file;
+    return new File([blob], "meal.jpg", { type: "image/jpeg" });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 export const MEALS = [
   { id: "Breakfast", label: "Breakfast", icon: "☀️" },
@@ -17,26 +50,94 @@ interface LogFoodFormProps {
   onCancel: () => void;
 }
 
+function toFoodDbItem(raw: any): FoodDbItem {
+  return {
+    id: raw.id,
+    name: String(raw.name || "").trim(),
+    serving: String(raw.serving || "1 serving").trim(),
+    grams: Number(raw.grams) > 0 ? Number(raw.grams) : 100,
+    calories: Number(raw.calories) || 0,
+    protein: Number(raw.protein) || 0,
+    carbs: Number(raw.carbs) || 0,
+    fats: Number(raw.fats) || 0,
+    fiber: Number(raw.fiber) || 0,
+    aliases: Array.isArray(raw.aliases) ? raw.aliases : [],
+  };
+}
+
+function foodSearchText(food: FoodDbItem) {
+  return [food.name, food.serving, ...(food.aliases || [])]
+    .join(" ")
+    .toLowerCase();
+}
+
+function foodMatchesQuery(food: FoodDbItem, query: string) {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  const blob = foodSearchText(food);
+  if (blob.includes(q)) return true;
+  const tokens = q.split(/\s+/).filter((t) => t.length > 2 && !/^\d+$/.test(t));
+  return tokens.length > 0 && tokens.every((t) => blob.includes(t));
+}
+
 export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<FoodDbItem | null>(null);
   const [amountMode, setAmountMode] = useState<"serving" | "custom">("serving");
   const [customGrams, setCustomGrams] = useState("");
-  const [mode, setMode] = useState<"search" | "custom">("search");
+  const [mode, setMode] = useState<"search" | "photo" | "custom">("search");
   const [customName, setCustomName] = useState("");
   const [customCalories, setCustomCalories] = useState("");
   const [customProtein, setCustomProtein] = useState("");
   const [customCarbs, setCustomCarbs] = useState("");
   const [customFats, setCustomFats] = useState("");
+  const [customFiber, setCustomFiber] = useState("");
   const [customAmount, setCustomAmount] = useState("");
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoNote, setPhotoNote] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [fromPhoto, setFromPhoto] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+  const [savedFoods, setSavedFoods] = useState<FoodDbItem[]>([]);
+  const [estimating, setEstimating] = useState(false);
+  const [estimateError, setEstimateError] = useState<string | null>(null);
+  const estimateQueryRef = useRef("");
+  const lastEstimatedRef = useRef("");
+
+  useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .get("/api/macros/foods")
+      .then((res) => {
+        if (cancelled) return;
+        const items = Array.isArray(res.data) ? res.data.map(toFoodDbItem) : [];
+        setSavedFoods(items.filter((f) => f.name));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const catalog = useMemo(() => {
+    const byName = new Map<string, FoodDbItem>();
+    for (const food of foodDatabase) {
+      byName.set(food.name.toLowerCase(), food);
+    }
+    for (const food of savedFoods) {
+      byName.set(food.name.toLowerCase(), food);
+    }
+    return Array.from(byName.values());
+  }, [savedFoods]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    return foodDatabase
-      .filter((f) => f.name.toLowerCase().includes(q))
-      .slice(0, 8);
-  }, [query]);
+    return catalog.filter((f) => foodMatchesQuery(f, q)).slice(0, 8);
+  }, [query, catalog]);
 
   const scale = useMemo(() => {
     if (!selected) return 1;
@@ -55,8 +156,83 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       protein: Math.round(selected.protein * scale),
       carbs: Math.round(selected.carbs * scale),
       fats: Math.round(selected.fats * scale),
+      fiber: Math.round((selected.fiber || 0) * scale),
     };
   }, [selected, scale]);
+
+  const rememberFood = async (food: FoodDbItem, extraAliases: string[] = []) => {
+    try {
+      const res = await apiClient.post("/api/macros/foods", {
+        name: food.name,
+        serving: food.serving,
+        grams: food.grams,
+        calories: food.calories,
+        protein: food.protein,
+        carbs: food.carbs,
+        fats: food.fats,
+        fiber: food.fiber || 0,
+        aliases: [...(food.aliases || []), ...extraAliases].filter(Boolean),
+      });
+      const saved = toFoodDbItem(res.data);
+      setSavedFoods((prev) => {
+        const rest = prev.filter(
+          (f) => f.name.toLowerCase() !== saved.name.toLowerCase()
+        );
+        return [saved, ...rest];
+      });
+    } catch {
+      // Search still works from the in-session list if save fails.
+    }
+  };
+
+  const estimateFood = async (rawQuery: string) => {
+    const q = rawQuery.trim();
+    if (q.length < 2 || estimating) return;
+    estimateQueryRef.current = q;
+    setEstimating(true);
+    setEstimateError(null);
+    try {
+      const res = await apiClient.post(
+        "/api/macros/estimate-food",
+        { query: q },
+        { timeout: 30000 }
+      );
+      if (estimateQueryRef.current !== q) return;
+      const item = toFoodDbItem(res.data);
+      if (!item.name) {
+        setEstimateError("Could not estimate that food.");
+        return;
+      }
+      setSavedFoods((prev) => {
+        const rest = prev.filter(
+          (f) => f.name.toLowerCase() !== item.name.toLowerCase()
+        );
+        return [item, ...rest];
+      });
+      setSelected(item);
+      setAmountMode("serving");
+    } catch (error: any) {
+      if (estimateQueryRef.current !== q) return;
+      setEstimateError(
+        error.response?.data?.detail ||
+          "Could not estimate that food. Try a clearer name."
+      );
+    } finally {
+      setEstimating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (mode !== "search" || selected) return;
+    const q = query.trim();
+    if (q.length < 4 || results.length > 0) return;
+    if (lastEstimatedRef.current === q) return;
+    const timer = window.setTimeout(() => {
+      lastEstimatedRef.current = q;
+      void estimateFood(q);
+    }, 750);
+    return () => window.clearTimeout(timer);
+  }, [query, results.length, selected, mode]);
 
   const handleAdd = () => {
     if (!selected || !scaled || scale === 0) return;
@@ -68,9 +244,11 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       protein: scaled.protein,
       carbs: scaled.carbs,
       fats: scaled.fats,
+      fiber: scaled.fiber,
       meal,
       amount: amountLabel,
     });
+    void rememberFood(selected, [query.trim(), amountLabel]);
   };
 
   const handleAddCustom = () => {
@@ -82,15 +260,91 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
     }
     const carbs = parseFloat(customCarbs);
     const fats = parseFloat(customFats);
+    const fiber = parseFloat(customFiber);
     onAdd({
       name,
       calories: Math.round(calories),
       protein: Math.round(protein * 10) / 10,
       carbs: Number.isFinite(carbs) && carbs >= 0 ? Math.round(carbs * 10) / 10 : 0,
       fats: Number.isFinite(fats) && fats >= 0 ? Math.round(fats * 10) / 10 : 0,
+      fiber: Number.isFinite(fiber) && fiber >= 0 ? Math.round(fiber * 10) / 10 : 0,
       meal,
       amount: customAmount.trim() || undefined,
     });
+    void rememberFood(
+      {
+        name,
+        serving: customAmount.trim() || "1 serving",
+        grams: 100,
+        calories: Math.round(calories),
+        protein: Math.round(protein * 10) / 10,
+        carbs: Number.isFinite(carbs) && carbs >= 0 ? Math.round(carbs * 10) / 10 : 0,
+        fats: Number.isFinite(fats) && fats >= 0 ? Math.round(fats * 10) / 10 : 0,
+        fiber: Number.isFinite(fiber) && fiber >= 0 ? Math.round(fiber * 10) / 10 : 0,
+      },
+      [name]
+    );
+  };
+
+  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setPhotoError(null);
+    try {
+      const compressed = await compressImage(file);
+      setPhotoFile(compressed);
+      const reader = new FileReader();
+      reader.onloadend = () => setPhotoPreview(reader.result as string);
+      reader.readAsDataURL(compressed);
+    } catch {
+      setPhotoError("Could not open that photo. Try another one.");
+    }
+  };
+
+  const clearPhoto = () => {
+    setPhotoFile(null);
+    setPhotoPreview(null);
+    setPhotoError(null);
+  };
+
+  const handleAnalyzePhoto = async () => {
+    if (!photoFile) return;
+    setAnalyzing(true);
+    setPhotoError(null);
+    try {
+      const payload = new FormData();
+      payload.append("file", photoFile);
+      const note = photoNote.trim();
+      if (note) payload.append("description", note);
+
+      const response = await apiClient.post("/api/macros/analyze-image", payload, {
+        timeout: 60000,
+      });
+      const item = response.data?.food || response.data?.food_items?.[0];
+      if (!item) {
+        setPhotoError(
+          response.data?.message || "Could not estimate macros. Try a clearer photo or add what it is."
+        );
+        return;
+      }
+
+      setCustomName(item.name || note || "Meal");
+      setCustomAmount(item.amount || "");
+      setCustomCalories(String(Math.round(Number(item.calories) || 0)));
+      setCustomProtein(String(Number(item.protein) || 0));
+      setCustomCarbs(String(Number(item.carbs) || 0));
+      setCustomFats(String(Number(item.fats) || 0));
+      setCustomFiber(String(Number(item.fiber) || 0));
+      setFromPhoto(true);
+      setMode("custom");
+    } catch (error: any) {
+      setPhotoError(
+        error.response?.data?.detail || "Failed to analyze photo. Please try again."
+      );
+    } finally {
+      setAnalyzing(false);
+    }
   };
 
   const canAddCustom =
@@ -113,7 +367,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#0F1117] border border-[#2A2D35]">
+      <div className="grid grid-cols-3 gap-2 p-1 rounded-xl bg-[#0F1117] border border-[#2A2D35]">
         <button
           type="button"
           onClick={() => setMode("search")}
@@ -124,6 +378,17 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
           }`}
         >
           Search
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("photo")}
+          className={`py-2 rounded-lg text-sm font-semibold transition-colors ${
+            mode === "photo"
+              ? "bg-[#FF6B35] text-white"
+              : "text-[#8E8E93] hover:text-white"
+          }`}
+        >
+          Photo
         </button>
         <button
           type="button"
@@ -141,6 +406,22 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         </button>
       </div>
 
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={handlePhotoSelect}
+      />
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handlePhotoSelect}
+      />
+
       {mode === "search" && (
         <>
           <div className="relative">
@@ -153,8 +434,15 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
               onChange={(e) => {
                 setQuery(e.target.value);
                 setSelected(null);
+                setEstimateError(null);
               }}
-              placeholder="Search foods — chicken, oats, banana..."
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (!selected) void estimateFood(query);
+                }
+              }}
+              placeholder="Search or type 2 belvita crackers..."
               autoFocus
               className="w-full h-12 pl-10 pr-9 rounded-xl bg-[#0F1117] border border-[#2A2D35] text-white text-sm placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
             />
@@ -218,21 +506,47 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
             </div>
           )}
 
+          {!selected && query.trim().length >= 2 && results.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void estimateFood(query)}
+              disabled={estimating}
+              className="w-full text-sm font-semibold text-[#FF6B35] hover:text-[#E85A2A] disabled:opacity-50"
+            >
+              {estimating ? "Filling macros..." : `Fill macros for “${query.trim()}”`}
+            </button>
+          )}
+
           {!selected && query && results.length === 0 && (
             <div className="text-center py-2 space-y-2">
-              <p className="text-sm text-[#8E8E93]">
-                No foods found for “{query}”.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setCustomName(query.trim());
-                  setMode("custom");
-                }}
-                className="text-sm font-semibold text-[#FF6B35] hover:text-[#E85A2A]"
-              >
-                Log “{query.trim()}” as custom food
-              </button>
+              {estimating ? (
+                <p className="text-sm text-[#8E8E93]">
+                  Filling macros for “{query.trim()}”...
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm text-[#8E8E93]">
+                    {estimateError || `No saved match for “${query.trim()}”.`}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void estimateFood(query)}
+                    className="w-full py-3 rounded-xl bg-[#FF6B35] text-white text-sm font-bold hover:bg-[#E85A2A] transition-colors"
+                  >
+                    Fill macros
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomName(query.trim());
+                      setMode("custom");
+                    }}
+                    className="text-sm font-semibold text-[#8E8E93] hover:text-white"
+                  >
+                    Enter macros myself
+                  </button>
+                </>
+              )}
             </div>
           )}
 
@@ -346,8 +660,84 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         </>
       )}
 
+      {mode === "photo" && (
+        <div className="space-y-4">
+          <p className="text-sm text-[#8E8E93]">
+            Snap the meal, say what it is, then GPT fills estimated macros.
+          </p>
+
+          {!photoPreview ? (
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => cameraInputRef.current?.click()}
+                className="flex flex-col items-center justify-center gap-2 h-28 rounded-xl border border-dashed border-[#2A2D35] bg-[#0F1117] text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40 transition-colors"
+              >
+                <MdPhotoCamera size={22} className="text-[#FF6B35]" />
+                <span className="text-sm font-semibold">Take photo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => galleryInputRef.current?.click()}
+                className="flex flex-col items-center justify-center gap-2 h-28 rounded-xl border border-dashed border-[#2A2D35] bg-[#0F1117] text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40 transition-colors"
+              >
+                <MdImage size={22} className="text-[#5EEAD4]" />
+                <span className="text-sm font-semibold">Choose photo</span>
+              </button>
+            </div>
+          ) : (
+            <div className="relative">
+              <img
+                src={photoPreview}
+                alt="Meal preview"
+                className="w-full h-44 object-cover rounded-xl border border-[#2A2D35]"
+              />
+              <button
+                type="button"
+                onClick={clearPhoto}
+                className="absolute top-2 right-2 p-1.5 rounded-full bg-[#0B0C10]/80 text-white hover:bg-[#1C1C1E]"
+                aria-label="Remove photo"
+              >
+                <MdClose size={16} />
+              </button>
+            </div>
+          )}
+
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-2">
+              What is it?
+            </p>
+            <input
+              type="text"
+              value={photoNote}
+              onChange={(e) => setPhotoNote(e.target.value)}
+              placeholder="e.g. Chipotle chicken bowl, extra rice"
+              className="w-full h-12 px-4 rounded-xl bg-[#0F1117] border border-[#2A2D35] text-white text-sm placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
+            />
+          </div>
+
+          {photoError && (
+            <p className="text-sm text-[#FCA5A5]">{photoError}</p>
+          )}
+
+          <button
+            type="button"
+            onClick={handleAnalyzePhoto}
+            disabled={!photoFile || analyzing}
+            className="w-full py-3.5 rounded-xl bg-[#FF6B35] text-white font-bold hover:bg-[#E85A2A] disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-orange"
+          >
+            {analyzing ? "Estimating macros..." : "Estimate macros"}
+          </button>
+        </div>
+      )}
+
       {mode === "custom" && (
         <>
+          {fromPhoto && (
+            <p className="text-xs text-[#5EEAD4]">
+              Filled from your photo — edit anything that looks off, then add.
+            </p>
+          )}
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-2">
               Food name
@@ -427,6 +817,20 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
                 step="0.1"
                 value={customFats}
                 onChange={(e) => setCustomFats(e.target.value)}
+                placeholder="0"
+                className="w-full h-12 px-4 rounded-xl bg-[#0F1117] border border-[#2A2D35] text-white text-sm placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
+              />
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-2">
+                Fiber (g)
+              </p>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={customFiber}
+                onChange={(e) => setCustomFiber(e.target.value)}
                 placeholder="0"
                 className="w-full h-12 px-4 rounded-xl bg-[#0F1117] border border-[#2A2D35] text-white text-sm placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
               />

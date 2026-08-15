@@ -85,22 +85,37 @@ class WorkoutRecommender:
             }]
         return []
 
-    def _get_exercise_history(self, exercise_id: str, days: Optional[int] = 30) -> List[Dict]:
-        """Extract per-exercise session data, newest first."""
+    def _get_exercise_history(
+        self,
+        exercise_id: str,
+        days: Optional[int] = 30,
+        exclude_session_id: Optional[str] = None,
+    ) -> List[Dict]:
+        """Extract per-exercise session data, newest first. Skip empty drafts."""
         if days is None:
             sessions = self.data_fetcher.get_all_workout_sessions()
         else:
             sessions = self.data_fetcher.get_recent_workout_sessions(days)
         result = []
         for session in sessions:
+            if exclude_session_id and session.get("id") == exclude_session_id:
+                continue
             for ex in session.get("exercises", []):
-                if ex.get("exercise_id") == exercise_id:
-                    result.append({
-                        "date": session.get("date"),
-                        "sets": self._normalize_exercise_sets(ex),
-                        "time": ex.get("time"),
-                        "speed": ex.get("speed"),
-                    })
+                if ex.get("exercise_id") != exercise_id:
+                    continue
+                sets = [
+                    s
+                    for s in self._normalize_exercise_sets(ex)
+                    if (s.get("reps") or 0) > 0 and (s.get("weight") or 0) > 0
+                ]
+                if not sets and not ex.get("time") and not ex.get("speed"):
+                    continue
+                result.append({
+                    "date": session.get("date"),
+                    "sets": sets or self._normalize_exercise_sets(ex),
+                    "time": ex.get("time"),
+                    "speed": ex.get("speed"),
+                })
         result.sort(key=lambda item: item.get("date") or "", reverse=True)
         return result
 
@@ -163,7 +178,8 @@ class WorkoutRecommender:
         plan_target_sets: Optional[int] = None,
         plan_target_reps: Optional[int] = None,
         plan_notes: Optional[str] = None,
-        day_intensity: Optional[str] = None
+        day_intensity: Optional[str] = None,
+        exclude_session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get recommendation for a specific exercise using the deterministic progression engine.
@@ -184,10 +200,14 @@ class WorkoutRecommender:
             Recommendation dict with suggested sets/reps/weight
         """
         # Progress only from the last 30 days. Older sessions are a comeback estimate.
-        recent_exercise_data = self._get_exercise_history(exercise_id, days=30)
+        recent_exercise_data = self._get_exercise_history(
+            exercise_id, days=30, exclude_session_id=exclude_session_id
+        )
         stale_last_session = None
         if not recent_exercise_data:
-            all_history = self._get_exercise_history(exercise_id, days=None)
+            all_history = self._get_exercise_history(
+                exercise_id, days=None, exclude_session_id=exclude_session_id
+            )
             stale_last_session = all_history[0] if all_history else None
 
         # Get user profile for goals

@@ -1,5 +1,4 @@
-import { useSessionTimer } from "@/hooks/useSessionTimer";
-import { MdPause, MdPlayArrow, MdRefresh } from "react-icons/md";
+import { MdPlayArrow, MdStop, MdRefresh } from "react-icons/md";
 
 interface SessionSummaryPanelProps {
   totalVolume: number;
@@ -8,6 +7,12 @@ interface SessionSummaryPanelProps {
   completedExercises: number;
   totalExercises: number;
   completionPercent: number;
+  formattedTime: string;
+  elapsedSeconds: number;
+  isRunning: boolean;
+  onTimerStart: () => void;
+  onTimerStop: () => void;
+  onTimerRefresh: () => void;
 }
 
 export default function SessionSummaryPanel({
@@ -17,10 +22,13 @@ export default function SessionSummaryPanel({
   completedExercises,
   totalExercises,
   completionPercent,
+  formattedTime,
+  elapsedSeconds,
+  isRunning,
+  onTimerStart,
+  onTimerStop,
+  onTimerRefresh,
 }: SessionSummaryPanelProps) {
-  const { formattedTime, isRunning, pause, resume, reset, elapsedSeconds } =
-    useSessionTimer();
-
   const radius = 58;
   const circumference = 2 * Math.PI * radius;
   const maxSeconds = 3600;
@@ -114,16 +122,19 @@ export default function SessionSummaryPanel({
 
         <div className="flex items-center gap-3">
           <button
-            onClick={isRunning ? pause : resume}
-            className="w-10 h-10 rounded-full bg-[#161A22] border border-[#2A2D35] flex items-center justify-center text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40 transition-colors"
-            title={isRunning ? "Pause" : "Resume"}
+            type="button"
+            onClick={isRunning ? onTimerStop : onTimerStart}
+            className="h-10 px-4 rounded-full bg-[#161A22] border border-[#2A2D35] flex items-center justify-center gap-1.5 text-xs font-semibold text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40 transition-colors"
+            title={isRunning ? "Stop timer" : "Start timer"}
           >
-            {isRunning ? <MdPause size={20} /> : <MdPlayArrow size={20} />}
+            {isRunning ? <MdStop size={16} /> : <MdPlayArrow size={18} />}
+            {isRunning ? "Stop" : "Start"}
           </button>
           <button
-            onClick={reset}
+            type="button"
+            onClick={onTimerRefresh}
             className="w-10 h-10 rounded-full bg-[#161A22] border border-[#2A2D35] flex items-center justify-center text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40 transition-colors"
-            title="Reset"
+            title="Refresh timer from saved time"
           >
             <MdRefresh size={20} />
           </button>

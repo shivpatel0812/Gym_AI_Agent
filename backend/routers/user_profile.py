@@ -17,6 +17,18 @@ class TopLiftsRequest(BaseModel):
     barbell_row: Optional[Union[float, TopLiftEntry]] = None
 
 
+class NutritionTargetsRequest(BaseModel):
+    calories: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fats: Optional[float] = None
+    fiber: Optional[float] = None
+    water: Optional[float] = None
+
+
+PROFILE_KEEP_KEYS = ("created_at", "top_lifts", "top_lifts_updated", "nutrition_targets")
+
+
 def _clean_top_lifts(payload: TopLiftsRequest) -> dict:
     raw_values = payload.dict(exclude_none=True)
     values = {}
@@ -84,6 +96,47 @@ async def update_top_lifts(
     )
     return {"top_lifts": values, "top_lifts_updated": updated_at}
 
+
+@router.get("/nutrition-targets")
+async def get_nutrition_targets(user_id: str = Depends(get_user_id)):
+    doc_ref = (
+        db.collection("users")
+        .document(user_id)
+        .collection("user_profile")
+        .document("profile")
+    )
+    doc = doc_ref.get()
+    data = doc.to_dict() if doc.exists else {}
+    return data.get("nutrition_targets") or {}
+
+
+@router.put("/nutrition-targets")
+async def update_nutrition_targets(
+    payload: NutritionTargetsRequest,
+    user_id: str = Depends(get_user_id),
+):
+    values = {k: v for k, v in payload.dict().items() if v is not None}
+    for key, value in values.items():
+        if not isinstance(value, (int, float)) or value < 0 or value > 20000:
+            raise HTTPException(status_code=422, detail=f"Invalid {key} target")
+    doc_ref = (
+        db.collection("users")
+        .document(user_id)
+        .collection("user_profile")
+        .document("profile")
+    )
+    existing_doc = doc_ref.get()
+    existing = existing_doc.to_dict() if existing_doc.exists else {}
+    merged = {**(existing.get("nutrition_targets") or {}), **values}
+    doc_ref.set(
+        {
+            "nutrition_targets": merged,
+            "updated_at": datetime.now().isoformat(),
+        },
+        merge=True,
+    )
+    return merged
+
 @router.get("")
 async def get_user_profile(user_id: str = Depends(get_user_id)):
     doc_ref = db.collection("users").document(user_id).collection("user_profile").document("profile")
@@ -108,7 +161,10 @@ async def update_user_profile(profile: UserProfile, user_id: str = Depends(get_u
     doc_ref = db.collection("users").document(user_id).collection("user_profile").document("profile")
     existing_doc = doc_ref.get()
     if existing_doc.exists:
-        existing_data = existing_doc.to_dict()
+        existing_data = existing_doc.to_dict() or {}
+        for keep in PROFILE_KEEP_KEYS:
+            if keep in existing_data and profile_dict.get(keep) is None:
+                profile_dict[keep] = existing_data[keep]
         if "created_at" in existing_data:
             profile_dict["created_at"] = existing_data["created_at"]
     else:

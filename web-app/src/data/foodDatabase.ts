@@ -1,4 +1,5 @@
 export interface FoodDbItem {
+  id?: string;
   name: string;
   serving: string; // human-readable serving label
   grams: number; // grams in one serving
@@ -6,6 +7,8 @@ export interface FoodDbItem {
   protein: number;
   carbs: number;
   fats: number;
+  fiber?: number;
+  aliases?: string[];
 }
 
 const foodDatabase: FoodDbItem[] = [

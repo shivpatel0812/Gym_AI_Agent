@@ -20,12 +20,12 @@ import {
   MdExpandMore,
   MdFitnessCenter,
   MdPlayArrow,
-  MdPause,
+  MdStop,
   MdRefresh,
   MdSelfImprovement,
   MdCalendarToday,
 } from "react-icons/md";
-import { useSessionTimer } from "@/hooks/useSessionTimer";
+import { useSessionTimer, persistFromSession } from "@/hooks/useSessionTimer";
 import defaultExercises, {
   categoryToMuscleGroup,
   categories,
@@ -39,6 +39,12 @@ export interface SessionSummaryData {
   totalExercises: number;
   completionPercent: number;
   isActive: boolean;
+  formattedTime: string;
+  elapsedSeconds: number;
+  isRunning: boolean;
+  onTimerStart: () => void;
+  onTimerStop: () => void;
+  onTimerRefresh: () => void;
 }
 
 interface SessionsSectionProps {
@@ -56,12 +62,92 @@ type SessionFormData = {
   split_day: string;
   exercises: SessionExercise[];
   notes: string;
+  cardio_sport: string;
+  cardio_minutes: string;
+  cardio_intensity: number;
+  cardio_fatigue: number;
 };
+
+const CARDIO_SPORTS = [
+  "Basketball",
+  "Soccer",
+  "Football",
+  "Tennis",
+  "Running",
+  "Cycling",
+  "Swimming",
+  "Hiking",
+  "Walking",
+  "Pickup",
+  "Other",
+];
+
+const PRESET_CARDIO_SPORTS = CARDIO_SPORTS.filter((s) => s !== "Other");
+
+function isCustomCardioSport(sport: string) {
+  return Boolean(sport) && !PRESET_CARDIO_SPORTS.includes(sport);
+}
+
+function hasCardioLog(data: {
+  cardio_sport?: string;
+  cardio_minutes?: string | number;
+}) {
+  const sport = String(data.cardio_sport || "").trim();
+  const minutes = Number(data.cardio_minutes);
+  return Boolean(sport) || (Number.isFinite(minutes) && minutes > 0);
+}
 
 function isValidSet(set: WorkoutSet) {
   const reps = Number(set.reps) || 0;
   const weight = Number(set.weight);
   return reps > 0 || (Number.isFinite(weight) && weight > 0);
+}
+
+function formatSessionDateShort(dateStr?: string) {
+  if (!dateStr) return "";
+  const d = new Date(`${String(dateStr).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function sessionHeadline(splitName?: string, splitDay?: string, dateStr?: string) {
+  const name = (splitDay || splitName || "Workout Session").trim();
+  const datePart = formatSessionDateShort(dateStr);
+  return datePart ? `${name} ${datePart}` : name;
+}
+
+function formatDateOrdinal(dateStr?: string) {
+  if (!dateStr) return "";
+  const d = new Date(`${String(dateStr).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return "";
+  const day = d.getDate();
+  const suffix =
+    day % 10 === 1 && day !== 11
+      ? "st"
+      : day % 10 === 2 && day !== 12
+      ? "nd"
+      : day % 10 === 3 && day !== 13
+      ? "rd"
+      : "th";
+  const month = d.toLocaleDateString("en-US", { month: "short" });
+  return `${month} ${day}${suffix}`;
+}
+
+function sessionListTitle(session: {
+  date?: string;
+  split_name?: string;
+  split_day?: string;
+  workout_name?: string;
+}) {
+  const datePart = formatDateOrdinal(session.date);
+  const split = (
+    session.split_day ||
+    session.split_name ||
+    session.workout_name ||
+    ""
+  ).trim();
+  if (datePart && split) return `${datePart} ${split}`;
+  return datePart || split || "Workout Session";
 }
 
 function isLastWorkoutRecent(lastData: any, maxDays = 30): boolean {
@@ -221,6 +307,18 @@ function lastWorkoutHasWeight(lastData: any): boolean {
   return sets.some((s: any) => Number(s.weight) > 0);
 }
 
+function recCopiesLastWorkout(rec: any, lastSets: { reps: number; weight?: number }[]) {
+  if (!rec?.sets?.length || !lastSets.length) return false;
+  const n = Math.min(3, rec.sets.length, lastSets.length);
+  return Array.from({ length: n }).every((_, i) => {
+    const recReps = Number(rec.sets[i].reps) || 0;
+    const recWeight = Number(rec.sets[i].weight) || 0;
+    const lastReps = Number(lastSets[i].reps) || 0;
+    const lastWeight = Number(lastSets[i].weight) || 0;
+    return recReps === lastReps && recWeight === lastWeight;
+  });
+}
+
 function recHasWeightedSets(rec: any): boolean {
   return Array.isArray(rec?.sets) && rec.sets.some((s: any) => Number(s.weight) > 0);
 }
@@ -260,7 +358,41 @@ function hydrateAiRecommendations(exercises: SessionExercise[]) {
   return out;
 }
 
-function buildSessionPayload(formData: SessionFormData) {
+function emptySessionForm(): SessionFormData {
+  return {
+    date: new Date().toISOString().split("T")[0],
+    split_id: "",
+    split_name: "",
+    split_day: "",
+    exercises: [],
+    notes: "",
+    cardio_sport: "",
+    cardio_minutes: "",
+    cardio_intensity: 5,
+    cardio_fatigue: 5,
+  };
+}
+
+function sessionToForm(session: WorkoutSession): SessionFormData {
+  return {
+    date: session.date,
+    split_id: session.split_id || "",
+    split_name: session.split_name || "",
+    split_day: session.split_day || "",
+    exercises: session.exercises || [],
+    notes: session.notes || "",
+    cardio_sport: session.cardio_sport || "",
+    cardio_minutes:
+      session.cardio_minutes != null ? String(session.cardio_minutes) : "",
+    cardio_intensity: session.cardio_intensity ?? 5,
+    cardio_fatigue: session.cardio_fatigue ?? 5,
+  };
+}
+
+function buildSessionPayload(
+  formData: SessionFormData,
+  timer?: { accumulatedMs: number; runningSince: number | null; firstStartedAt: number | null } | null
+) {
   const filteredExercises = formData.exercises
     .map((ex) => {
       if (ex.sets && Array.isArray(ex.sets)) {
@@ -274,6 +406,10 @@ function buildSessionPayload(formData: SessionFormData) {
     })
     .filter((ex): ex is SessionExercise => ex !== null);
 
+  const minutes = Number(formData.cardio_minutes);
+  const sport = formData.cardio_sport.trim();
+  const hasCardio = Boolean(sport) || (Number.isFinite(minutes) && minutes > 0);
+
   return {
     date: formData.date,
     split_id: formData.split_id || undefined,
@@ -281,12 +417,33 @@ function buildSessionPayload(formData: SessionFormData) {
     split_day: formData.split_day || undefined,
     exercises: filteredExercises,
     notes: formData.notes || undefined,
+    cardio_sport: hasCardio ? sport || null : null,
+    cardio_minutes: hasCardio && Number.isFinite(minutes) && minutes > 0 ? minutes : null,
+    cardio_intensity: hasCardio ? formData.cardio_intensity : null,
+    cardio_fatigue: hasCardio ? formData.cardio_fatigue : null,
+    timer_accumulated_ms: timer?.accumulatedMs ?? 0,
+    timer_running_since: timer?.runningSince
+      ? new Date(timer.runningSince).toISOString()
+      : null,
+    timer_started_at: timer?.firstStartedAt
+      ? new Date(timer.firstStartedAt).toISOString()
+      : null,
   };
 }
 
-function ActiveSessionTimer() {
-  const { formattedTime, isRunning, pause, resume, reset } = useSessionTimer();
-
+function ActiveSessionTimer({
+  formattedTime,
+  isRunning,
+  onStart,
+  onStop,
+  onRefresh,
+}: {
+  formattedTime: string;
+  isRunning: boolean;
+  onStart: () => void;
+  onStop: () => void;
+  onRefresh: () => void;
+}) {
   return (
     <div className="flex items-center gap-2 min-w-0">
       <span className="font-mono text-lg font-bold text-white tabular-nums">
@@ -294,19 +451,20 @@ function ActiveSessionTimer() {
       </span>
       <button
         type="button"
-        onClick={isRunning ? pause : resume}
-        className="w-8 h-8 rounded-full bg-[#0B0C10] border border-[#2A2D35] flex items-center justify-center text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40 transition-colors"
-        title={isRunning ? "Pause" : "Resume"}
-        aria-label={isRunning ? "Pause timer" : "Resume timer"}
+        onClick={isRunning ? onStop : onStart}
+        className="h-8 px-3 rounded-full bg-[#0B0C10] border border-[#2A2D35] flex items-center justify-center gap-1 text-xs font-semibold text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40 transition-colors"
+        title={isRunning ? "Stop timer" : "Start timer"}
+        aria-label={isRunning ? "Stop timer" : "Start timer"}
       >
-        {isRunning ? <MdPause size={16} /> : <MdPlayArrow size={16} />}
+        {isRunning ? <MdStop size={14} /> : <MdPlayArrow size={16} />}
+        {isRunning ? "Stop" : "Start"}
       </button>
       <button
         type="button"
-        onClick={reset}
+        onClick={onRefresh}
         className="w-8 h-8 rounded-full bg-[#0B0C10] border border-[#2A2D35] flex items-center justify-center text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40 transition-colors"
-        title="Reset timer"
-        aria-label="Reset timer"
+        title="Refresh timer from saved time"
+        aria-label="Refresh timer"
       >
         <MdRefresh size={16} />
       </button>
@@ -344,21 +502,7 @@ export default function SessionsSection({
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [formData, setFormData] = useState<{
-    date: string;
-    split_id: string;
-    split_name: string;
-    split_day: string;
-    exercises: SessionExercise[];
-    notes: string;
-  }>({
-    date: new Date().toISOString().split("T")[0],
-    split_id: "",
-    split_name: "",
-    split_day: "",
-    exercises: [],
-    notes: "",
-  });
+  const [formData, setFormData] = useState<SessionFormData>(emptySessionForm);
   const [showSplitDropdown, setShowSplitDropdown] = useState(false);
   const [showDayDropdown, setShowDayDropdown] = useState(false);
   const splitDropdownRef = useRef<HTMLDivElement>(null);
@@ -388,11 +532,19 @@ export default function SessionsSection({
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingRecApplyRef = useRef<Set<string>>(new Set());
+  const staleRecRetryRef = useRef<Set<string>>(new Set());
   const formDataRef = useRef(formData);
   const editingSessionIdRef = useRef(editingSessionId);
   const autoSaveChainRef = useRef(Promise.resolve(true));
   formDataRef.current = formData;
   editingSessionIdRef.current = editingSessionId;
+  const editingSession = sessions.find((s) => s.id === editingSessionId);
+  const timer = useSessionTimer(
+    showForm ? editingSessionId || "draft" : null,
+    persistFromSession(editingSession)
+  );
+  const timerPersistRef = useRef(timer.getPersist);
+  timerPersistRef.current = timer.getPersist;
   const [, setAiSummaryStatus] = useState<{
     hasSetup: boolean;
     needsSetup: boolean;
@@ -400,7 +552,6 @@ export default function SessionsSection({
     sessionsLogged: number;
     sessionsNeeded: number;
   }>({ hasSetup: false, needsSetup: false, isGenerating: false, sessionsLogged: 0, sessionsNeeded: 3 });
-  const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null);
   const [todaysPlanWorkout, setTodaysPlanWorkout] = useState<TodaysWorkout | null>(null);
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -464,12 +615,11 @@ export default function SessionsSection({
       });
 
       setFormData({
-        date: new Date().toISOString().split("T")[0],
+        ...emptySessionForm(),
         split_id: todayData.split_id || "",
         split_name: todayData.plan_name || "",
         split_day: todayData.day_name || "",
         exercises: planExercises,
-        notes: "",
       });
       setShowForm(true);
 
@@ -525,12 +675,10 @@ export default function SessionsSection({
   const performAutoSave = useCallback(async (opts?: { silent?: boolean }) => {
     const run = async () => {
       const data = formDataRef.current;
-      if (data.exercises.length === 0) {
-        return false;
-      }
-
-      const payload = buildSessionPayload(data);
-      if (payload.exercises.length === 0) {
+      const payload = buildSessionPayload(data, timerPersistRef.current());
+      const canSave =
+        payload.exercises.length > 0 || hasCardioLog(data);
+      if (!canSave) {
         return false;
       }
 
@@ -570,7 +718,7 @@ export default function SessionsSection({
 
   // Auto-save as you log. You should not need to press Save Workout.
   useEffect(() => {
-    if (!showForm || formData.exercises.length === 0) {
+    if (!showForm || (formData.exercises.length === 0 && !hasCardioLog(formData))) {
       return;
     }
 
@@ -593,6 +741,10 @@ export default function SessionsSection({
     formData.split_name,
     formData.split_day,
     formData.notes,
+    formData.cardio_sport,
+    formData.cardio_minutes,
+    formData.cardio_intensity,
+    formData.cardio_fatigue,
     showForm,
     performAutoSave,
   ]);
@@ -680,6 +832,7 @@ export default function SessionsSection({
         plan_target_sets: planTargetSets,
         plan_target_reps: planTargetReps,
         plan_notes: planNotes,
+        exclude_session_id: editingSessionIdRef.current || undefined,
       });
 
       if (response.data && response.data.status === "success") {
@@ -720,17 +873,39 @@ export default function SessionsSection({
   };
 
   useEffect(() => {
+    if (!showForm) return;
+    formData.exercises.forEach((ex, idx) => {
+      if (!ex.exercise_id) return;
+      const rec = aiRecommendations[ex.exercise_id] || ex.ai_recommendation;
+      if (!rec?.sets?.length || aiRecommendationLoading[ex.exercise_id]) return;
+      const lastData = resolveLastExercise(
+        lastExerciseData[ex.exercise_id],
+        sessions,
+        ex.exercise_id,
+        ex.exercise_name,
+        editingSessionId
+      );
+      const lastSets = lastWorkingSets(lastData);
+      if (!recCopiesLastWorkout(rec, lastSets)) return;
+      if (staleRecRetryRef.current.has(ex.exercise_id)) return;
+      staleRecRetryRef.current.add(ex.exercise_id);
+      void fetchAiRecommendation(ex.exercise_id, ex.exercise_name, idx);
+    });
+  }, [
+    showForm,
+    formData.exercises,
+    aiRecommendations,
+    lastExerciseData,
+    sessions,
+    editingSessionId,
+    aiRecommendationLoading,
+  ]);
+
+  useEffect(() => {
     if (propEditSessionId && sessions.length > 0) {
       const sessionToEdit = sessions.find((s) => s.id === propEditSessionId);
       if (sessionToEdit) {
-        setFormData({
-          date: sessionToEdit.date,
-          split_id: sessionToEdit.split_id || "",
-          split_name: sessionToEdit.split_name || "",
-          split_day: (sessionToEdit as any).split_day || "",
-          exercises: sessionToEdit.exercises || [],
-          notes: sessionToEdit.notes || "",
-        });
+        setFormData(sessionToForm(sessionToEdit));
         setAiRecommendations(hydrateAiRecommendations(sessionToEdit.exercises || []));
         setEditingSessionId(sessionToEdit.id || null);
         setShowForm(true);
@@ -870,20 +1045,22 @@ export default function SessionsSection({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = buildSessionPayload(formDataRef.current);
-    if (payload.exercises.length === 0) {
-      setSaveError("Add at least one set with reps or weight before saving.");
+    const payload = buildSessionPayload(formDataRef.current, timerPersistRef.current());
+    if (payload.exercises.length === 0 && !hasCardioLog(formDataRef.current)) {
+      setSaveError("Add at least one set or a cardio activity before finishing.");
       return;
     }
 
     setIsSaving(true);
     setSaveError(null);
     try {
+      timer.stop();
       const saved = await performAutoSave();
       if (!saved && !editingSessionIdRef.current) {
         setSaveError("Could not save workout");
         return;
       }
+      timer.clear();
       resetForm();
       fetchSessions();
       fetchTodaysPlan();
@@ -896,14 +1073,7 @@ export default function SessionsSection({
   };
 
   const resetForm = () => {
-    setFormData({
-      date: new Date().toISOString().split("T")[0],
-      split_id: "",
-      split_name: "",
-      split_day: "",
-      exercises: [],
-      notes: "",
-    });
+    setFormData(emptySessionForm());
     setEditingSessionId(null);
     setShowForm(false);
     setShowExercisePicker(false);
@@ -916,6 +1086,7 @@ export default function SessionsSection({
     setMaxExerciseData({});
     setAiRecommendations({});
     fetchedLastRef.current = new Set();
+    staleRecRetryRef.current = new Set();
     setAiRecommendationLoading({});
     // Clear auto-save state
     setLastSaved(null);
@@ -935,14 +1106,7 @@ export default function SessionsSection({
   };
 
   const handleEdit = (session: WorkoutSession) => {
-    setFormData({
-      date: session.date,
-      split_id: session.split_id || "",
-      split_name: session.split_name || "",
-      split_day: (session as any).split_day || "",
-      exercises: session.exercises || [],
-      notes: session.notes || "",
-    });
+    setFormData(sessionToForm(session));
     setAiRecommendations(hydrateAiRecommendations(session.exercises || []));
     setEditingSessionId(session.id || null);
     setShowForm(true);
@@ -958,25 +1122,6 @@ export default function SessionsSection({
         console.error("Error deleting session:", error);
       }
     }
-  };
-
-  const formatDateBadge = (dateStr: string) => {
-    try {
-      const date = new Date(dateStr + "T00:00:00");
-      return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    } catch {
-      return dateStr;
-    }
-  };
-
-  const getDateBadgeColors = (index: number) => {
-    const palettes = [
-      { bg: "bg-[#FF6B35]/15", text: "text-[#FF6B35]" },
-      { bg: "bg-[#5EEAD4]/15", text: "text-[#5EEAD4]" },
-      { bg: "bg-[#F5C542]/15", text: "text-[#F5C542]" },
-      { bg: "bg-[#C4B5FD]/15", text: "text-[#C4B5FD]" },
-    ];
-    return palettes[index % palettes.length];
   };
 
   const removeExercise = (exerciseIdx: number) => {
@@ -1083,15 +1228,6 @@ export default function SessionsSection({
     return volume;
   }, [formData.exercises]);
 
-  // Track session start time
-  useEffect(() => {
-    if (showForm) {
-      setSessionStartTime(new Date());
-    } else {
-      setSessionStartTime(null);
-    }
-  }, [showForm]);
-
   // Push summary data to parent
   useEffect(() => {
     if (!onSessionSummaryChange) return;
@@ -1104,63 +1240,42 @@ export default function SessionsSection({
         totalExercises: sessionProgress.exerciseCount,
         completionPercent: sessionProgress.pct,
         isActive: true,
+        formattedTime: timer.formattedTime,
+        elapsedSeconds: timer.elapsedSeconds,
+        isRunning: timer.isRunning,
+        onTimerStart: timer.start,
+        onTimerStop: timer.stop,
+        onTimerRefresh: timer.refresh,
       });
     } else {
       onSessionSummaryChange(null);
     }
-  }, [showForm, currentVolume, sessionProgress, onSessionSummaryChange]);
+  }, [
+    showForm,
+    currentVolume,
+    sessionProgress,
+    onSessionSummaryChange,
+    timer.formattedTime,
+    timer.elapsedSeconds,
+    timer.isRunning,
+    timer.start,
+    timer.stop,
+    timer.refresh,
+  ]);
 
   useEffect(() => {
     if (!onSessionMetaChange) return;
     if (showForm) {
-      const name = formData.split_name || formData.split_day || "Workout Session";
-      const dateLabel = formData.date
-        ? new Date(formData.date + "T00:00:00").toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          })
-        : "";
-      onSessionMetaChange(`${name} · ${dateLabel}`);
+      const name = sessionHeadline(
+        formData.split_name,
+        formData.split_day,
+        formData.date
+      );
+      onSessionMetaChange(name);
     } else {
       onSessionMetaChange(null);
     }
   }, [showForm, formData.split_name, formData.split_day, formData.date, onSessionMetaChange]);
-
-  const getSessionVolume = (session: WorkoutSession) => {
-    let volume = 0;
-    for (const ex of session.exercises || []) {
-      if (Array.isArray(ex.sets)) {
-        for (const s of ex.sets) {
-          const weight = s.weight || 0;
-          const reps = s.reps || 0;
-          volume += weight * reps;
-        }
-      }
-    }
-    return volume;
-  };
-
-  const formatExerciseSummary = (ex: any) => {
-    if (ex.time) {
-      return `${ex.time} min${ex.speed ? ` · ${ex.speed}` : ""}`;
-    }
-    if (Array.isArray(ex.sets) && ex.sets.length > 0) {
-      const setCount = ex.sets.length;
-      const reps = ex.sets.map((s: any) => s.reps || 0);
-      const avgReps = Math.round(reps.reduce((a: number, b: number) => a + b, 0) / reps.length) || 0;
-      const topWeight = Math.max(...ex.sets.map((s: any) => s.weight || 0), 0);
-      if (topWeight > 0) {
-        return `${setCount}x${avgReps} · top ${topWeight} lb`;
-      }
-      return `${setCount} set${setCount > 1 ? "s" : ""}`;
-    }
-    if (ex.sets && typeof ex.sets === "number") {
-      return `${ex.sets}x${ex.reps || 0}${ex.weight ? ` · ${ex.weight} lb` : ""}`;
-    }
-    return "No sets logged";
-  };
-
 
   const getExerciseCategory = (exerciseId: string, exerciseName: string) => {
     const fromDefault = defaultExercises.find(
@@ -1372,7 +1487,11 @@ export default function SessionsSection({
                     </span>
                   </div>
                   <h3 className="text-base sm:text-lg font-bold text-white">
-                    {formData.split_name || formData.split_day || "Workout Session"}
+                    {sessionHeadline(
+                      formData.split_name,
+                      formData.split_day,
+                      formData.date
+                    )}
                   </h3>
                   <div className="relative mt-1.5 inline-flex max-w-full items-center">
                     <div className="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center gap-1.5 pl-2.5">
@@ -1399,10 +1518,137 @@ export default function SessionsSection({
                       aria-label="Workout date"
                     />
                   </div>
-                  {sessionStartTime && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <div className="relative" ref={splitDropdownRef}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowSplitDropdown(!showSplitDropdown);
+                          setShowDayDropdown(false);
+                        }}
+                        className="h-9 min-w-[8.5rem] max-w-[12rem] px-3 rounded-lg border border-[#2A2D35] bg-[#0B0C10] text-xs font-semibold text-white hover:border-[#FF6B35]/50 transition-colors flex items-center justify-between gap-2"
+                      >
+                        <span className="truncate">
+                          {formData.split_id
+                            ? splits.find((s) => s.id === formData.split_id)?.name ||
+                              formData.split_name ||
+                              "Split"
+                            : "Choose split"}
+                        </span>
+                        <MdKeyboardArrowDown
+                          className={`text-[#8E8E93] flex-shrink-0 transition-transform ${
+                            showSplitDropdown ? "rotate-180" : ""
+                          }`}
+                          size={16}
+                        />
+                      </button>
+                      {showSplitDropdown && (
+                        <div className="absolute z-[100] left-0 mt-1 min-w-[12rem] bg-[#161A22] border border-[#2A2D35] rounded-lg shadow-lg overflow-hidden">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFormData({
+                                ...formData,
+                                split_id: "",
+                                split_name: "",
+                                split_day: "",
+                              });
+                              setShowSplitDropdown(false);
+                            }}
+                            className={`w-full px-3 py-2.5 text-xs text-left text-white hover:bg-[#2A2D35] ${
+                              !formData.split_id ? "bg-[#FF6B35]/20" : ""
+                            }`}
+                          >
+                            No split
+                          </button>
+                          {splits.map((split) => (
+                            <button
+                              key={split.id}
+                              type="button"
+                              onClick={() => {
+                                const onlyDay =
+                                  split.days?.length === 1 ? split.days[0] : "";
+                                setFormData({
+                                  ...formData,
+                                  split_id: split.id || "",
+                                  split_name: split.name,
+                                  split_day: onlyDay,
+                                });
+                                setShowSplitDropdown(false);
+                              }}
+                              className={`w-full px-3 py-2.5 text-xs text-left text-white hover:bg-[#2A2D35] ${
+                                formData.split_id === split.id ? "bg-[#FF6B35]/20" : ""
+                              }`}
+                            >
+                              {split.name}
+                            </button>
+                          ))}
+                          {splits.length === 0 && (
+                            <p className="px-3 py-2.5 text-xs text-[#8E8E93]">
+                              Add a split in the Splits tab first.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {formData.split_id &&
+                      (() => {
+                        const selectedSplit = splits.find(
+                          (s) => s.id === formData.split_id
+                        );
+                        if (!selectedSplit?.days?.length) return null;
+                        return (
+                          <div className="relative" ref={dayDropdownRef}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowDayDropdown(!showDayDropdown);
+                                setShowSplitDropdown(false);
+                              }}
+                              className="h-9 min-w-[7.5rem] max-w-[11rem] px-3 rounded-lg border border-[#2A2D35] bg-[#0B0C10] text-xs font-semibold text-white hover:border-[#FF6B35]/50 transition-colors flex items-center justify-between gap-2"
+                            >
+                              <span className="truncate">
+                                {formData.split_day || "Choose day"}
+                              </span>
+                              <MdKeyboardArrowDown
+                                className={`text-[#8E8E93] flex-shrink-0 transition-transform ${
+                                  showDayDropdown ? "rotate-180" : ""
+                                }`}
+                                size={16}
+                              />
+                            </button>
+                            {showDayDropdown && (
+                              <div className="absolute z-[100] left-0 mt-1 min-w-[11rem] bg-[#161A22] border border-[#2A2D35] rounded-lg shadow-lg overflow-hidden">
+                                {selectedSplit.days.map((day, index) => (
+                                  <button
+                                    key={index}
+                                    type="button"
+                                    onClick={() => {
+                                      setFormData({
+                                        ...formData,
+                                        split_day: day,
+                                      });
+                                      setShowDayDropdown(false);
+                                    }}
+                                    className={`w-full px-3 py-2.5 text-xs text-left text-white hover:bg-[#2A2D35] ${
+                                      formData.split_day === day
+                                        ? "bg-[#FF6B35]/20"
+                                        : ""
+                                    }`}
+                                  >
+                                    {day}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                  </div>
+                  {timer.firstStartedAt && (
                     <p className="text-xs text-[#8E8E93] mt-0.5">
                       Started{" "}
-                      {sessionStartTime.toLocaleTimeString([], {
+                      {new Date(timer.firstStartedAt).toLocaleTimeString([], {
                         hour: "numeric",
                         minute: "2-digit",
                       })}
@@ -1417,7 +1663,7 @@ export default function SessionsSection({
                     ? "Saving..."
                     : lastSaved
                     ? `Saved ${lastSaved.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
-                    : formData.exercises.length > 0
+                    : formData.exercises.length > 0 || hasCardioLog(formData)
                     ? "Auto-saves as you log"
                     : ""}
                 </span>
@@ -1426,7 +1672,13 @@ export default function SessionsSection({
 
             <div className="flex items-center justify-between gap-3">
               <div className="xl:hidden">
-                <ActiveSessionTimer />
+                <ActiveSessionTimer
+                  formattedTime={timer.formattedTime}
+                  isRunning={timer.isRunning}
+                  onStart={timer.start}
+                  onStop={timer.stop}
+                  onRefresh={timer.refresh}
+                />
               </div>
               <button
                 type="button"
@@ -1435,7 +1687,10 @@ export default function SessionsSection({
                     preventDefault: () => {},
                   } as React.FormEvent)
                 }
-                disabled={formData.exercises.length === 0 || isSaving}
+                disabled={
+                  (formData.exercises.length === 0 && !hasCardioLog(formData)) ||
+                  isSaving
+                }
                 className="ml-auto px-4 py-2 rounded-xl bg-[#FF6B35] text-white text-sm font-semibold hover:bg-[#FF6B35]/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 {isSaving ? "Finishing..." : "Finish Workout"}
@@ -1447,6 +1702,134 @@ export default function SessionsSection({
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="rounded-2xl border border-[#2A2D35] bg-[#161A22] p-4 space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-white">Cardio / Sports</h3>
+                <p className="text-xs text-[#8E8E93] mt-0.5">
+                  Optional — sport, time, intensity, and how tired you felt.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {CARDIO_SPORTS.map((sport) => {
+                  const selected =
+                    sport === "Other"
+                      ? isCustomCardioSport(formData.cardio_sport)
+                      : formData.cardio_sport === sport;
+                  return (
+                    <button
+                      key={sport}
+                      type="button"
+                      onClick={() =>
+                        setFormData({
+                          ...formData,
+                          cardio_sport: selected
+                            ? ""
+                            : sport === "Other"
+                            ? "Other"
+                            : sport,
+                        })
+                      }
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+                        selected
+                          ? "bg-[#FF6B35]/20 border-[#FF6B35] text-white"
+                          : "bg-[#0B0C10] border-[#2A2D35] text-[#8E8E93] hover:text-white hover:border-[#FF6B35]/40"
+                      }`}
+                    >
+                      {sport}
+                    </button>
+                  );
+                })}
+              </div>
+              {isCustomCardioSport(formData.cardio_sport) && (
+                  <Input
+                    label="Sport"
+                    value={
+                      formData.cardio_sport === "Other"
+                        ? ""
+                        : formData.cardio_sport
+                    }
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        cardio_sport: e.target.value || "Other",
+                      })
+                    }
+                    placeholder="What did you play?"
+                    className="bg-[#0B0C10] border border-[#2A2D35] text-[#FFFFFF] placeholder:text-[#636366]"
+                  />
+                )}
+              <Input
+                label="Time (minutes)"
+                type="number"
+                min={0}
+                inputMode="numeric"
+                value={formData.cardio_minutes}
+                onChange={(e) =>
+                  setFormData({ ...formData, cardio_minutes: e.target.value })
+                }
+                placeholder="e.g. 45"
+                className="bg-[#0B0C10] border border-[#2A2D35] text-[#FFFFFF] placeholder:text-[#636366]"
+              />
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs sm:text-sm font-semibold text-white">
+                    Intensity
+                  </label>
+                  <span className="text-sm font-bold text-[#FF6B35] tabular-nums">
+                    {formData.cardio_intensity}/10
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  step={1}
+                  value={formData.cardio_intensity}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      cardio_intensity: Number(e.target.value),
+                    })
+                  }
+                  className="w-full accent-[#FF6B35]"
+                  aria-label="Cardio intensity from 1 to 10"
+                />
+                <div className="flex justify-between text-[11px] text-[#636366] mt-1">
+                  <span>Easy</span>
+                  <span>Max</span>
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs sm:text-sm font-semibold text-white">
+                    How tired do you feel?
+                  </label>
+                  <span className="text-sm font-bold text-[#FF6B35] tabular-nums">
+                    {formData.cardio_fatigue}/10
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  step={1}
+                  value={formData.cardio_fatigue}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      cardio_fatigue: Number(e.target.value),
+                    })
+                  }
+                  className="w-full accent-[#FF6B35]"
+                  aria-label="How tired you feel from 1 to 10"
+                />
+                <div className="flex justify-between text-[11px] text-[#636366] mt-1">
+                  <span>Fresh</span>
+                  <span>Exhausted</span>
+                </div>
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={() => setShowSessionDetails(!showSessionDetails)}
@@ -2505,11 +2888,8 @@ export default function SessionsSection({
             </div>
           )}
 
-          {sessions.map((session, index) => {
-            const badge = getDateBadgeColors(index);
-            const volume = getSessionVolume(session);
+          {sessions.map((session) => {
             const exerciseCount = session.exercises?.length || 0;
-            const previewExercises = (session.exercises || []).slice(0, 3);
 
             return (
               <button
@@ -2518,81 +2898,45 @@ export default function SessionsSection({
                 onClick={() => handleEdit(session)}
                 className="w-full text-left group bg-[#161A22] border border-[#2A2D35] rounded-2xl p-5 sm:p-6 shadow-sm hover:shadow-md hover:border-[#FF6B35]/40 transition-all"
               >
-                <div className="flex items-start gap-3 sm:gap-4">
-                  <div
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap ${badge.bg} ${badge.text}`}
-                  >
-                    {formatDateBadge(session.date)}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-base sm:text-lg font-bold text-[#FFFFFF] truncate">
+                      {sessionListTitle(session)}
+                    </h3>
+                    <p className="text-sm text-[#8E8E93] mt-0.5">
+                      {exerciseCount} exercise{exerciseCount !== 1 ? "s" : ""}
+                      {session.cardio_sport || session.cardio_minutes
+                        ? ` · ${[
+                            session.cardio_sport,
+                            session.cardio_minutes
+                              ? `${session.cardio_minutes} min`
+                              : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}`
+                        : ""}
+                    </p>
                   </div>
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="text-base sm:text-lg font-bold text-[#FFFFFF] truncate">
-                          {session.split_name || session.workout_name || "Workout Session"}
-                        </h3>
-                        <p className="text-sm text-[#8E8E93] mt-0.5">
-                          {exerciseCount} exercise{exerciseCount !== 1 ? "s" : ""}
-                          {volume > 0 && (
-                            <>
-                              {" · "}
-                              {volume.toLocaleString()} lb total volume
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(session.id!);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.stopPropagation();
-                              handleDelete(session.id!);
-                            }
-                          }}
-                          className="p-1.5 rounded-lg text-[#636366] hover:text-[#EF4444] hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
-                          title="Delete"
-                        >
-                          <MdDelete size={18} />
-                        </span>
-                        <MdChevronRight className="text-[#3A3A3C] text-xl group-hover:text-[#FF6B35] transition-colors" />
-                      </div>
-                    </div>
-
-                    {previewExercises.length > 0 && (
-                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                        {previewExercises.map((ex: any, idx: number) => (
-                          <div
-                            key={idx}
-                            className="rounded-xl bg-[#0B0C10] border border-[#1C1C1E] px-3.5 py-3"
-                          >
-                            <p className="text-sm font-semibold text-[#FFFFFF] truncate">
-                              {ex.exercise_name || ex.exercise_id}
-                            </p>
-                            <p className="text-xs text-[#8E8E93] mt-1">
-                              {formatExerciseSummary(ex)}
-                            </p>
-                            {ex.ai_recommendation?.reasoning && (
-                              <p className="text-[11px] text-[#5EEAD4]/80 mt-1.5 line-clamp-2">
-                                {ex.ai_recommendation.reasoning}
-                              </p>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {session.exercises && session.exercises.length > 3 && (
-                      <p className="text-xs text-[#636366] mt-3">
-                        +{session.exercises.length - 3} more exercise
-                        {session.exercises.length - 3 !== 1 ? "s" : ""}
-                      </p>
-                    )}
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(session.id!);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.stopPropagation();
+                          handleDelete(session.id!);
+                        }
+                      }}
+                      className="p-1.5 rounded-lg text-[#636366] hover:text-[#EF4444] hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                      title="Delete"
+                    >
+                      <MdDelete size={18} />
+                    </span>
+                    <MdChevronRight className="text-[#3A3A3C] text-xl group-hover:text-[#FF6B35] transition-colors" />
                   </div>
                 </div>
               </button>

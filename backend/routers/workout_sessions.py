@@ -22,6 +22,7 @@ class ExerciseRecommendationRequest(BaseModel):
     plan_target_reps: Optional[int] = None
     plan_notes: Optional[str] = None
     day_intensity: Optional[str] = None  # "heavy", "light", "normal"
+    exclude_session_id: Optional[str] = None
 
 # ============== AI RECOMMENDATION ENDPOINTS (Must come before parameterized routes) ==============
 
@@ -101,7 +102,8 @@ async def get_exercise_ai_recommendation(
             plan_target_sets=request.plan_target_sets,
             plan_target_reps=request.plan_target_reps,
             plan_notes=request.plan_notes,
-            day_intensity=request.day_intensity
+            day_intensity=request.day_intensity,
+            exclude_session_id=request.exclude_session_id,
         )
         return recommendation
     except HTTPException:

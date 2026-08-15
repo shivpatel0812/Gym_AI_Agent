@@ -1,16 +1,39 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import apiClient from "../lib/api-client";
 import { MacroEntry, FoodItem, HydrationEntry } from "../types";
 import LogFoodForm, { MEALS } from "../components/nutrition/LogFoodModal";
-import { MdAdd, MdClose, MdEdit, MdKeyboardArrowUp, MdKeyboardArrowDown } from "react-icons/md";
+import { MdAdd, MdClose, MdEdit, MdKeyboardArrowUp, MdKeyboardArrowDown, MdCalendarToday } from "react-icons/md";
 
-const TARGETS = {
+type NutritionTargets = {
+  calories: number;
+  protein: number;
+  carbs: number;
+  fats: number;
+  fiber: number;
+  water: number;
+};
+
+const DEFAULT_TARGETS: NutritionTargets = {
   calories: 2200,
   protein: 175,
   carbs: 240,
   fats: 80,
-  water: 16, // cups
+  fiber: 30,
+  water: 16,
 };
+
+const TARGETS_STORAGE_KEY = "nutrition-targets";
+
+function loadCachedTargets(): NutritionTargets {
+  try {
+    const raw = localStorage.getItem(TARGETS_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_TARGETS };
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_TARGETS, ...parsed };
+  } catch {
+    return { ...DEFAULT_TARGETS };
+  }
+}
 
 interface MealRow {
   food: FoodItem;
@@ -33,6 +56,7 @@ function FoodRowEditor({
   const [protein, setProtein] = useState(String(food.protein ?? ""));
   const [carbs, setCarbs] = useState(String(food.carbs ?? ""));
   const [fats, setFats] = useState(String(food.fats ?? ""));
+  const [fiber, setFiber] = useState(String(food.fiber ?? ""));
 
   const parsedCalories = parseFloat(calories);
   const parsedProtein = parseFloat(protein);
@@ -71,7 +95,7 @@ function FoodRowEditor({
           />
         </div>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-1.5">
             Calories
@@ -123,6 +147,19 @@ function FoodRowEditor({
             className={fieldClass}
           />
         </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-1.5">
+            Fiber
+          </p>
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            value={fiber}
+            onChange={(e) => setFiber(e.target.value)}
+            className={fieldClass}
+          />
+        </div>
       </div>
       <div className="flex justify-end gap-2">
         <button
@@ -138,6 +175,7 @@ function FoodRowEditor({
           onClick={() => {
             const nextCarbs = parseFloat(carbs);
             const nextFats = parseFloat(fats);
+            const nextFiber = parseFloat(fiber);
             onSave({
               ...food,
               name: name.trim(),
@@ -146,6 +184,7 @@ function FoodRowEditor({
               protein: Math.round(parsedProtein * 10) / 10,
               carbs: Number.isFinite(nextCarbs) && nextCarbs >= 0 ? Math.round(nextCarbs * 10) / 10 : 0,
               fats: Number.isFinite(nextFats) && nextFats >= 0 ? Math.round(nextFats * 10) / 10 : 0,
+              fiber: Number.isFinite(nextFiber) && nextFiber >= 0 ? Math.round(nextFiber * 10) / 10 : 0,
             });
           }}
           className="px-4 py-2 rounded-lg bg-[#FF6B35] text-white text-sm font-semibold hover:bg-[#E85A2A] disabled:opacity-40 disabled:cursor-not-allowed"
@@ -218,6 +257,7 @@ export default function NutritionPage() {
   const [entries, setEntries] = useState<MacroEntry[]>([]);
   const [hydrationEntries, setHydrationEntries] = useState<HydrationEntry[]>([]);
   const [selectedDate, setSelectedDate] = useState(() => toDateKey(new Date()));
+  const dateInputRef = useRef<HTMLInputElement>(null);
   const [loggingMeal, setLoggingMeal] = useState<string | null>(null);
   const [collapsedMeals, setCollapsedMeals] = useState<Record<string, boolean>>({});
   const [waterDraft, setWaterDraft] = useState("0");
@@ -225,6 +265,10 @@ export default function NutritionPage() {
     entryId: string;
     indexInEntry: number;
   } | null>(null);
+  const [targets, setTargets] = useState<NutritionTargets>(loadCachedTargets);
+  const [targetDraft, setTargetDraft] = useState<NutritionTargets>(loadCachedTargets);
+  const [showTargets, setShowTargets] = useState(false);
+  const [savingTargets, setSavingTargets] = useState(false);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -236,6 +280,15 @@ export default function NutritionPage() {
       setHydrationEntries(hydrationRes.data);
     } catch (error) {
       console.error("Error fetching nutrition data:", error);
+    }
+    try {
+      const targetsRes = await apiClient.get("/api/user-profile/nutrition-targets");
+      const loaded = { ...DEFAULT_TARGETS, ...(targetsRes.data || {}) };
+      setTargets(loaded);
+      setTargetDraft(loaded);
+      localStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(loaded));
+    } catch (error) {
+      console.error("Error fetching nutrition targets:", error);
     }
   }, []);
 
@@ -282,6 +335,7 @@ export default function NutritionPage() {
     let protein = 0;
     let carbs = 0;
     let fats = 0;
+    let fiber = 0;
     for (const entry of dayEntries) {
       if (entry.food_items && entry.food_items.length > 0) {
         for (const f of entry.food_items) {
@@ -289,12 +343,14 @@ export default function NutritionPage() {
           protein += f.protein || 0;
           carbs += f.carbs || 0;
           fats += f.fats || 0;
+          fiber += f.fiber || 0;
         }
       } else {
         calories += entry.total_calories || 0;
         protein += entry.total_protein || 0;
         carbs += entry.total_carbs || 0;
         fats += entry.total_fats || 0;
+        fiber += entry.total_fiber || 0;
       }
     }
     return {
@@ -302,6 +358,7 @@ export default function NutritionPage() {
       protein: Math.round(protein),
       carbs: Math.round(carbs),
       fats: Math.round(fats),
+      fiber: Math.round(fiber),
     };
   }, [dayEntries]);
 
@@ -416,11 +473,45 @@ export default function NutritionPage() {
     if (next !== glasses) setWater(next);
   };
 
+  const saveTargets = async () => {
+    const next: NutritionTargets = {
+      calories: Math.max(0, Number(targetDraft.calories) || 0),
+      protein: Math.max(0, Number(targetDraft.protein) || 0),
+      carbs: Math.max(0, Number(targetDraft.carbs) || 0),
+      fats: Math.max(0, Number(targetDraft.fats) || 0),
+      fiber: Math.max(0, Number(targetDraft.fiber) || 0),
+      water: Math.max(0, Number(targetDraft.water) || 0),
+    };
+    setSavingTargets(true);
+    try {
+      const res = await apiClient.put("/api/user-profile/nutrition-targets", next);
+      const saved = { ...DEFAULT_TARGETS, ...(res.data || next) };
+      setTargets(saved);
+      setTargetDraft(saved);
+      localStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(saved));
+      setShowTargets(false);
+    } catch (error) {
+      console.error("Error saving nutrition targets:", error);
+      setTargets(next);
+      localStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(next));
+      setShowTargets(false);
+    } finally {
+      setSavingTargets(false);
+    }
+  };
+
+  const calorieTarget = Math.max(targets.calories, 1);
   const pct = Math.min(
-    Math.round((totals.calories / TARGETS.calories) * 100),
+    Math.round((totals.calories / calorieTarget) * 100),
     999
   );
-  const remaining = Math.max(TARGETS.calories - totals.calories, 0);
+  const remaining = Math.max(targets.calories - totals.calories, 0);
+  const over = Math.max(totals.calories - targets.calories, 0);
+
+  useEffect(() => {
+    setLoggingMeal(null);
+    setEditingFood(null);
+  }, [selectedDate]);
 
   const selectedDateObj = new Date(selectedDate + "T00:00:00");
   const dateLabel = selectedDateObj.toLocaleDateString("en-US", {
@@ -428,25 +519,46 @@ export default function NutritionPage() {
     month: "short",
     day: "numeric",
   });
+  const customDateLabel = selectedDateObj.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+  const isCustomDate = !dayTabs.some((tab) => tab.key === selectedDate);
+
+  const openDatePicker = () => {
+    const input = dateInputRef.current;
+    if (!input) return;
+    if (typeof input.showPicker === "function") {
+      input.showPicker();
+    } else {
+      input.click();
+    }
+  };
 
   const macroRings = [
     {
       label: "Protein",
       value: totals.protein,
-      target: TARGETS.protein,
+      target: targets.protein,
       color: "#5EEAD4",
     },
     {
       label: "Carbs",
       value: totals.carbs,
-      target: TARGETS.carbs,
+      target: targets.carbs,
       color: "#F5C542",
     },
     {
       label: "Fat",
       value: totals.fats,
-      target: TARGETS.fats,
+      target: targets.fats,
       color: "#C4B5FD",
+    },
+    {
+      label: "Fiber",
+      value: totals.fiber,
+      target: targets.fiber,
+      color: "#4ADE80",
     },
   ];
 
@@ -465,17 +577,31 @@ export default function NutritionPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-[1100px] mx-auto pb-28">
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-3xl sm:text-[2rem] font-bold text-white tracking-tight">
-          Nutrition
-        </h1>
-        <p className="text-sm text-[#8E8E93] mt-1">
-          {dateLabel} · {TARGETS.calories.toLocaleString()} kcal target
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl sm:text-[2rem] font-bold text-white tracking-tight">
+            Nutrition
+          </h1>
+          <p className="text-sm text-[#8E8E93] mt-1">{dateLabel}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setTargetDraft(targets);
+            setShowTargets((open) => !open);
+          }}
+          className={`mt-1 px-3.5 py-2 rounded-xl text-sm font-semibold border transition-colors ${
+            showTargets
+              ? "bg-[#FF6B35] border-[#FF6B35] text-white"
+              : "bg-[#161A22] border-[#2A2D35] text-[#8E8E93] hover:text-white"
+          }`}
+        >
+          Targets
+        </button>
       </div>
 
       {/* Day tabs */}
-      <div className="mb-6 flex gap-6 border-b border-[#2A2D35] overflow-x-auto">
+      <div className="mb-6 flex items-end gap-6 border-b border-[#2A2D35] overflow-x-auto">
         {dayTabs.map((tab) => {
           const isActive = selectedDate === tab.key;
           return (
@@ -493,60 +619,136 @@ export default function NutritionPage() {
             </button>
           );
         })}
+        {isCustomDate && (
+          <button
+            type="button"
+            onClick={openDatePicker}
+            className="relative pb-3 text-sm font-semibold whitespace-nowrap text-white"
+          >
+            {customDateLabel}
+            <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#FF6B35] rounded-full" />
+          </button>
+        )}
+        <div className="relative ml-auto pb-3 flex-shrink-0 w-8 h-8 flex items-center justify-center">
+          <MdCalendarToday size={18} className="text-[#8E8E93] pointer-events-none" />
+          <input
+            ref={dateInputRef}
+            type="date"
+            value={selectedDate}
+            onChange={(e) => {
+              if (e.target.value) setSelectedDate(e.target.value);
+            }}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            aria-label="Pick any date"
+            title="Pick any date"
+          />
+        </div>
       </div>
+
+      {showTargets && (
+        <div className="rounded-2xl bg-[#161A22] border border-[#2A2D35] p-5 mb-6">
+          <p className="text-sm font-bold text-white mb-1">Daily targets</p>
+          <p className="text-xs text-[#8E8E93] mb-4">
+            These are your goals for every day. Rings and remaining calories use them.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {(
+              [
+                ["calories", "Calories", "kcal"],
+                ["protein", "Protein", "g"],
+                ["carbs", "Carbs", "g"],
+                ["fats", "Fat", "g"],
+                ["fiber", "Fiber", "g"],
+                ["water", "Water", "cups"],
+              ] as const
+            ).map(([key, label, unit]) => (
+              <div key={key}>
+                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-1.5">
+                  {label}
+                </p>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    value={targetDraft[key]}
+                    onChange={(e) =>
+                      setTargetDraft((prev) => ({
+                        ...prev,
+                        [key]: e.target.value === "" ? 0 : Number(e.target.value),
+                      }))
+                    }
+                    className="w-full h-11 px-3 pr-12 rounded-xl bg-[#0F1117] border border-[#2A2D35] text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#636366]">
+                    {unit}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <button
+              type="button"
+              onClick={() => {
+                setTargetDraft(targets);
+                setShowTargets(false);
+              }}
+              className="px-3.5 py-2 rounded-lg text-sm font-semibold text-[#8E8E93] hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={saveTargets}
+              disabled={savingTargets}
+              className="px-4 py-2 rounded-lg bg-[#FF6B35] text-white text-sm font-semibold hover:bg-[#E85A2A] disabled:opacity-40"
+            >
+              {savingTargets ? "Saving..." : "Save targets"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Overview card */}
       <div className="rounded-2xl bg-[#161A22] border border-[#2A2D35] p-6 sm:p-8 mb-8">
         <div className="flex flex-col lg:flex-row lg:items-center gap-8">
           {/* Calorie ring + stats */}
           <div className="flex flex-col items-center flex-shrink-0">
-            <Ring size={200} stroke={12} progress={totals.calories / TARGETS.calories} color="#FF6B35">
-              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#8E8E93]">
+            <Ring
+              size={200}
+              stroke={12}
+              progress={totals.calories / calorieTarget}
+              color="#FF6B35"
+            >
+              <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-[#8E8E93]">
                 Consumed
               </p>
-              <p className="text-[2.6rem] leading-tight font-bold text-white">
+              <p className="text-[2.15rem] leading-none font-bold text-white">
                 {totals.calories.toLocaleString()}
               </p>
-              <p className="text-sm text-[#8E8E93]">kcal</p>
+              <p className="text-xs text-[#8E8E93] mt-0.5">kcal</p>
+              <p className="text-sm font-bold text-[#FF6B35] mt-1.5">{pct}%</p>
+              <p className="text-[11px] text-[#8E8E93] mt-0.5 text-center px-3 leading-tight">
+                {over > 0
+                  ? `${over.toLocaleString()} over`
+                  : `${remaining.toLocaleString()} left`}
+                {" · "}
+                {targets.calories.toLocaleString()} target
+              </p>
             </Ring>
-
-            <div className="flex items-stretch divide-x divide-[#2A2D35] mt-5">
-              <div className="px-4 text-center first:pl-0">
-                <p className="text-lg font-bold text-[#FF6B35]">{pct}%</p>
-                <p className="text-[10px] uppercase tracking-[0.14em] text-[#636366] font-semibold">
-                  Of Goal
-                </p>
-              </div>
-              <div className="px-4 text-center">
-                <p className="text-lg font-bold text-white">
-                  {remaining.toLocaleString()}
-                </p>
-                <p className="text-[10px] uppercase tracking-[0.14em] text-[#636366] font-semibold">
-                  Remaining
-                </p>
-              </div>
-              <div className="px-4 text-center last:pr-0">
-                <p className="text-lg font-bold text-white">
-                  {TARGETS.calories.toLocaleString()}
-                </p>
-                <p className="text-[10px] uppercase tracking-[0.14em] text-[#636366] font-semibold">
-                  Target
-                </p>
-              </div>
-            </div>
           </div>
 
           <div className="hidden lg:block w-px self-stretch bg-[#2A2D35]" />
 
           {/* Macro rings + water */}
           <div className="flex-1 flex flex-col gap-8">
-            <div className="flex flex-wrap justify-center lg:justify-around gap-6">
+            <div className="grid grid-cols-2 sm:grid-cols-4 justify-items-center gap-4">
               {macroRings.map((m) => (
                 <div key={m.label} className="flex flex-col items-center">
                   <Ring
-                    size={110}
-                    stroke={8}
-                    progress={m.value / m.target}
+                    size={96}
+                    stroke={7}
+                    progress={m.value / Math.max(m.target, 1)}
                     color={m.color}
                   >
                     <p className="text-xl font-bold text-white">{m.value}</p>
@@ -619,20 +821,20 @@ export default function NutritionPage() {
                 <p className="text-sm text-[#8E8E93]">
                   <span className="text-white font-semibold">{glasses}</span>
                   {" / "}
-                  {TARGETS.water} cups
+                  {targets.water} cups
                 </p>
               </div>
               <div className="mt-3 h-2 rounded-full bg-[#2A2D35] overflow-hidden">
                 <div
                   className="h-full rounded-full bg-[#38BDF8] transition-all duration-300"
                   style={{
-                    width: `${Math.min((glasses / TARGETS.water) * 100, 100)}%`,
+                    width: `${Math.min((glasses / Math.max(targets.water, 1)) * 100, 100)}%`,
                   }}
                 />
               </div>
               <p className="text-[11px] text-[#636366] mt-1.5">
-                Target {TARGETS.water} cups
-                {glasses >= TARGETS.water ? " · Hit" : ""}
+                Target {targets.water} cups
+                {glasses >= targets.water ? " · Hit" : ""}
               </p>
             </div>
           </div>
@@ -652,8 +854,9 @@ export default function NutritionPage() {
               protein: acc.protein + (r.food.protein || 0),
               carbs: acc.carbs + (r.food.carbs || 0),
               fats: acc.fats + (r.food.fats || 0),
+              fiber: acc.fiber + (r.food.fiber || 0),
             }),
-            { calories: 0, protein: 0, carbs: 0, fats: 0 }
+            { calories: 0, protein: 0, carbs: 0, fats: 0, fiber: 0 }
           );
           const isCollapsed = collapsedMeals[meal.id] ?? false;
 
@@ -689,6 +892,9 @@ export default function NutritionPage() {
                     </span>{" "}
                     <span className="text-[#C4B5FD]">
                       F {Math.round(mealTotals.fats)}g
+                    </span>{" "}
+                    <span className="text-[#4ADE80]">
+                      Fi {Math.round(mealTotals.fiber)}g
                     </span>
                   </p>
                 </div>

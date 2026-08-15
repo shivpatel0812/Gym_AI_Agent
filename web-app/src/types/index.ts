@@ -67,6 +67,13 @@ export interface WorkoutSession {
   split_day?: string;
   exercises: SessionExercise[];
   notes?: string;
+  cardio_sport?: string;
+  cardio_minutes?: number;
+  cardio_intensity?: number;
+  cardio_fatigue?: number;
+  timer_accumulated_ms?: number;
+  timer_running_since?: string;
+  timer_started_at?: string;
 }
 
 // Physical Activity types
@@ -88,6 +95,7 @@ export interface FoodItem {
   protein: number;
   carbs?: number;
   fats?: number;
+  fiber?: number;
   sodium?: number;
   meal?: string;
   amount?: string;
@@ -101,6 +109,7 @@ export interface MacroEntry {
   total_protein?: number;
   total_carbs?: number;
   total_fats?: number;
+  total_fiber?: number;
   total_sodium?: number;
 }
 

@@ -124,6 +124,12 @@ export default function WorkoutsPage() {
           completedExercises={summaryData.completedExercises}
           totalExercises={summaryData.totalExercises}
           completionPercent={summaryData.completionPercent}
+          formattedTime={summaryData.formattedTime}
+          elapsedSeconds={summaryData.elapsedSeconds}
+          isRunning={summaryData.isRunning}
+          onTimerStart={summaryData.onTimerStart}
+          onTimerStop={summaryData.onTimerStop}
+          onTimerRefresh={summaryData.onTimerRefresh}
         />
       )}
     </>

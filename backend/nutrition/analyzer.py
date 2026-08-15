@@ -5,9 +5,10 @@ from typing import List, Dict, Optional
 from .yolo_detect import detect_food
 from .usda_lookup import get_macros as get_usda_macros
 from .gpt_fallback import gpt_estimate
+from .gpt_vision import gpt_vision_estimate
 
 
-def analyze_food_image(image_path: str) -> Dict:
+def analyze_food_image(image_path: str, description: Optional[str] = None) -> Dict:
     """
     Complete food analysis pipeline:
     1. Detect foods using YOLO
@@ -23,7 +24,25 @@ def analyze_food_image(image_path: str) -> Dict:
             - food_items: List of food items with macro information
             - message: Status message
     """
-    # Step 1: Detect foods using YOLO
+    vision = gpt_vision_estimate(image_path, description)
+    if vision:
+        item = {
+            "name": vision["name"],
+            "calories": vision["calories"],
+            "protein": vision["protein"],
+            "carbs": vision["carbs"],
+            "fats": vision["fats"],
+            "fiber": vision.get("fiber", 0),
+            "amount": vision.get("amount"),
+        }
+        return {
+            "foods": [vision["name"]],
+            "food_items": [item],
+            "food": item,
+            "message": "Estimated macros from photo",
+        }
+
+    # Fallback: YOLO detection + USDA / GPT text estimate
     detected_foods = detect_food(image_path)
     
     if not detected_foods:

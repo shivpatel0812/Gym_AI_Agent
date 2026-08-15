@@ -460,3 +460,46 @@ class TestDeterminism:
             for a, b in zip(result.sets, first_result.sets):
                 assert a.weight == b.weight
                 assert a.reps == b.reps
+
+
+class TestAlwaysProgressFromLastHit:
+    def test_seven_reps_becomes_eight(self, engine):
+        sessions = [build_session(75, [7, 7, 5])]
+        result = engine.compute_recommendation(
+            exercise_id="default-chest-db-incline-press",
+            exercise_name="Incline Dumbbell Press",
+            user_goal="Build Muscle",
+            recent_sessions=sessions,
+            num_sets=3,
+        )
+        assert result.decision == Decision.INCREASE_REPS
+        assert [s.reps for s in result.sets] == [8, 8, 6]
+        assert all(s.weight == 75 for s in result.sets)
+
+    def test_four_set_history_still_progresses_three_sets(self, engine):
+        sessions = [build_session(75, [7, 7, 5, 7])]
+        result = engine.compute_recommendation(
+            exercise_id="default-chest-db-incline-press",
+            exercise_name="Incline Dumbbell Press",
+            user_goal="Build Muscle",
+            recent_sessions=sessions,
+            num_sets=3,
+        )
+        assert [s.reps for s in result.sets[:3]] == [8, 8, 6]
+        assert all(s.weight == 75 for s in result.sets)
+
+    def test_shorter_follow_up_is_not_a_failure(self, engine):
+        sessions = [
+            build_session(75, [7, 7, 5], days_ago=0),
+            build_session(75, [7, 7, 5, 7], days_ago=3),
+        ]
+        result = engine.compute_recommendation(
+            exercise_id="default-chest-db-incline-press",
+            exercise_name="Incline Dumbbell Press",
+            user_goal="Build Muscle",
+            recent_sessions=sessions,
+            num_sets=3,
+        )
+        assert result.decision == Decision.INCREASE_REPS
+        assert [s.reps for s in result.sets[:3]] == [8, 8, 6]
+

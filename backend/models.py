@@ -49,6 +49,13 @@ class WorkoutSession(BaseModel):
     split_day: Optional[str] = None
     exercises: List[dict]
     notes: Optional[str] = None
+    cardio_sport: Optional[str] = None
+    cardio_minutes: Optional[float] = None
+    cardio_intensity: Optional[int] = None
+    cardio_fatigue: Optional[int] = None
+    timer_accumulated_ms: Optional[int] = None
+    timer_running_since: Optional[str] = None
+    timer_started_at: Optional[str] = None
 
 class PhysicalActivity(BaseModel):
     id: Optional[str] = None
@@ -66,11 +73,26 @@ class FoodItem(BaseModel):
     protein: float
     carbs: Optional[float] = None
     fats: Optional[float] = None
+    fiber: Optional[float] = None
     sodium: Optional[float] = None
     meal: Optional[str] = None
     amount: Optional[str] = None
 
-class MacroEntry(BaseModel):
+class SavedFood(BaseModel):
+    id: Optional[str] = None
+    name: str
+    serving: str
+    grams: float
+    calories: float
+    protein: float
+    carbs: Optional[float] = 0
+    fats: Optional[float] = 0
+    fiber: Optional[float] = 0
+    aliases: Optional[List[str]] = None
+
+
+class FoodEstimateRequest(BaseModel):
+    query: str
     id: Optional[str] = None
     date: str
     food_items: List[FoodItem]
@@ -78,6 +100,8 @@ class MacroEntry(BaseModel):
     total_protein: Optional[float] = None
     total_carbs: Optional[float] = None
     total_fats: Optional[float] = None
+    total_fiber: Optional[float] = None
+    total_sodium: Optional[float] = None
 
 class StressEntry(BaseModel):
     id: Optional[str] = None

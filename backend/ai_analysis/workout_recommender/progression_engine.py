@@ -245,6 +245,18 @@ class ProgressionEngine:
         if has_implausible:
             result.confidence = "low"
             result.reasoning_context["has_implausible_data"] = True
+
+        skip_bump = result.decision in (
+            Decision.DELOAD,
+            Decision.LIGHT_DAY,
+            Decision.MAINTAIN,
+            Decision.NEEDS_STARTING_WEIGHT,
+            Decision.FIRST_SESSION,
+        )
+        if not skip_bump:
+            result = self._ensure_progressed(
+                result, latest_sets, num_sets, rep_range, increment, metadata
+            )
         return result
 
     # === Private Methods ===
@@ -821,19 +833,51 @@ class ProgressionEngine:
             return False
         return all(s.get("reps", 0) >= rep_range.high for s in sets)
 
+    def _ensure_progressed(
+        self,
+        result: ProgressionResult,
+        latest_sets: List[Dict],
+        num_sets: int,
+        rep_range: RepRangeConfig,
+        increment: float,
+        metadata: ExerciseMetadata,
+    ) -> ProgressionResult:
+        """Never recommend the exact same weight/reps as the last completed session."""
+        if not result.sets or not latest_sets:
+            return result
+        n = min(len(result.sets), len(latest_sets))
+        identical = all(
+            result.sets[i].reps == (latest_sets[i].get("reps") or 0)
+            and float(result.sets[i].weight or 0)
+            == float(latest_sets[i].get("weight") or 0)
+            for i in range(n)
+        )
+        if not identical:
+            return result
+        if self._all_sets_at_top(latest_sets[:n], rep_range):
+            return self._handle_increase_weight(
+                latest_sets, num_sets, rep_range, increment, metadata
+            )
+        bumped = self._handle_increase_reps(
+            latest_sets, num_sets, rep_range, metadata
+        )
+        bumped.reasoning_context["forced_progression"] = True
+        return bumped
+
     def _matched_or_beat(self, current_sets: List[Dict], previous_sets: List[Dict]) -> bool:
         """
         Check if current session matched or beat previous.
-        Compare total reps at same or higher weight.
+        Compare overlapping sets so a 3-set session is not a 'fail' vs a 4-set one.
         """
         if not current_sets or not previous_sets:
             return True  # Give benefit of the doubt
 
+        n = min(len(current_sets), len(previous_sets))
         current_volume = sum(
-            s.get("weight", 0) * s.get("reps", 0) for s in current_sets
+            (s.get("weight") or 0) * (s.get("reps") or 0) for s in current_sets[:n]
         )
         previous_volume = sum(
-            s.get("weight", 0) * s.get("reps", 0) for s in previous_sets
+            (s.get("weight") or 0) * (s.get("reps") or 0) for s in previous_sets[:n]
         )
         return current_volume >= previous_volume
 
