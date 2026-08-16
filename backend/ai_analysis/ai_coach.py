@@ -17,6 +17,12 @@ MAX_TOOL_CALLS = 6
 
 # How many prior chat turns to replay back to the model
 MAX_HISTORY_MESSAGES = 20
+PLAN_MODE_HISTORY_MESSAGES = 40
+
+# Plan-mode interviews pull more records and write longer answers
+PLAN_MAX_TOOL_ROUNDS = 4
+PLAN_MAX_TOOL_CALLS = 8
+PLAN_MAX_TOKENS = 1200
 
 
 def clean_for_json(obj: Any) -> Any:
@@ -309,18 +315,67 @@ RECENT DATA ({summary.get('analysis_period', 'monthly summary')}):
       val(lifestyle, 'high_stress_days', '{} high-stress days'))}
 """
 
+    def _build_plan_mode_prompt(
+        self,
+        context: str,
+        today: datetime,
+        split_context: Optional[Dict[str, Any]],
+        toolbox: Optional[CoachToolbox],
+    ) -> str:
+        """Interview prompt used when the user is designing a training plan."""
+        split_json = json.dumps(split_context or {"days": []}, indent=2, default=str)
+        prompt = f"""You are in PLAN MODE. Your job is to interview this user until you can design a training plan that actually fits them — not to give generic coaching advice.
+
+Today is {today.strftime('%A, %B %d, %Y')}.
+
+{context}
+
+CURRENT SPLIT (their normal routine, reconstructed from logged workouts when the split itself only stores day names):
+{split_json}
+
+How to run the interview:
+- Start from what they just said. Ask 1–2 follow-up questions at a time, not a long checklist.
+- Ground questions in their actual split, lifts, and recent training. Call tools to inspect recent sessions, exercise history, personal records, recovery, and their current split before assuming anything.
+- Cover, across the conversation (skip anything already answered or obvious from their data):
+  1. The specific goal and how they'll know it worked (e.g. a lift, a look, a race).
+  2. Timeline / block length.
+  3. Days per week and session length they can actually keep.
+  4. Equipment and injuries / pain.
+  5. How much their current split can change: keep it (follow), tweak it (adapt), or rebuild (build for me).
+  6. Which lifts or qualities should be the priority.
+  7. Recovery constraints (sleep, stress, travel).
+- Be conversational and precise. Reference real numbers from their logs.
+- Do NOT output a JSON plan, full weekly spreadsheet, or exercise list to activate. When you have enough, summarise the brief in a few bullets and tell them to tap Generate Plan so the program can be built and reviewed.
+- If they ask to generate now and you still have a critical gap, ask that one question first.
+
+Where a metric reads "not logged", say you don't have that data instead of guessing."""
+
+        if toolbox is not None:
+            prompt += """
+
+Use tools in this mode. Look up recent sessions and the current split early so follow-ups are specific (e.g. "You've been pressing incline once a week — want a second day?"). If a tool returns no data, say so plainly."""
+        return prompt
+
     def _build_chat_messages(
         self,
         user_message: str,
         summary: Dict[str, Any],
         conversation_history: Optional[List[Dict]],
         toolbox: Optional[CoachToolbox],
+        mode: str = "coach",
+        split_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Assemble the message list shared by the buffered and streaming paths."""
         context = self._build_chatbot_context(summary)
         today = datetime.now()
+        plan_mode = mode == "plan"
 
-        system_message = f"""You are a personal fitness coach who knows this user's training history and current status.
+        if plan_mode:
+            system_message = self._build_plan_mode_prompt(
+                context, today, split_context, toolbox
+            )
+        else:
+            system_message = f"""You are a personal fitness coach who knows this user's training history and current status.
 
 Today is {today.strftime('%A, %B %d, %Y')}.
 
@@ -331,33 +386,38 @@ Reference their actual numbers when relevant (sleep hours, training frequency, e
 Consider the constraints listed in their profile above in your recommendations.
 Where a metric reads "not logged", say you don't have that data instead of guessing at a value."""
 
-        if toolbox is not None:
-            system_message += """
+            if toolbox is not None:
+                system_message += """
 
 The summary above is headline averages only. When the user asks about specific
 workouts, exercises, dates, personal bests, or what to train today, call the
 tools to look up the actual records rather than answering from the averages or
 guessing. If a tool returns no data, say so plainly."""
 
+        history_limit = PLAN_MODE_HISTORY_MESSAGES if plan_mode else MAX_HISTORY_MESSAGES
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_message}]
-        messages.extend(self._sanitize_history(conversation_history or []))
+        messages.extend(self._sanitize_history(conversation_history or [], limit=history_limit))
         messages.append({"role": "user", "content": user_message})
         return messages
 
     def _request_kwargs(
         self, messages: List[Dict], toolbox: Optional[CoachToolbox],
         round_index: int, tool_call_count: int,
+        mode: str = "coach",
     ) -> Dict[str, Any]:
         """Build the API kwargs for one round, applying the tool budget."""
+        plan_mode = mode == "plan"
+        max_rounds = PLAN_MAX_TOOL_ROUNDS if plan_mode else MAX_TOOL_ROUNDS
+        max_calls = PLAN_MAX_TOOL_CALLS if plan_mode else MAX_TOOL_CALLS
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 800,
+            "max_tokens": PLAN_MAX_TOKENS if plan_mode else 800,
         }
         # Withhold tools on the last round, and once the call budget is spent,
         # so a tool-happy model still ends with a text answer
-        budget_left = round_index < MAX_TOOL_ROUNDS and tool_call_count < MAX_TOOL_CALLS
+        budget_left = round_index < max_rounds and tool_call_count < max_calls
         if toolbox is not None and budget_left:
             kwargs["tools"] = TOOL_SCHEMAS
         return kwargs
@@ -368,6 +428,8 @@ guessing. If a tool returns no data, say so plainly."""
         summary: Dict[str, Any],
         conversation_history: Optional[List[Dict]] = None,
         toolbox: Optional[CoachToolbox] = None,
+        mode: str = "coach",
+        split_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Handle chatbot interactions with context awareness.
@@ -385,17 +447,21 @@ guessing. If a tool returns no data, say so plainly."""
         """
         # Sanitize once and hand the same clean list back to the client, so its
         # stored history stays valid and bounded instead of accumulating junk
-        clean_history = self._sanitize_history(conversation_history or [])
+        history_limit = PLAN_MODE_HISTORY_MESSAGES if mode == "plan" else MAX_HISTORY_MESSAGES
+        clean_history = self._sanitize_history(conversation_history or [], limit=history_limit)
         messages = self._build_chat_messages(
-            user_message, summary, clean_history, toolbox
+            user_message, summary, clean_history, toolbox, mode, split_context
         )
+        max_rounds = PLAN_MAX_TOOL_ROUNDS if mode == "plan" else MAX_TOOL_ROUNDS
 
         try:
             total_tokens = 0
             tools_used: List[str] = []
 
-            for round_index in range(MAX_TOOL_ROUNDS + 1):
-                kwargs = self._request_kwargs(messages, toolbox, round_index, len(tools_used))
+            for round_index in range(max_rounds + 1):
+                kwargs = self._request_kwargs(
+                    messages, toolbox, round_index, len(tools_used), mode
+                )
                 response = self.client.chat.completions.create(**kwargs)
                 total_tokens += getattr(response.usage, "total_tokens", 0) or 0
                 choice = response.choices[0].message
@@ -465,6 +531,8 @@ guessing. If a tool returns no data, say so plainly."""
         summary: Dict[str, Any],
         conversation_history: Optional[List[Dict]] = None,
         toolbox: Optional[CoachToolbox] = None,
+        mode: str = "coach",
+        split_context: Optional[Dict[str, Any]] = None,
     ) -> Iterator[Dict[str, Any]]:
         """
         Streaming variant of chat(). Yields event dicts for the SSE endpoint.
@@ -475,17 +543,21 @@ guessing. If a tool returns no data, say so plainly."""
             {"type": "done",  ...}           final totals and history
             {"type": "error", "error": str}  failed before/while answering
         """
-        clean_history = self._sanitize_history(conversation_history or [])
+        history_limit = PLAN_MODE_HISTORY_MESSAGES if mode == "plan" else MAX_HISTORY_MESSAGES
+        clean_history = self._sanitize_history(conversation_history or [], limit=history_limit)
         messages = self._build_chat_messages(
-            user_message, summary, clean_history, toolbox
+            user_message, summary, clean_history, toolbox, mode, split_context
         )
+        max_rounds = PLAN_MAX_TOOL_ROUNDS if mode == "plan" else MAX_TOOL_ROUNDS
 
         try:
             total_tokens = 0
             tools_used: List[str] = []
 
-            for round_index in range(MAX_TOOL_ROUNDS + 1):
-                kwargs = self._request_kwargs(messages, toolbox, round_index, len(tools_used))
+            for round_index in range(max_rounds + 1):
+                kwargs = self._request_kwargs(
+                    messages, toolbox, round_index, len(tools_used), mode
+                )
                 kwargs["stream"] = True
                 # Usage is omitted from streamed responses unless asked for
                 kwargs["stream_options"] = {"include_usage": True}
@@ -583,7 +655,7 @@ guessing. If a tool returns no data, say so plainly."""
             yield {"type": "error", "error": str(e)}
 
     @staticmethod
-    def _sanitize_history(history: List[Dict]) -> List[Dict]:
+    def _sanitize_history(history: List[Dict], limit: int = MAX_HISTORY_MESSAGES) -> List[Dict]:
         """
         Keep only well-formed user/assistant turns from client-supplied history.
 
@@ -599,4 +671,4 @@ guessing. If a tool returns no data, say so plainly."""
             content = message.get("content")
             if role in ("user", "assistant") and isinstance(content, str) and content.strip():
                 clean.append({"role": role, "content": content})
-        return clean[-MAX_HISTORY_MESSAGES:]
+        return clean[-limit:]

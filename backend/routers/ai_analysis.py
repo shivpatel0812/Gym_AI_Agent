@@ -25,6 +25,8 @@ PREVIOUS_ANALYSIS_MONTHS = 3
 
 # Rolling window the coach uses for headline numbers when no month is specified
 CHAT_CONTEXT_WINDOW_DAYS = 28
+PLAN_MODE_CONTEXT_WINDOW_DAYS = 56
+PLAN_MODE_HISTORY_MESSAGES = 40
 
 
 def previous_month_ids(year: int, month: int, count: int) -> List[str]:
@@ -51,11 +53,17 @@ def _chat_summary(user_id: str, request: "ChatRequest") -> dict:
 
     Defaults to a rolling window so context doesn't collapse to near-empty on
     the 1st of the month; an explicit year/month still asks for that month.
+    Plan mode uses a longer window so the interview can see recent training.
     """
     analyzer = FitnessDataAnalyzer(db, user_id)
     if request.year and request.month:
         return analyzer.build_complete_summary(request.year, request.month)
-    return analyzer.build_rolling_summary(window_days=CHAT_CONTEXT_WINDOW_DAYS)
+    window = (
+        PLAN_MODE_CONTEXT_WINDOW_DAYS
+        if getattr(request, "mode", None) == "plan"
+        else CHAT_CONTEXT_WINDOW_DAYS
+    )
+    return analyzer.build_rolling_summary(window_days=window)
 
 
 def _chat_history(store: ConversationStore, request: "ChatRequest") -> list:
@@ -67,22 +75,43 @@ def _chat_history(store: ConversationStore, request: "ChatRequest") -> list:
     builds keep working.
     """
     if request.conversation_id:
-        return store.get_history_for_model(request.conversation_id)
+        limit = PLAN_MODE_HISTORY_MESSAGES if request.mode == "plan" else None
+        return store.get_history_for_model(request.conversation_id, limit=limit)
     return request.conversation_history or []
 
 
 def _persist_exchange(
-    store: ConversationStore, conversation_id, user_message: str, assistant_message: str
+    store: ConversationStore,
+    conversation_id,
+    user_message: str,
+    assistant_message: str,
+    mode: Optional[str] = None,
 ):
     """
     Save the exchange. Never fails the request — a chat that answered but
     couldn't be saved is better than an error after the model already ran.
     """
     try:
-        return store.append_exchange(conversation_id, user_message, assistant_message)
+        return store.append_exchange(
+            conversation_id, user_message, assistant_message, mode=mode
+        )
     except Exception as e:
         print(f"Warning: could not persist conversation: {e}")
         return conversation_id
+
+
+def _chat_mode(request: "ChatRequest") -> str:
+    return "plan" if request.mode == "plan" else "coach"
+
+
+def _split_context_for_plan(user_id: str) -> dict:
+    """Load the user's current split so Plan Mode can interview against it."""
+    try:
+        from routers.training_plan import _load_current_split
+        return _load_current_split(user_id, None)
+    except Exception as e:
+        print(f"Warning: could not load split for plan mode: {e}")
+        return {"split_id": None, "split_name": None, "days": []}
 
 
 def summary_has_data(summary: dict) -> bool:
@@ -122,6 +151,8 @@ class ChatRequest(BaseModel):
     # conversation_history is ignored. Omit to start a new conversation.
     conversation_id: Optional[str] = None
     conversation_history: Optional[List[dict]] = None
+    # "plan" runs an interview for a training plan; anything else is coach chat
+    mode: Optional[str] = "coach"
 
 
 class RenameConversationRequest(BaseModel):
@@ -395,6 +426,8 @@ async def chat_with_ai(
 
         store = ConversationStore(db, user_id)
         history = _chat_history(store, request)
+        mode = _chat_mode(request)
+        split_context = _split_context_for_plan(user_id) if mode == "plan" else None
 
         # Get chat response, with tools so the coach can look up specifics
         result = coach.chat(
@@ -402,13 +435,15 @@ async def chat_with_ai(
             summary=summary,
             conversation_history=history,
             toolbox=CoachToolbox(db, user_id),
+            mode=mode,
+            split_context=split_context,
         )
 
         if result["status"] == "error":
             raise HTTPException(status_code=500, detail=f"Chat failed: {result.get('error')}")
 
         conversation_id = _persist_exchange(
-            store, request.conversation_id, request.message, result["response"]
+            store, request.conversation_id, request.message, result["response"], mode=mode
         )
 
         return {
@@ -506,6 +541,8 @@ async def chat_with_ai_stream(
 
     store = ConversationStore(db, user_id)
     history = _chat_history(store, request)
+    mode = _chat_mode(request)
+    split_context = _split_context_for_plan(user_id) if mode == "plan" else None
 
     def event_stream():
         try:
@@ -514,6 +551,8 @@ async def chat_with_ai_stream(
                 summary=summary,
                 conversation_history=history,
                 toolbox=toolbox,
+                mode=mode,
+                split_context=split_context,
             ):
                 # Save on the way through, so the id reaches the client in the
                 # same done event that ends the stream
@@ -521,6 +560,7 @@ async def chat_with_ai_stream(
                     event["conversation_id"] = _persist_exchange(
                         store, request.conversation_id,
                         request.message, event.get("response", ""),
+                        mode=mode,
                     )
                 yield f"data: {json.dumps(event, default=str)}\n\n"
         except Exception as e:

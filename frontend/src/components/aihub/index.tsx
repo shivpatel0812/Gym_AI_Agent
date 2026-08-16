@@ -2,12 +2,20 @@ import { useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar } from "react-native";
 import AIChat from "../AIChat";
 import AIAnalysis from "../AIAnalysis";
+import PlanTab from "../plan/PlanTab";
 import { colors, spacing } from "../../theme";
 
-type TabType = "coach" | "analysis";
+type TabType = "coach" | "plan" | "analysis";
 
 export default function AIHub() {
   const [activeTab, setActiveTab] = useState<TabType>("coach");
+  // Lets the Plan tab hand a starter prompt to the Coach tab
+  const [coachPrompt, setCoachPrompt] = useState<string | null>(null);
+
+  const askCoach = (prompt: string) => {
+    setCoachPrompt(prompt);
+    setActiveTab("coach");
+  };
 
   return (
     <View style={styles.container}>
@@ -16,6 +24,7 @@ export default function AIHub() {
         {(
           [
             { id: "coach", label: "Coach" },
+            { id: "plan", label: "Plan" },
             { id: "analysis", label: "Analysis" },
           ] as const
         ).map((tab) => {
@@ -29,7 +38,18 @@ export default function AIHub() {
         })}
         </View>
       </View>
-      <View style={styles.content}>{activeTab === "coach" ? <AIChat /> : <AIAnalysis />}</View>
+      <View style={styles.content}>
+        {activeTab === "coach" ? (
+          <AIChat
+            initialPrompt={coachPrompt}
+            onPromptConsumed={() => setCoachPrompt(null)}
+          />
+        ) : activeTab === "plan" ? (
+          <PlanTab onAskCoach={askCoach} />
+        ) : (
+          <AIAnalysis />
+        )}
+      </View>
     </View>
   );
 }

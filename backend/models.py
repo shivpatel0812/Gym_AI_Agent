@@ -209,6 +209,10 @@ class PlanExercise(BaseModel):
     notes: Optional[str] = None
     order: int
     intensity: Optional[str] = None  # "heavy", "light", "normal"
+    # --- Goal-plan intent. Drives the recommender; never exact numbers. ---
+    goal: Optional[str] = None  # "strength", "hypertrophy", "fat_loss", "general"
+    priority: Optional[str] = None  # "high", "supporting", "normal"
+    target_rep_range: Optional[List[int]] = None  # [low, high]
 
 class WorkoutPlanDay(BaseModel):
     day_name: str
@@ -216,6 +220,18 @@ class WorkoutPlanDay(BaseModel):
     exercises: List[PlanExercise]
     estimated_duration_minutes: Optional[int] = None
     intensity: Optional[str] = None  # "heavy", "light", "normal"
+    # --- Goal-plan intent applied to every exercise on this day ---
+    day_goal: Optional[str] = None  # human-readable, e.g. "Incline strength"
+    day_type: Optional[str] = None  # "heavy", "volume", "normal", "deload"
+    goal: Optional[str] = None  # default goal key for exercises on this day
+
+class PlanChange(BaseModel):
+    """One structural change the plan makes relative to the user's split."""
+    action: str  # "added", "removed", "swapped", "reordered", "frequency", "rep_range"
+    day_name: Optional[str] = None
+    exercise_name: Optional[str] = None
+    replaces: Optional[str] = None
+    reason: Optional[str] = None
 
 class WeeklySchedule(BaseModel):
     monday: Optional[str] = None
@@ -243,4 +259,28 @@ class WorkoutPlan(BaseModel):
     creation_mode: Optional[str] = None
     source_split_id: Optional[str] = None
     owns_linked_split: bool = False
+
+    # --- Goal-based Active Plan fields ---
+    # "structural" = the wizard-generated program (legacy default).
+    # "goal" = a goal-based plan created from an AI Coach conversation.
+    plan_type: str = "structural"
+    # draft -> active -> paused -> completed. is_active stays in sync for
+    # backward compatibility with existing queries.
+    status: Optional[str] = None
+    # How far the plan may stray from the user's Current Split.
+    plan_mode: Optional[str] = None  # "follow_split", "adapt_split", "build_for_me"
+
+    # Human-readable guidance. Explains the plan; does not drive behaviour.
+    primary_goal: Optional[str] = None
+    strategy: Optional[List[str]] = None
+    guidelines: Optional[List[str]] = None
+
+    start_date: Optional[str] = None
+    duration_weeks: Optional[int] = None
+    ended_at: Optional[str] = None
+
+    changes: Optional[List[PlanChange]] = None
+    source_conversation_id: Optional[str] = None
+    version: int = 1
+    supersedes_plan_id: Optional[str] = None
 

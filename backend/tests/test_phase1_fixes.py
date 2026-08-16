@@ -16,6 +16,7 @@ import pytest
 from ai_analysis.workout_recommender import WorkoutRecommender
 from ai_analysis.workout_recommender.progression_engine import ProgressionEngine, Decision
 from ai_analysis.workout_recommender.reasoning_generator import ReasoningGenerator
+from ai_analysis.workout_recommender.plan_context import PlanContext
 from ai_analysis.workout_recommender.exercise_metadata import (
     resolve_exercise_metadata,
     ExerciseMetadata,
@@ -162,6 +163,14 @@ class TestCustomExerciseMetadata:
         }
         recommender.progression_engine = ProgressionEngine()
         recommender.reasoning_generator = ReasoningGenerator(openai_client=None)
+        # No focus or active plan in this scenario; mocked so the assertions
+        # below still see only the exercises collection being read
+        recommender.focus_store = MagicMock()
+        recommender.focus_store.get_focus_for_exercise.return_value = None
+        recommender.plan_resolver = MagicMock()
+        recommender.plan_resolver.resolve.return_value = PlanContext(
+            goal="hypertrophy", source="profile"
+        )
 
         response = recommender.get_exercise_recommendation(
             exercise_id=exercise_id,

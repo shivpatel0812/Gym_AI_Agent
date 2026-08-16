@@ -17,6 +17,7 @@ import LinearGradient from "./shared/LinearGradient";
 import Button from "./shared/Button";
 import Markdown from "./shared/Markdown";
 import ConversationSidebar from "./chat/ConversationSidebar";
+import CreatePlanModal from "./plan/CreatePlanModal";
 import apiClient from "../api/client";
 import { streamChat } from "../api/streamChat";
 import {
@@ -38,12 +39,19 @@ const TOOL_LABELS: Record<string, string> = {
   get_recent_sessions: "Checking your recent workouts...",
   get_exercise_history: "Looking up your lift history...",
   get_todays_plan: "Checking today's plan...",
+  get_current_split: "Looking at your current split...",
   get_nutrition_log: "Reviewing your nutrition log...",
   get_wellness_log: "Reviewing your sleep and recovery...",
   get_personal_records: "Looking up your personal bests...",
 };
 
-export default function AIChat() {
+interface AIChatProps {
+  /** A starter prompt handed over from another tab (e.g. "Ask Coach About Plan"). */
+  initialPrompt?: string | null;
+  onPromptConsumed?: () => void;
+}
+
+export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -55,6 +63,8 @@ export default function AIChat() {
   const [loadingList, setLoadingList] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameText, setRenameText] = useState("");
+  const [createPlanOpen, setCreatePlanOpen] = useState(false);
+  const [planMode, setPlanMode] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const cancelStreamRef = useRef<(() => void) | null>(null);
 
@@ -73,7 +83,7 @@ export default function AIChat() {
     refreshConversations();
   }, []);
 
-  const startNewChat = () => {
+  const startNewChat = (keepPlanMode = false) => {
     cancelStreamRef.current?.();
     cancelStreamRef.current = null;
     setMessages([]);
@@ -82,6 +92,7 @@ export default function AIChat() {
     setLoading(false);
     setToolStatus(null);
     setSidebarOpen(false);
+    if (!keepPlanMode) setPlanMode(false);
   };
 
   const openConversation = async (id: string) => {
@@ -100,6 +111,7 @@ export default function AIChat() {
       setMessages(loaded);
       setConversationHistory(loaded);
       setConversationId(id);
+      setPlanMode(conversation.mode === "plan");
     } catch (error) {
       console.error("Error opening conversation:", error);
       Alert.alert("Error", "Could not open that chat.");
@@ -118,7 +130,14 @@ export default function AIChat() {
     }
   };
 
-  // Alert.prompt is iOS-only, so renaming uses a modal to work on Android too
+  const enterPlanMode = () => {
+    if (messages.length > 0 && !planMode) {
+      startNewChat(true);
+    }
+    setPlanMode(true);
+  };
+
+  const exitPlanMode = () => setPlanMode(false);
   const handleRenameConversation = (id: string, currentTitle: string) => {
     setRenameTarget({ id, title: currentTitle });
     setRenameText(currentTitle);
@@ -153,6 +172,15 @@ export default function AIChat() {
   // Abort any in-flight stream when the tab unmounts
   useEffect(() => () => cancelStreamRef.current?.(), []);
 
+  // Prefill (but don't send) a prompt handed over from the Plan tab, so the
+  // user can finish the sentence themselves
+  useEffect(() => {
+    if (initialPrompt) {
+      setInputMessage(initialPrompt);
+      onPromptConsumed?.();
+    }
+  }, [initialPrompt, onPromptConsumed]);
+
   // Falls back to the buffered endpoint when streaming fails before any text
   // has arrived, so a proxy that won't pass SSE through still gets an answer
   const sendBuffered = async (messageToSend: string, baseMessages: Message[]) => {
@@ -163,9 +191,10 @@ export default function AIChat() {
           message: messageToSend,
           conversation_id: conversationId,
           conversation_history: conversationHistory,
+          mode: planMode ? "plan" : "coach",
         },
         // GPT-4o responses regularly run past the default 30s client timeout
-        { timeout: 90000 }
+        { timeout: planMode ? 120000 : 90000 }
       );
 
       if (res.data.status !== "success") throw new Error("Chat failed");
@@ -204,7 +233,12 @@ export default function AIChat() {
     let streamed = "";
 
     cancelStreamRef.current = streamChat(
-      { message: messageToSend, conversationId, conversationHistory },
+      {
+        message: messageToSend,
+        conversationId,
+        conversationHistory,
+        mode: planMode ? "plan" : "coach",
+      },
       {
         onTool: (name) => setToolStatus(TOOL_LABELS[name] || "Looking that up..."),
         onDelta: (text) => {
@@ -270,11 +304,18 @@ export default function AIChat() {
 
   const renderEmpty = () => (
     <View style={styles.emptyState}>
-      <MaterialCommunityIcons name="robot" size={80} color={colors.accentPrimary} />
-      <Text style={styles.emptyTitle}>Start a conversation with your AI coach</Text>
+      <MaterialCommunityIcons
+        name={planMode ? "target" : "robot"}
+        size={80}
+        color={colors.accentPrimary}
+      />
+      <Text style={styles.emptyTitle}>
+        {planMode ? "Let's design your plan" : "Start a conversation with your AI coach"}
+      </Text>
       <Text style={styles.emptySubtitle}>
-        Ask questions about your fitness progress, get personalized advice, or discuss your
-        training and nutrition goals.
+        {planMode
+          ? "Tell me what you want this block to achieve. I'll look at your split and recent workouts, then ask follow-ups until we can build a program that fits."
+          : "Ask questions about your fitness progress, get personalized advice, or tap Plan to design a training program."}
       </Text>
     </View>
   );
@@ -300,8 +341,10 @@ export default function AIChat() {
   const isAwaitingFirstToken =
     loading && messages[messages.length - 1]?.role !== "assistant";
 
-  const activeTitle =
-    conversations.find((c) => c.id === conversationId)?.title || "AI Coach";
+  const hasUserMessage = messages.some((m) => m.role === "user");
+
+  const conversationTitle = conversations.find((c) => c.id === conversationId)?.title;
+  const activeTitle = conversationTitle || (planMode ? "Plan Mode" : "AI Coach");
 
   return (
     <KeyboardAvoidingView
@@ -321,18 +364,35 @@ export default function AIChat() {
             </TouchableOpacity>
             <View>
               <Text style={styles.headerTitle}>{activeTitle}</Text>
-              <Text style={styles.headerSubtitle}>Your fitness companion</Text>
+              <Text style={styles.headerSubtitle}>
+                {planMode ? "Interview, then generate a program" : "Your fitness companion"}
+              </Text>
             </View>
           </View>
-          {messages.length > 0 && (
-            <TouchableOpacity onPress={startNewChat} style={styles.clearButton}>
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              onPress={planMode ? exitPlanMode : enterPlanMode}
+              style={[styles.planButton, planMode && styles.planButtonActive]}
+            >
               <MaterialCommunityIcons
-                name="plus-circle-outline"
-                size={22}
-                color={colors.accentPrimary}
+                name="target"
+                size={16}
+                color={planMode ? "#fff" : colors.accentPrimary}
               />
+              <Text style={[styles.planButtonText, planMode && styles.planButtonTextActive]}>
+                Plan
+              </Text>
             </TouchableOpacity>
-          )}
+            {messages.length > 0 && (
+              <TouchableOpacity onPress={() => startNewChat()} style={styles.clearButton}>
+                <MaterialCommunityIcons
+                  name="plus-circle-outline"
+                  size={22}
+                  color={colors.accentPrimary}
+                />
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       </LinearGradient>
 
@@ -351,15 +411,29 @@ export default function AIChat() {
       />
 
       <View style={styles.inputContainer}>
-        <View style={styles.inputWrapper}>
+        {planMode && hasUserMessage ? (
+          <TouchableOpacity
+            style={styles.generateBar}
+            onPress={() => setCreatePlanOpen(true)}
+            disabled={loading}
+          >
+            <MaterialCommunityIcons name="auto-fix" size={18} color="#fff" />
+            <Text style={styles.generateBarText}>Generate Plan</Text>
+          </TouchableOpacity>
+        ) : null}
+        <View style={[styles.inputWrapper, planMode && styles.inputWrapperPlan]}>
           <TextInput
             style={styles.input}
             value={inputMessage}
             onChangeText={setInputMessage}
-            placeholder="Ask your AI coach a question..."
+            placeholder={
+              planMode
+                ? "What do you want this plan to achieve?"
+                : "Ask your AI coach a question..."
+            }
             placeholderTextColor={colors.textSecondary}
             multiline
-            maxLength={500}
+            maxLength={planMode ? 800 : 500}
             editable={!loading}
           />
           <TouchableOpacity
@@ -376,6 +450,20 @@ export default function AIChat() {
         </View>
       </View>
 
+      <CreatePlanModal
+        visible={createPlanOpen}
+        conversationId={conversationId}
+        onClose={() => setCreatePlanOpen(false)}
+        onAdjustWithCoach={(prompt) => {
+          setCreatePlanOpen(false);
+          setInputMessage(prompt);
+        }}
+        onCreated={() => {
+          setCreatePlanOpen(false);
+          Alert.alert("Plan active", "Your workouts and recommendations now follow this plan.");
+        }}
+      />
+
       <ConversationSidebar
         open={sidebarOpen}
         conversations={conversations}
@@ -383,7 +471,7 @@ export default function AIChat() {
         loading={loadingList}
         onClose={() => setSidebarOpen(false)}
         onSelect={openConversation}
-        onNewChat={startNewChat}
+        onNewChat={() => startNewChat()}
         onDelete={handleDeleteConversation}
         onRename={handleRenameConversation}
       />
@@ -555,6 +643,52 @@ const styles = StyleSheet.create({
   },
   menuButton: {
     paddingRight: spacing.xs,
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  planButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.accentPrimary,
+    backgroundColor: "transparent",
+  },
+  planButtonActive: {
+    backgroundColor: colors.accentPrimary,
+    borderColor: colors.accentPrimary,
+  },
+  planButtonText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.accentPrimary,
+  },
+  planButtonTextActive: {
+    color: "#fff",
+  },
+  generateBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.accentPrimary,
+    borderRadius: borderRadius.md,
+    paddingVertical: spacing.md,
+    marginBottom: spacing.md,
+  },
+  generateBarText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 15,
+  },
+  inputWrapperPlan: {
+    borderColor: "rgba(255,107,53,0.45)",
   },
   modalBackdrop: {
     flex: 1,

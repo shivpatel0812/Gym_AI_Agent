@@ -50,6 +50,21 @@ export interface SessionExercise {
   notes?: string;
   is_custom?: boolean;
   ai_recommendation?: ExerciseAiRecommendation;
+  /** Intent resolved by the backend from the Active Plan. Display only. */
+  plan_context?: PlanContextInfo;
+}
+
+/** Mirrors the backend PlanContext.to_dict(); the client never recomputes it. */
+export interface PlanContextInfo {
+  goal?: string;
+  source?: string;
+  priority?: "high" | "supporting" | "normal";
+  target_rep_range?: [number, number];
+  day_type?: string;
+  day_goal?: string;
+  plan_name?: string;
+  day_name?: string;
+  notes?: string;
 }
 
 export interface WorkoutSession {

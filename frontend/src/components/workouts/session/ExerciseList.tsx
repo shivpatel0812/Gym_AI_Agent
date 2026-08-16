@@ -5,6 +5,37 @@ interface ExerciseEntry {
   exercise_name: string;
   sets: any;
   is_custom?: boolean;
+  plan_context?: {
+    goal?: string;
+    priority?: string;
+    target_rep_range?: [number, number];
+    source?: string;
+  };
+}
+
+const GOAL_LABELS: Record<string, string> = {
+  strength: "Strength Focus",
+  hypertrophy: "Hypertrophy",
+  fat_loss: "Fat Loss",
+  general: "General",
+};
+
+/**
+ * Only label an exercise when the plan actually changes how it's trained.
+ * A plan that just repeats the user's normal goal isn't worth the clutter.
+ */
+function planLabel(ctx?: ExerciseEntry["plan_context"]): string | null {
+  if (!ctx) return null;
+  const fromPlan = ctx.source === "plan_exercise" || ctx.source === "plan_day";
+  if (!fromPlan) return null;
+
+  const parts: string[] = [];
+  if (ctx.priority === "high") parts.push("High Priority");
+  if (ctx.goal && ctx.goal !== "hypertrophy") parts.push(GOAL_LABELS[ctx.goal] || ctx.goal);
+  if (!parts.length && ctx.target_rep_range) {
+    parts.push(`${ctx.target_rep_range[0]}-${ctx.target_rep_range[1]} reps`);
+  }
+  return parts.length ? parts.join(" · ") : null;
 }
 
 interface ExerciseListProps {
@@ -29,6 +60,9 @@ export default function ExerciseList({
                 </View>
               )}
             </View>
+            {planLabel(ex.plan_context) ? (
+              <Text style={styles.planLabel}>{planLabel(ex.plan_context)}</Text>
+            ) : null}
             {Array.isArray(ex.sets) ? (
               <View style={styles.setsDisplay}>
                 {ex.sets.map((set: any, setIdx: number) => (
@@ -80,6 +114,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
     color: "#111827",
+  },
+  planLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#FF6B35",
+    marginTop: 2,
   },
   customBadge: {
     backgroundColor: "#fbbf24",

@@ -4,7 +4,7 @@ Frozen dataclasses ensure immutability and testability.
 """
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -132,3 +132,25 @@ def get_goal_config(user_goal: str) -> GoalConfig:
     """
     key = resolve_goal_key(user_goal)
     return GOAL_CONFIGS[key]
+
+
+def is_known_goal(goal: str) -> bool:
+    """Whether a goal string maps to a real config rather than the fallback."""
+    if not goal:
+        return False
+    return goal in GOAL_ALIAS_MAP or goal.strip() in GOAL_ALIAS_MAP
+
+
+def resolve_goal_config(user_goal: str, focus_goal: Optional[str] = None) -> GoalConfig:
+    """
+    Resolve the config for one exercise, letting a per-exercise focus win.
+
+    A focus lets one lift train differently from the rest of the program — a
+    strength emphasis on bench while everything else stays hypertrophy.
+
+    An unrecognized focus_goal is ignored rather than silently falling back to
+    the default, which would otherwise override the user's real goal.
+    """
+    if focus_goal and is_known_goal(focus_goal):
+        return get_goal_config(focus_goal)
+    return get_goal_config(user_goal)

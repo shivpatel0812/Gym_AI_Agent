@@ -32,11 +32,12 @@ export interface StreamRequest {
   message: string;
   conversationId?: string | null;
   conversationHistory?: any[];
+  mode?: "coach" | "plan";
 }
 
 /** Starts a streaming chat request. Returns a cancel function. */
 export function streamChat(
-  { message, conversationId, conversationHistory }: StreamRequest,
+  { message, conversationId, conversationHistory, mode }: StreamRequest,
   handlers: StreamHandlers
 ): () => void {
   const xhr = new XMLHttpRequest();
@@ -107,7 +108,7 @@ export function streamChat(
     xhr.open("POST", `${API_BASE_URL}/api/ai-analysis/chat/stream`);
     xhr.setRequestHeader("Content-Type", "application/json");
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-    xhr.timeout = STREAM_TIMEOUT_MS;
+    xhr.timeout = mode === "plan" ? 120000 : STREAM_TIMEOUT_MS;
 
     xhr.onprogress = consume;
     xhr.onload = () => {
@@ -131,6 +132,7 @@ export function streamChat(
         message,
         conversation_id: conversationId || null,
         conversation_history: conversationHistory || [],
+        mode: mode || "coach",
       })
     );
   };

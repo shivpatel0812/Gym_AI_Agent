@@ -220,13 +220,16 @@ def _load_split_context(user_id: str, split_id: str) -> dict:
         .document(user_id)
         .collection("workout_sessions")
     )
+    split_name_key = str(split.get("name") or "").strip().lower()
     for session_doc in sessions_ref.stream():
         data = session_doc.to_dict()
+        session_name_key = str(data.get("split_name") or "").strip().lower()
         if (
             data.get("split_id") == split_id
             or (
                 not data.get("split_id")
-                and data.get("split_name") == split.get("name")
+                and split_name_key
+                and session_name_key == split_name_key
             )
         ):
             sessions.append(data)

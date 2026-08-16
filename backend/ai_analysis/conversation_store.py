@@ -80,6 +80,7 @@ class ConversationStore:
                 "updated_at": data.get("updated_at"),
                 "message_count": data.get("message_count", len(messages)),
                 "preview": (last or {}).get("content", "")[:120],
+                "mode": data.get("mode") or "coach",
             })
 
         conversations.sort(key=lambda c: c.get("updated_at") or "", reverse=True)
@@ -97,9 +98,12 @@ class ConversationStore:
             "created_at": data.get("created_at"),
             "updated_at": data.get("updated_at"),
             "messages": data.get("messages") or [],
+            "mode": data.get("mode") or "coach",
         }
 
-    def get_history_for_model(self, conversation_id: str) -> List[Dict[str, str]]:
+    def get_history_for_model(
+        self, conversation_id: str, limit: Optional[int] = None
+    ) -> List[Dict[str, str]]:
         """
         Recent turns in OpenAI message form.
 
@@ -118,11 +122,12 @@ class ConversationStore:
             and isinstance(m.get("content"), str)
             and m["content"].strip()
         ]
-        return history[-MAX_CONTEXT_MESSAGES:]
+        cap = limit if limit is not None else MAX_CONTEXT_MESSAGES
+        return history[-cap:]
 
     # --- writes -----------------------------------------------------------
 
-    def create_conversation(self, title: Optional[str] = None) -> str:
+    def create_conversation(self, title: Optional[str] = None, mode: str = "coach") -> str:
         """Create an empty conversation and return its id."""
         now = datetime.now().isoformat()
         doc_ref = self._collection().document()
@@ -132,6 +137,7 @@ class ConversationStore:
             "updated_at": now,
             "message_count": 0,
             "messages": [],
+            "mode": mode if mode in ("plan", "coach") else "coach",
         })
         return doc_ref.id
 
@@ -140,6 +146,7 @@ class ConversationStore:
         conversation_id: Optional[str],
         user_message: str,
         assistant_message: str,
+        mode: Optional[str] = None,
     ) -> str:
         """
         Append a user/assistant exchange, creating the conversation if needed.
@@ -170,15 +177,20 @@ class ConversationStore:
             # Backfill a title if the thread was created empty
             if not data.get("title") or data.get("title") == DEFAULT_TITLE:
                 update["title"] = derive_title(user_message)
+            if mode in ("plan", "coach"):
+                update["mode"] = mode
             doc_ref.update(update)
         else:
-            doc_ref.set({
+            payload = {
                 "title": derive_title(user_message),
                 "created_at": now,
                 "updated_at": now,
                 "message_count": len(new_messages),
                 "messages": new_messages,
-            })
+            }
+            if mode in ("plan", "coach"):
+                payload["mode"] = mode
+            doc_ref.set(payload)
 
         return doc_ref.id
 

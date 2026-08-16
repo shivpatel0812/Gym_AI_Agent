@@ -90,9 +90,16 @@ export default function ConversationSidebar({
         delayLongPress={400}
       >
         <View style={styles.rowMain}>
-          <Text style={[styles.rowTitle, isActive && styles.rowTitleActive]} numberOfLines={1}>
-            {item.title}
-          </Text>
+          <View style={styles.rowTitleRow}>
+            <Text style={[styles.rowTitle, isActive && styles.rowTitleActive]} numberOfLines={1}>
+              {item.title}
+            </Text>
+            {item.mode === "plan" ? (
+              <View style={styles.planBadge}>
+                <Text style={styles.planBadgeText}>Plan</Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={styles.rowMeta} numberOfLines={1}>
             {relativeDate(item.updated_at)}
             {item.preview ? ` · ${item.preview}` : ""}
@@ -212,11 +219,29 @@ const styles = StyleSheet.create({
   rowActive: {
     backgroundColor: colors.surface,
   },
-  rowMain: { flex: 1 },
+  rowMain: { flex: 1, minWidth: 0 },
+  rowTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
   rowTitle: {
+    flexShrink: 1,
     fontSize: 15,
     color: colors.textSecondary,
     fontWeight: "500",
+  },
+  planBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,107,53,0.18)",
+  },
+  planBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.accentPrimary,
+    letterSpacing: 0.3,
   },
   rowTitleActive: {
     color: colors.textPrimary,

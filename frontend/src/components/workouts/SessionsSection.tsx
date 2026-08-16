@@ -22,6 +22,7 @@ import {
   SessionExercise,
   WorkoutSet,
   TodaysWorkout,
+  PlanContextInfo,
 } from "./types";
 import defaultExercises, { categoryToMuscleGroup } from "../../data/defaultExercises";
 import { colors, spacing, borderRadius } from "../../theme";
@@ -66,6 +67,33 @@ interface SessionsSectionProps {
   splits: Split[];
 }
 
+const PLAN_GOAL_LABELS: Record<string, string> = {
+  strength: "Strength Focus",
+  hypertrophy: "Hypertrophy Focus",
+  fat_loss: "Fat Loss Focus",
+  general: "General Focus",
+};
+
+/**
+ * Label an exercise only when the plan genuinely changes how it's trained.
+ * Labelling every exercise would be noise, so a plain hypertrophy accessory
+ * that matches the user's normal goal stays unlabelled.
+ */
+function planExerciseLabel(ctx?: PlanContextInfo): string | null {
+  if (!ctx) return null;
+  if (ctx.source !== "plan_exercise") return null;
+
+  const parts: string[] = [];
+  if (ctx.goal && ctx.goal !== "hypertrophy") {
+    parts.push(PLAN_GOAL_LABELS[ctx.goal] || ctx.goal);
+  }
+  if (ctx.priority === "high") parts.push("High Priority");
+  if (!parts.length && ctx.target_rep_range) {
+    parts.push(`Target ${ctx.target_rep_range[0]}-${ctx.target_rep_range[1]} reps`);
+  }
+  return parts.length ? parts.join(" · ") : null;
+}
+
 export default function SessionsSection({ exercises, splits }: SessionsSectionProps) {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -92,6 +120,14 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const [saveError, setSaveError] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [todaysPlanWorkout, setTodaysPlanWorkout] = useState<TodaysWorkout | null>(null);
+  // Purpose of the session being logged, when it came from the Active Plan
+  const [activePlanDay, setActivePlanDay] = useState<{
+    day_name?: string;
+    day_goal?: string;
+    day_type?: string;
+    focus?: string;
+    plan_name?: string;
+  } | null>(null);
 
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRecApplyRef = useRef<Set<string>>(new Set());
@@ -139,14 +175,26 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     }
   }, []);
 
-  const fetchTodaysPlan = useCallback(async () => {
+  // The Active Plan is the source of truth for today's workout. Falls back to
+  // the legacy structural plan so users without a goal plan are unaffected.
+  const fetchTodaysPlanData = useCallback(async () => {
+    try {
+      const res = await apiClient.get("/api/training-plan/today");
+      if (res.data?.status && res.data.status !== "no_plan") return res.data;
+    } catch {
+      // fall through to the legacy endpoint
+    }
     try {
       const res = await apiClient.get("/api/workout-plan/today");
-      setTodaysPlanWorkout(res.data);
+      return res.data;
     } catch {
-      setTodaysPlanWorkout(null);
+      return null;
     }
   }, []);
+
+  const fetchTodaysPlan = useCallback(async () => {
+    setTodaysPlanWorkout(await fetchTodaysPlanData());
+  }, [fetchTodaysPlanData]);
 
   useEffect(() => {
     fetchSessions();
@@ -252,8 +300,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     exerciseName: string,
     positionInWorkout: number,
     planTargetSets?: number,
-    planTargetReps?: number,
-    planNotes?: string
+    planTargetReps?: number
   ) => {
     setAiRecommendationLoading((prev) => ({ ...prev, [exerciseId]: true }));
     try {
@@ -267,11 +314,12 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         {
           exercise_name: exerciseName,
           split_name: formDataRef.current.split_name || undefined,
+          // Lets the backend resolve which plan day applies
+          split_day: formDataRef.current.split_day || undefined,
           position_in_workout: positionInWorkout,
           current_workout_exercises: currentExercises,
           plan_target_sets: planTargetSets,
           plan_target_reps: planTargetReps,
-          plan_notes: planNotes,
           exclude_session_id: editingSessionIdRef.current || undefined,
         }
       );
@@ -291,6 +339,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                 ? {
                     ...ex,
                     ai_recommendation: stored,
+                    ...(rec?.plan_context ? { plan_context: rec.plan_context } : {}),
                     ...(shouldApplySets ? { sets: mapRecSets(rec) } : {}),
                   }
                 : ex
@@ -412,6 +461,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
 
   const resetForm = () => {
     setFormData(emptySessionForm());
+    setActivePlanDay(null);
     setEditingSessionId(null);
     setShowForm(false);
     setShowExercisePicker(false);
@@ -495,9 +545,12 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
 
   const handleStartPlan = async () => {
     try {
-      const res = await apiClient.get("/api/workout-plan/today");
-      const todayData = res.data;
-      if (todayData.status !== "workout_day" || !todayData.exercises) return;
+      const todayData = await fetchTodaysPlanData();
+      if (!todayData || todayData.status !== "workout_day" || !todayData.exercises) return;
+      // Respect the plan's exercise order. The Current Split is never reordered.
+      todayData.exercises = [...todayData.exercises].sort(
+        (a: any, b: any) => (a.order ?? 0) - (b.order ?? 0)
+      );
       const lastResults = await Promise.all(
         todayData.exercises.map(async (ex: any) => {
           try {
@@ -529,6 +582,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         return {
           exercise_id: ex.exercise_id,
           exercise_name: ex.exercise_name,
+          // Resolved server-side; carried through for display only
+          plan_context: ex.plan_context,
           sets:
             lastSets ||
             Array.from({ length: ex.sets || 3 }, (_, i) => ({
@@ -546,20 +601,22 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         split_day: todayData.day_name || "",
         exercises: planExercises,
       });
+      setActivePlanDay({
+        day_name: todayData.day_name,
+        day_goal: todayData.day_goal,
+        day_type: todayData.day_type,
+        focus: todayData.focus,
+        plan_name: todayData.plan_name,
+      });
       setShowForm(true);
       planExercises.forEach((ex: any, idx: number) => {
         if (isCardioExercise(ex) || String(ex.exercise_id || "").startsWith("default-cardio")) {
           return;
         }
         const planEx = todayData.exercises[idx];
-        fetchAiRecommendation(
-          ex.exercise_id,
-          ex.exercise_name,
-          idx,
-          planEx?.sets,
-          planEx?.reps,
-          planEx?.notes
-        );
+        // Only sets/reps are passed as overrides. Goal, priority, rep range and
+        // day type are resolved from the plan on the backend.
+        fetchAiRecommendation(ex.exercise_id, ex.exercise_name, idx, planEx?.sets, planEx?.reps);
       });
     } catch (error) {
       console.error("Error loading plan workout:", error);
@@ -674,6 +731,22 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
           contentContainerStyle={styles.formPad}
           keyboardShouldPersistTaps="handled"
         >
+          {activePlanDay && (activePlanDay.day_goal || activePlanDay.day_type) ? (
+            <View style={styles.planBanner}>
+              <MaterialCommunityIcons name="target" size={14} color={colors.accentPrimary} />
+              <Text style={styles.planBannerText}>
+                {[activePlanDay.day_type, activePlanDay.day_goal]
+                  .filter(Boolean)
+                  .map((part, i) =>
+                    i === 0 && part
+                      ? part.charAt(0).toUpperCase() + part.slice(1)
+                      : part
+                  )
+                  .join(" · ")}
+              </Text>
+            </View>
+          ) : null}
+
           <View style={styles.formHeader}>
             <TouchableOpacity onPress={handleCancel} style={styles.backBtn}>
               <MaterialCommunityIcons name="arrow-left" size={20} color={colors.textSecondary} />
@@ -1002,6 +1075,11 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                     <Text style={styles.exMeta}>
                       {categoryLabel} · {roleLabel}
                     </Text>
+                    {planExerciseLabel(ex.plan_context) ? (
+                      <Text style={styles.exPlanLabel}>
+                        {planExerciseLabel(ex.plan_context)}
+                      </Text>
+                    ) : null}
                     {lastLine && isCollapsed ? (
                       <Text style={styles.lastOrangeHeader}>
                         Last {lastData?.date ? formatShortDate(lastData.date) : ""}: {lastLine}
@@ -1525,6 +1603,28 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   todayTitle: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  exPlanLabel: {
+    color: colors.accentPrimary,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  planBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,107,53,0.12)",
+    marginBottom: 10,
+  },
+  planBannerText: {
+    color: colors.accentPrimary,
+    fontSize: 12,
+    fontWeight: "700",
+  },
   startPlan: {
     backgroundColor: colors.accentPrimary,
     borderRadius: 12,

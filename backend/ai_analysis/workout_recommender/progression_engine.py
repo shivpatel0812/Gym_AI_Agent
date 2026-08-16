@@ -10,7 +10,7 @@ from enum import Enum
 from typing import List, Dict, Optional, Any
 import math
 
-from .goal_configs import get_goal_config, GoalConfig, RepRangeConfig
+from .goal_configs import get_goal_config, resolve_goal_config, GoalConfig, RepRangeConfig
 from .exercise_metadata import (
     get_exercise_metadata,
     resolve_exercise_metadata,
@@ -93,6 +93,55 @@ class ProgressionEngine:
         exercise_record: Optional[Dict] = None,
         top_lifts: Optional[Dict[str, Any]] = None,
         stale_last_session: Optional[Dict] = None,
+        focus_goal: Optional[str] = None,
+        rep_range_override: Optional[tuple] = None,
+    ) -> ProgressionResult:
+        """
+        Compute a recommendation, then record whether a per-exercise focus
+        changed the goal config that applied.
+
+        Wraps the computation rather than threading the flag through each of
+        its return paths.
+        """
+        result = self._compute_recommendation(
+            rep_range_override=rep_range_override,
+            exercise_id=exercise_id,
+            exercise_name=exercise_name,
+            user_goal=user_goal,
+            recent_sessions=recent_sessions,
+            num_sets=num_sets,
+            day_intensity=day_intensity,
+            heavy_day_weight=heavy_day_weight,
+            exercise_record=exercise_record,
+            top_lifts=top_lifts,
+            stale_last_session=stale_last_session,
+            focus_goal=focus_goal,
+        )
+
+        base_config = get_goal_config(user_goal)
+        applied_config = resolve_goal_config(user_goal, focus_goal)
+        if applied_config.name != base_config.name:
+            result.reasoning_context = {
+                **(result.reasoning_context or {}),
+                "focus_goal": applied_config.name,
+                "base_goal": base_config.name,
+            }
+        return result
+
+    def _compute_recommendation(
+        self,
+        exercise_id: str,
+        exercise_name: str,
+        user_goal: str,
+        recent_sessions: List[Dict],
+        num_sets: int = 3,
+        day_intensity: Optional[str] = None,
+        heavy_day_weight: Optional[float] = None,
+        exercise_record: Optional[Dict] = None,
+        top_lifts: Optional[Dict[str, Any]] = None,
+        stale_last_session: Optional[Dict] = None,
+        focus_goal: Optional[str] = None,
+        rep_range_override: Optional[tuple] = None,
     ) -> ProgressionResult:
         """
         Compute a deterministic recommendation for the next workout.
@@ -109,14 +158,22 @@ class ProgressionEngine:
             exercise_record: Optional dict with exercise model fields
                 (muscle_group, type, name) for custom exercise resolution
             top_lifts: Optional working weights for major compound lifts
+            focus_goal: Optional per-exercise goal override (e.g. "strength" on
+                bench while the rest of the program stays hypertrophy). Ignored
+                if unrecognized.
 
         Returns:
             ProgressionResult with sets, decision, confidence, and reasoning_context
         """
         # Resolve metadata: catalog → exercise record → name inference → default
         metadata = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
-        goal_config = get_goal_config(user_goal)
-        rep_range = self._get_rep_range(metadata, goal_config)
+        goal_config = resolve_goal_config(user_goal, focus_goal)
+        # An explicit plan rep-range beats the goal config's default range
+        rep_range = (
+            RepRangeConfig(low=rep_range_override[0], high=rep_range_override[1])
+            if rep_range_override
+            else self._get_rep_range(metadata, goal_config)
+        )
         increment = metadata.min_increment_lb
 
         # 1. Cardio?

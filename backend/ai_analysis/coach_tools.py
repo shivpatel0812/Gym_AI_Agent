@@ -222,6 +222,31 @@ class CoachToolbox:
             "logged_a_session_today": already_logged,
         }
 
+    def get_current_split(self) -> Dict[str, Any]:
+        """The user's current split, reconstructed from logged sessions when needed."""
+        try:
+            from routers.training_plan import _load_current_split
+            context = _load_current_split(self.user_id, None)
+        except Exception as e:
+            return {"error": f"Could not load split: {e}"}
+
+        days = []
+        for day in context.get("days") or []:
+            days.append({
+                "day_name": day.get("day_name"),
+                "focus": day.get("focus"),
+                "exercises": [
+                    ex.get("exercise_name") or ex.get("name")
+                    for ex in (day.get("exercises") or [])
+                    if ex.get("exercise_name") or ex.get("name")
+                ],
+            })
+        return {
+            "split_id": context.get("split_id"),
+            "split_name": context.get("split_name"),
+            "days": days,
+        }
+
     def get_nutrition_log(self, days: int = 7) -> Dict[str, Any]:
         """Day-by-day macro totals."""
         rows = self._fetch_range("macros", days)
@@ -298,6 +323,7 @@ class CoachToolbox:
             "get_recent_sessions": self.get_recent_sessions,
             "get_exercise_history": self.get_exercise_history,
             "get_todays_plan": self.get_todays_plan,
+            "get_current_split": self.get_current_split,
             "get_nutrition_log": self.get_nutrition_log,
             "get_wellness_log": self.get_wellness_log,
             "get_personal_records": self.get_personal_records,
@@ -368,6 +394,17 @@ TOOL_SCHEMAS = [
                 "Get today's scheduled workout from the user's active plan, including the "
                 "exercises and target sets/reps, or whether today is a rest day. Use whenever "
                 "the user asks what they should do today or what is coming up next."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_split",
+            "description": (
+                "Get the user's current workout split and the exercises they actually train "
+                "on each day. Use in plan interviews to ground follow-ups in their routine."
             ),
             "parameters": {"type": "object", "properties": {}},
         },

@@ -22,6 +22,8 @@ from .simple_progression import SimpleProgression
 from .exercise_order import ExerciseOrder
 from .progression_engine import ProgressionEngine
 from .reasoning_generator import ReasoningGenerator
+from .training_focus import TrainingFocusStore
+from .plan_context import PlanContextResolver, PlanContext
 
 
 class WorkoutRecommender:
@@ -60,6 +62,10 @@ class WorkoutRecommender:
         self.reasoning_generator = ReasoningGenerator(
             openai_client=self.client, model=self.model
         )
+        # Per-exercise goal overrides (e.g. strength emphasis on bench)
+        self.focus_store = TrainingFocusStore(db, user_id)
+        # Single place that resolves Active Plan intent for an exercise
+        self.plan_resolver = PlanContextResolver(db, user_id, self.focus_store)
 
     def _normalize_exercise_sets(self, ex: Dict) -> List[Dict]:
         sets = ex.get("sets")
@@ -234,11 +240,29 @@ class WorkoutRecommender:
         except Exception:
             pass  # Not critical — will fall back to name inference
 
+        # Resolve Active Plan intent server-side, so recommendations follow the
+        # plan whether or not the client passed any plan context.
+        plan_context = self.plan_resolver.resolve(
+            exercise_id=exercise_id,
+            exercise_name=exercise_name,
+            split_day=split_day,
+            profile_goal=user_goal,
+        )
+
+        # An explicit request value always wins over the resolved plan; the
+        # plan fills in whatever the caller left unspecified.
+        if plan_target_sets is None and plan_context.target_sets:
+            num_sets = plan_context.target_sets
+        if day_intensity is None:
+            day_intensity = plan_context.day_intensity
+
         # Use deterministic progression engine for all cases
         progression_result = self.progression_engine.compute_recommendation(
             exercise_id=exercise_id,
             exercise_name=exercise_name,
             user_goal=user_goal,
+            focus_goal=plan_context.goal,
+            rep_range_override=plan_context.target_rep_range,
             recent_sessions=recent_exercise_data,
             num_sets=num_sets,
             day_intensity=day_intensity,
@@ -295,6 +319,11 @@ class WorkoutRecommender:
         # Flag implausible data in response
         if progression_result.reasoning_context.get("has_implausible_data"):
             recommendation["has_implausible_data"] = True
+
+        # Surface the resolved intent so the UI can explain why the target
+        # rep range or intensity looks the way it does
+        if plan_context.source != "default":
+            recommendation["plan_context"] = plan_context.to_dict()
 
         return {
             "status": "success",
