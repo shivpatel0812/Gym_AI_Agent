@@ -4,18 +4,19 @@ Generates personalized fitness insights using OpenAI API.
 """
 
 import json
-import time
-from typing import Dict, List, Any, Optional
+from datetime import datetime
+from typing import Dict, List, Any, Iterator, Optional
 from openai import OpenAI
 
-# #region agent log (debug demo - remove after learning)
-def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = "demo"):
-    try:
-        line = json.dumps({"id": f"log_{int(time.time()*1000)}", "timestamp": int(time.time() * 1000), "location": location, "message": message, "data": data, "hypothesisId": hypothesis_id}) + "\n"
-        open("/Users/shivpatel/gymaiAgent/.cursor/debug.log", "a").write(line)
-    except Exception:
-        pass
-# #endregion
+from .coach_tools import CoachToolbox, TOOL_SCHEMAS
+
+# Tool-loop budget. Rounds bound the request/response cycles; calls bound the
+# total lookups, so a confused model can't spend the whole budget on one tool.
+MAX_TOOL_ROUNDS = 3
+MAX_TOOL_CALLS = 6
+
+# How many prior chat turns to replay back to the model
+MAX_HISTORY_MESSAGES = 20
 
 
 def clean_for_json(obj: Any) -> Any:
@@ -167,7 +168,8 @@ Provide a structured analysis covering these sections:
 
 GUIDELINES:
 - Be specific and personal (use actual numbers from the data)
-- Be realistic about constraints (busy student schedule)
+- Be realistic about the constraints listed in USER PROFILE above
+- Metrics that are absent were not logged — say so rather than assuming a value
 - Prioritize sustainability over optimization
 - Avoid generic advice
 - Use a supportive but direct coaching tone
@@ -207,9 +209,6 @@ Format your response with clear section headers."""
         Returns:
             Dict containing analysis status, text, tokens used, etc.
         """
-        # #region agent log
-        _debug_log("ai_coach.py:generate_general_analysis", "generate_general_analysis called", {"summary_keys": list(summary.keys()) if isinstance(summary, dict) else "not_dict", "has_previous": previous_analyses is not None and len(previous_analyses) > 0}, "A")
-        # #endregion
         if previous_analyses:
             previous_analyses = [str(analysis) for analysis in previous_analyses if analysis and str(analysis).strip()]
         
@@ -260,9 +259,6 @@ Format your response with clear section headers."""
 
             analysis_text = response.choices[0].message.content
 
-            # #region agent log
-            _debug_log("ai_coach.py:generate_general_analysis", "generate_general_analysis success", {"status": "success", "tokens_used": response.usage.total_tokens}, "A")
-            # #endregion
             return {
                 "status": "success",
                 "analysis": analysis_text,
@@ -272,9 +268,6 @@ Format your response with clear section headers."""
             }
 
         except Exception as e:
-            # #region agent log
-            _debug_log("ai_coach.py:generate_general_analysis", "generate_general_analysis error", {"status": "error", "error": str(e)}, "A")
-            # #endregion
             return {
                 "status": "error",
                 "error": str(e)
@@ -282,81 +275,328 @@ Format your response with clear section headers."""
 
     def _build_chatbot_context(self, summary: Dict[str, Any]) -> str:
         """Build condensed context for chatbot."""
-        training = summary.get('training', {})
-        nutrition = summary.get('nutrition', {})
-        recovery = summary.get('recovery', {})
-        lifestyle = summary.get('lifestyle', {})
+        training = summary.get('training') or {}
+        nutrition = summary.get('nutrition') or {}
+        recovery = summary.get('recovery') or {}
+        lifestyle = summary.get('lifestyle') or {}
+
+        def val(source: Dict[str, Any], key: str, template: str) -> Optional[str]:
+            """Render a metric, or None when the user has no data for it."""
+            value = source.get(key)
+            return template.format(value) if value is not None else None
+
+        def line(label: str, *parts: Optional[str]) -> str:
+            """Join the parts that have data, or mark the whole line as unlogged."""
+            present = [p for p in parts if p]
+            return f"{label}: {', '.join(present)}" if present else f"{label}: not logged"
 
         return f"""USER PROFILE:
-{json.dumps(self.user_profile, indent=2)}
+{json.dumps(self.user_profile, indent=2, default=str)}
 
-RECENT DATA (monthly summary):
-Training: {training.get('sessions_per_week', 0)} sessions/week, {training.get('progression', 'stable')} progression
-Nutrition: ~{nutrition.get('avg_calories', 0)} cal, ~{nutrition.get('avg_protein', 0)}g protein
-Recovery: {recovery.get('avg_sleep_hours', 0)}h sleep (trend: {recovery.get('sleep_trend', 'stable')}), fatigue {recovery.get('avg_fatigue', 0)}/10
-Lifestyle: Stress {lifestyle.get('avg_stress', 0)}/10, {lifestyle.get('high_stress_days', 0)} high-stress days
+RECENT DATA ({summary.get('analysis_period', 'monthly summary')}):
+{line('Training',
+      val(training, 'sessions_per_week', '{} sessions/week'),
+      val(training, 'progression', '{} progression'))}
+{line('Nutrition',
+      val(nutrition, 'avg_calories', '~{} cal/day'),
+      val(nutrition, 'avg_protein', '~{}g protein/day'))}
+{line('Recovery',
+      val(recovery, 'avg_sleep_hours', '{}h sleep'),
+      val(recovery, 'sleep_trend', 'sleep trend {}'),
+      val(recovery, 'avg_fatigue', 'fatigue {}/10'))}
+{line('Lifestyle',
+      val(lifestyle, 'avg_stress', 'stress {}/10'),
+      val(lifestyle, 'high_stress_days', '{} high-stress days'))}
 """
 
-    def chat(self, user_message: str, summary: Dict[str, Any], conversation_history: Optional[List[Dict]] = None) -> Dict[str, Any]:
-        """
-        Handle chatbot interactions with context awareness.
-
-        Args:
-            user_message: User's question/message
-            summary: Current fitness data summary
-            conversation_history: Previous conversation messages
-
-        Returns:
-            Dict containing response status, message, tokens used, and updated history
-        """
-        if conversation_history is None:
-            conversation_history = []
-
-        # #region agent log
-        _debug_log("ai_coach.py:chat", "chat called", {"message_len": len(user_message), "history_len": len(conversation_history)}, "B")
-        # #endregion
+    def _build_chat_messages(
+        self,
+        user_message: str,
+        summary: Dict[str, Any],
+        conversation_history: Optional[List[Dict]],
+        toolbox: Optional[CoachToolbox],
+    ) -> List[Dict[str, Any]]:
+        """Assemble the message list shared by the buffered and streaming paths."""
         context = self._build_chatbot_context(summary)
+        today = datetime.now()
 
         system_message = f"""You are a personal fitness coach who knows this user's training history and current status.
+
+Today is {today.strftime('%A, %B %d, %Y')}.
 
 {context}
 
 Provide specific, personalized advice based on their actual data. Be conversational but precise.
 Reference their actual numbers when relevant (sleep hours, training frequency, etc.).
-Consider their constraints (busy student schedule) in your recommendations."""
+Consider the constraints listed in their profile above in your recommendations.
+Where a metric reads "not logged", say you don't have that data instead of guessing at a value."""
 
-        messages = [{"role": "system", "content": system_message}]
-        messages.extend(conversation_history)
+        if toolbox is not None:
+            system_message += """
+
+The summary above is headline averages only. When the user asks about specific
+workouts, exercises, dates, personal bests, or what to train today, call the
+tools to look up the actual records rather than answering from the averages or
+guessing. If a tool returns no data, say so plainly."""
+
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_message}]
+        messages.extend(self._sanitize_history(conversation_history or []))
         messages.append({"role": "user", "content": user_message})
+        return messages
+
+    def _request_kwargs(
+        self, messages: List[Dict], toolbox: Optional[CoachToolbox],
+        round_index: int, tool_call_count: int,
+    ) -> Dict[str, Any]:
+        """Build the API kwargs for one round, applying the tool budget."""
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 800,
+        }
+        # Withhold tools on the last round, and once the call budget is spent,
+        # so a tool-happy model still ends with a text answer
+        budget_left = round_index < MAX_TOOL_ROUNDS and tool_call_count < MAX_TOOL_CALLS
+        if toolbox is not None and budget_left:
+            kwargs["tools"] = TOOL_SCHEMAS
+        return kwargs
+
+    def chat(
+        self,
+        user_message: str,
+        summary: Dict[str, Any],
+        conversation_history: Optional[List[Dict]] = None,
+        toolbox: Optional[CoachToolbox] = None,
+    ) -> Dict[str, Any]:
+        """
+        Handle chatbot interactions with context awareness.
+
+        Args:
+            user_message: User's question/message
+            summary: Rolling fitness data summary (headline numbers)
+            conversation_history: Previous conversation messages
+            toolbox: Optional CoachToolbox. When supplied, the model can pull
+                session-level records on demand instead of being limited to
+                the aggregates in the system prompt.
+
+        Returns:
+            Dict containing response status, message, tokens used, and updated history
+        """
+        # Sanitize once and hand the same clean list back to the client, so its
+        # stored history stays valid and bounded instead of accumulating junk
+        clean_history = self._sanitize_history(conversation_history or [])
+        messages = self._build_chat_messages(
+            user_message, summary, clean_history, toolbox
+        )
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=500
-            )
+            total_tokens = 0
+            tools_used: List[str] = []
 
-            assistant_message = response.choices[0].message.content
+            for round_index in range(MAX_TOOL_ROUNDS + 1):
+                kwargs = self._request_kwargs(messages, toolbox, round_index, len(tools_used))
+                response = self.client.chat.completions.create(**kwargs)
+                total_tokens += getattr(response.usage, "total_tokens", 0) or 0
+                choice = response.choices[0].message
+                tool_calls = getattr(choice, "tool_calls", None)
 
-            # #region agent log
-            _debug_log("ai_coach.py:chat", "chat success", {"status": "success", "tokens_used": response.usage.total_tokens}, "B")
-            # #endregion
+                if not tool_calls:
+                    assistant_message = choice.content or ""
+                    return {
+                        "status": "success",
+                        "response": assistant_message,
+                        "tokens_used": total_tokens,
+                        "tools_used": tools_used,
+                        # Only user/assistant turns go back to the client — tool
+                        # traffic stays server-side so replayed history is valid
+                        "conversation_history": clean_history + [
+                            {"role": "user", "content": user_message},
+                            {"role": "assistant", "content": assistant_message},
+                        ],
+                    }
+
+                messages.append({
+                    "role": "assistant",
+                    "content": choice.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in tool_calls
+                    ],
+                })
+
+                for tool_call in tool_calls:
+                    name = tool_call.function.name
+                    try:
+                        args = json.loads(tool_call.function.arguments or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    result = toolbox.dispatch(name, args) if toolbox else {"error": "Tools unavailable"}
+                    tools_used.append(name)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps(result, default=str),
+                    })
+
+            # Unreachable in practice: the last round is sent without tools, so
+            # the model has nothing to call and must answer in text.
             return {
-                "status": "success",
-                "response": assistant_message,
-                "tokens_used": response.usage.total_tokens,
-                "conversation_history": conversation_history + [
-                    {"role": "user", "content": user_message},
-                    {"role": "assistant", "content": assistant_message}
-                ]
+                "status": "error",
+                "error": "Coach could not complete a response within the tool call limit",
             }
 
         except Exception as e:
-            # #region agent log
-            _debug_log("ai_coach.py:chat", "chat error", {"status": "error", "error": str(e)}, "B")
-            # #endregion
             return {
                 "status": "error",
                 "error": str(e)
             }
+
+    def chat_stream(
+        self,
+        user_message: str,
+        summary: Dict[str, Any],
+        conversation_history: Optional[List[Dict]] = None,
+        toolbox: Optional[CoachToolbox] = None,
+    ) -> Iterator[Dict[str, Any]]:
+        """
+        Streaming variant of chat(). Yields event dicts for the SSE endpoint.
+
+        Event types:
+            {"type": "tool",  "name": str}   a lookup is running
+            {"type": "delta", "text": str}   a chunk of the answer
+            {"type": "done",  ...}           final totals and history
+            {"type": "error", "error": str}  failed before/while answering
+        """
+        clean_history = self._sanitize_history(conversation_history or [])
+        messages = self._build_chat_messages(
+            user_message, summary, clean_history, toolbox
+        )
+
+        try:
+            total_tokens = 0
+            tools_used: List[str] = []
+
+            for round_index in range(MAX_TOOL_ROUNDS + 1):
+                kwargs = self._request_kwargs(messages, toolbox, round_index, len(tools_used))
+                kwargs["stream"] = True
+                # Usage is omitted from streamed responses unless asked for
+                kwargs["stream_options"] = {"include_usage": True}
+
+                content_parts: List[str] = []
+                # Tool call fragments arrive split across chunks and must be
+                # reassembled per index before they can be parsed
+                pending_calls: Dict[int, Dict[str, str]] = {}
+
+                for chunk in self.client.chat.completions.create(**kwargs):
+                    usage = getattr(chunk, "usage", None)
+                    if usage is not None:
+                        total_tokens += getattr(usage, "total_tokens", 0) or 0
+
+                    # The usage-only chunk carries no choices
+                    if not chunk.choices:
+                        continue
+
+                    delta = chunk.choices[0].delta
+                    if delta is None:
+                        continue
+
+                    if delta.content:
+                        content_parts.append(delta.content)
+                        yield {"type": "delta", "text": delta.content}
+
+                    for tc in (getattr(delta, "tool_calls", None) or []):
+                        slot = pending_calls.setdefault(
+                            tc.index, {"id": "", "name": "", "arguments": ""}
+                        )
+                        if tc.id:
+                            slot["id"] = tc.id
+                        function = getattr(tc, "function", None)
+                        if function is not None:
+                            if function.name:
+                                slot["name"] += function.name
+                            if function.arguments:
+                                slot["arguments"] += function.arguments
+
+                if not pending_calls:
+                    assistant_message = "".join(content_parts)
+                    yield {
+                        "type": "done",
+                        "response": assistant_message,
+                        "tokens_used": total_tokens,
+                        "tools_used": tools_used,
+                        "conversation_history": clean_history + [
+                            {"role": "user", "content": user_message},
+                            {"role": "assistant", "content": assistant_message},
+                        ],
+                    }
+                    return
+
+                ordered = [pending_calls[i] for i in sorted(pending_calls)]
+                messages.append({
+                    "role": "assistant",
+                    "content": "".join(content_parts) or None,
+                    "tool_calls": [
+                        {
+                            "id": call["id"],
+                            "type": "function",
+                            "function": {
+                                "name": call["name"],
+                                "arguments": call["arguments"] or "{}",
+                            },
+                        }
+                        for call in ordered
+                    ],
+                })
+
+                for call in ordered:
+                    yield {"type": "tool", "name": call["name"]}
+                    try:
+                        args = json.loads(call["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    result = (
+                        toolbox.dispatch(call["name"], args)
+                        if toolbox else {"error": "Tools unavailable"}
+                    )
+                    tools_used.append(call["name"])
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": json.dumps(result, default=str),
+                    })
+
+            # Unreachable in practice: the last round is sent without tools.
+            yield {
+                "type": "error",
+                "error": "Coach could not complete a response within the tool call limit",
+            }
+
+        except Exception as e:
+            yield {"type": "error", "error": str(e)}
+
+    @staticmethod
+    def _sanitize_history(history: List[Dict]) -> List[Dict]:
+        """
+        Keep only well-formed user/assistant turns from client-supplied history.
+
+        The client round-trips this value, so it can't be trusted to be
+        complete: a stray tool_calls entry without its matching tool result
+        would make the next request invalid.
+        """
+        clean = []
+        for message in history or []:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            content = message.get("content")
+            if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+                clean.append({"role": role, "content": content})
+        return clean[-MAX_HISTORY_MESSAGES:]

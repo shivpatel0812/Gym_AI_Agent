@@ -6,6 +6,8 @@ import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "./src/firebase";
 import Login from "./src/components/Login";
 import Dashboard from "./src/components/Dashboard";
+import Home from "./src/components/home/Home";
+import AIHub from "./src/components/aihub";
 import Workouts from "./src/components/workouts";
 import PhysicalActivity from "./src/components/PhysicalActivity";
 import Nutrition from "./src/components/Nutrition";
@@ -22,6 +24,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Platform,
+  StatusBar,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import * as SplashScreen from "expo-splash-screen";
@@ -78,6 +81,16 @@ function MoreStackScreen() {
         component={Calendar}
         options={{ title: "Calendar" }}
       />
+      <MoreStack.Screen
+        name="Activity"
+        component={PhysicalActivity}
+        options={{ headerShown: false, title: "Activity" }}
+      />
+      <MoreStack.Screen
+        name="Wellness"
+        component={Wellness}
+        options={{ headerShown: false, title: "Wellness" }}
+      />
     </MoreStack.Navigator>
   );
 }
@@ -88,14 +101,14 @@ function MainTabs({ onLogout }: { onLogout: () => void }) {
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
           let iconName: keyof typeof MaterialCommunityIcons.glyphMap;
-          if (route.name === "Workouts") {
+          if (route.name === "Home") {
+            iconName = focused ? "home" : "home-outline";
+          } else if (route.name === "AIHub") {
+            iconName = focused ? "robot" : "robot-outline";
+          } else if (route.name === "Workouts") {
             iconName = focused ? "dumbbell" : "dumbbell";
-          } else if (route.name === "Activity") {
-            iconName = focused ? "run-fast" : "run-fast";
           } else if (route.name === "Nutrition") {
             iconName = focused ? "food-apple" : "food-apple-outline";
-          } else if (route.name === "Wellness") {
-            iconName = focused ? "heart-pulse" : "heart-pulse";
           } else {
             iconName = focused ? "dots-horizontal" : "dots-horizontal";
           }
@@ -106,9 +119,9 @@ function MainTabs({ onLogout }: { onLogout: () => void }) {
         tabBarActiveTintColor: colors.accentPrimary,
         tabBarInactiveTintColor: colors.textSecondary,
         tabBarStyle: {
-          backgroundColor: colors.cardBackground,
-          borderTopWidth: 1,
-          borderTopColor: colors.border,
+          backgroundColor: colors.tabBar,
+          borderTopWidth: 0,
+          elevation: 0,
           height: Platform.OS === "ios" ? 82 : 60,
           paddingBottom: Platform.OS === "ios" ? 20 : 6,
           paddingTop: 6,
@@ -138,25 +151,25 @@ function MainTabs({ onLogout }: { onLogout: () => void }) {
         ),
       })}
     >
-      <Tab.Screen 
-        name="Workouts" 
+      <Tab.Screen
+        name="Home"
+        component={Home}
+        options={{ headerShown: false }}
+      />
+      <Tab.Screen
+        name="Workouts"
         component={Workouts}
         options={{ headerShown: false }}
       />
-      <Tab.Screen 
-        name="Activity" 
-        component={PhysicalActivity}
-        options={{ headerShown: false }}
-      />
-      <Tab.Screen 
-        name="Nutrition" 
+      <Tab.Screen
+        name="Nutrition"
         component={Nutrition}
         options={{ headerShown: false }}
       />
-      <Tab.Screen 
-        name="Wellness" 
-        component={Wellness}
-        options={{ headerShown: false }}
+      <Tab.Screen
+        name="AIHub"
+        component={AIHub}
+        options={{ headerShown: false, tabBarLabel: "AI" }}
       />
       <Tab.Screen
         name="More"
@@ -201,6 +214,8 @@ export default function App() {
   }
 
   return (
+    <>
+    <StatusBar barStyle="light-content" backgroundColor={colors.background} />
     <NavigationContainer
       theme={{
         dark: true,
@@ -224,6 +239,7 @@ export default function App() {
         )}
       </Stack.Navigator>
     </NavigationContainer>
+    </>
   );
 }
 

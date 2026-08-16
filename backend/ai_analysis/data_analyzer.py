@@ -3,11 +3,59 @@ Fitness Data Analyzer - Backend Integration
 Fetches data from Firestore and builds rolling summaries for AI analysis.
 """
 
-from datetime import datetime
-from typing import Dict, List, Any
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional
 from collections import defaultdict
+import re
 import statistics
 import calendar
+
+from .workout_recommender.exercise_metadata import resolve_exercise_metadata
+
+# Fallback when the user has not set a preferred workout frequency.
+DEFAULT_SESSIONS_PER_WEEK = 4.5
+
+
+def numeric_values(records: List[Dict], field: str) -> List[float]:
+    """
+    Collect numeric values for a field across records.
+
+    Keeps legitimate zeros (a logged fatigue of 0 is data, not a missing value)
+    and drops None, missing keys, booleans, and non-numeric entries.
+    """
+    values = []
+    for record in records:
+        value = record.get(field)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            values.append(float(value))
+    return values
+
+
+def parse_sessions_per_week(frequency: Optional[str]) -> Optional[float]:
+    """
+    Parse a preferred-frequency string into a target sessions-per-week number.
+
+    Handles both the web format ("2-3x/week", "5+ times/week") and the mobile
+    format ("2_3_days", "daily"). Ranges resolve to their midpoint.
+    """
+    if not frequency:
+        return None
+
+    text = str(frequency).strip().lower()
+    if not text:
+        return None
+
+    if "daily" in text or "every day" in text:
+        return 7.0
+
+    numbers = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", text)]
+    numbers = [n for n in numbers if 0 < n <= 7]
+    if not numbers:
+        return None
+
+    return round(statistics.mean(numbers), 1)
 
 
 class FitnessDataAnalyzer:
@@ -23,6 +71,33 @@ class FitnessDataAnalyzer:
         """
         self.db = db
         self.user_id = user_id
+        self._target_sessions_per_week: Optional[float] = None
+
+    def _get_target_sessions_per_week(self) -> Optional[float]:
+        """
+        Read the user's preferred training frequency from their profile.
+
+        Cached per instance. Returns None when the profile is missing or the
+        frequency is unset, so callers can distinguish "no target" from a guess.
+        """
+        if self._target_sessions_per_week is not None:
+            return self._target_sessions_per_week
+
+        try:
+            profile_doc = (
+                self.db.collection("users").document(self.user_id)
+                .collection("user_profile").document("profile").get()
+            )
+            if profile_doc.exists:
+                profile = profile_doc.to_dict() or {}
+                target = parse_sessions_per_week(profile.get("preferred_workout_frequency"))
+                if target:
+                    self._target_sessions_per_week = target
+                    return target
+        except Exception as e:
+            print(f"Warning: could not read preferred workout frequency: {e}")
+
+        return None
 
     def _get_month_date_range(self, year: int, month: int) -> tuple:
         """Get start and end dates for a given month (year, month)."""
@@ -44,11 +119,15 @@ class FitnessDataAnalyzer:
     def build_training_summary(self, year: int, month: int) -> Dict[str, Any]:
         """Build training metrics summary for a specific month."""
         start_date, end_date = self._get_month_date_range(year, month)
-        days_in_month = self._get_days_in_month(year, month)
+        label = f"{calendar.month_name[month]} {year}"
+        return self._training_summary(start_date, end_date, label, self._get_days_in_month(year, month))
+
+    def _training_summary(self, start_date: str, end_date: str, label: str, span_days: int) -> Dict[str, Any]:
+        """Build training metrics for an arbitrary date range."""
         workouts = self._fetch_collection_data('workout_sessions', start_date, end_date)
 
         total_sessions = len(workouts)
-        sessions_per_week = (total_sessions / days_in_month) * 7 if days_in_month > 0 else 0
+        sessions_per_week = (total_sessions / span_days) * 7 if span_days > 0 else 0
 
         # Split adherence
         split_distribution = defaultdict(int)
@@ -68,9 +147,14 @@ class FitnessDataAnalyzer:
                 total_sets += len(sets)
                 total_reps += sum(s.get('reps', 0) for s in sets)
 
-                # Track compound lifts
+                # Track compound lifts (shares the recommender's classification
+                # so custom and oddly-named exercises are caught too)
                 ex_name = exercise.get('exercise_name', '')
-                if any(compound in ex_name for compound in ['Deadlift', 'Squat', 'Bench Press']):
+                metadata = resolve_exercise_metadata(
+                    exercise_id=exercise.get('exercise_id', ''),
+                    exercise_name=ex_name,
+                )
+                if metadata.compound:
                     if ex_name not in compound_movements:
                         compound_movements[ex_name] = []
 
@@ -96,12 +180,11 @@ class FitnessDataAnalyzer:
             elif recent_volume < early_volume * 0.9:
                 progression = "decreasing"
 
-        expected_sessions = (days_in_month / 7) * 4.5
-        missed_sessions = max(0, int(expected_sessions - total_sessions))
+        # Measure adherence against the user's own target, not a hardcoded one
+        target_per_week = self._get_target_sessions_per_week()
 
-        month_name = calendar.month_name[month]
-        return {
-            "time_window": f"{month_name} {year}",
+        summary = {
+            "time_window": label,
             "start_date": start_date,
             "end_date": end_date,
             "total_sessions": total_sessions,
@@ -111,23 +194,36 @@ class FitnessDataAnalyzer:
             "total_reps": total_reps,
             "avg_sets_per_session": round(total_sets / total_sessions, 1) if total_sessions > 0 else 0,
             "progression": progression,
-            "missed_sessions": missed_sessions,
             "compound_lifts": compound_movements
         }
+
+        if target_per_week:
+            expected_sessions = (span_days / 7) * target_per_week
+            summary["target_sessions_per_week"] = target_per_week
+            summary["missed_sessions"] = max(0, int(round(expected_sessions - total_sessions)))
+        else:
+            summary["target_sessions_per_week"] = None
+            summary["missed_sessions"] = None
+            summary["adherence_note"] = "No training frequency set in profile — adherence not measured"
+
+        return summary
 
     def build_nutrition_summary(self, year: int, month: int) -> Dict[str, Any]:
         """Build nutrition metrics summary for a specific month."""
         start_date, end_date = self._get_month_date_range(year, month)
-        month_name = calendar.month_name[month]
+        return self._nutrition_summary(start_date, end_date, f"{calendar.month_name[month]} {year}")
+
+    def _nutrition_summary(self, start_date: str, end_date: str, label: str) -> Dict[str, Any]:
+        """Build nutrition metrics for an arbitrary date range."""
         macros = self._fetch_collection_data('macros', start_date, end_date)
 
         if not macros:
             return {"error": "No nutrition data available"}
 
-        calories = [m.get('total_calories', 0) for m in macros if m.get('total_calories')]
-        protein = [m.get('total_protein', 0) for m in macros if m.get('total_protein')]
-        carbs = [m.get('total_carbs', 0) for m in macros if m.get('total_carbs')]
-        fats = [m.get('total_fats', 0) for m in macros if m.get('total_fats')]
+        calories = numeric_values(macros, 'total_calories')
+        protein = numeric_values(macros, 'total_protein')
+        carbs = numeric_values(macros, 'total_carbs')
+        fats = numeric_values(macros, 'total_fats')
 
         if not calories:
             return {"error": "No nutrition data available"}
@@ -135,23 +231,28 @@ class FitnessDataAnalyzer:
         cal_std = statistics.stdev(calories) if len(calories) > 1 else 0
         consistency = "excellent" if cal_std < 150 else "good" if cal_std < 250 else "variable"
 
+        avg_calories = statistics.mean(calories)
+        avg_protein = statistics.mean(protein) if protein else 0
+
         return {
-            "time_window": f"{month_name} {year}",
+            "time_window": label,
             "days_logged": len(macros),
-            "avg_calories": round(statistics.mean(calories)),
+            "avg_calories": round(avg_calories),
             "calories_range": [min(calories), max(calories)],
-            "avg_protein": round(statistics.mean(protein)) if protein else 0,
+            "avg_protein": round(avg_protein),
             "avg_carbs": round(statistics.mean(carbs)) if carbs else 0,
             "avg_fats": round(statistics.mean(fats)) if fats else 0,
             "consistency": consistency,
-            "protein_ratio": round((statistics.mean(protein) * 4 / statistics.mean(calories)) * 100, 1) if protein and calories else 0
+            "protein_ratio": round((avg_protein * 4 / avg_calories) * 100, 1) if avg_calories > 0 else 0
         }
 
     def build_recovery_summary(self, year: int, month: int) -> Dict[str, Any]:
         """Build recovery metrics summary for a specific month."""
         start_date, end_date = self._get_month_date_range(year, month)
-        month_name = calendar.month_name[month]
+        return self._recovery_summary(start_date, end_date, f"{calendar.month_name[month]} {year}")
 
+    def _recovery_summary(self, start_date: str, end_date: str, label: str) -> Dict[str, Any]:
+        """Build recovery metrics for an arbitrary date range."""
         # Fetch sleep data
         sleep_data = self._fetch_collection_data('sleep', start_date, end_date)
         # Fetch wellness survey data for additional recovery metrics
@@ -161,13 +262,13 @@ class FitnessDataAnalyzer:
             return {"error": "No recovery data available"}
 
         # Process sleep data
-        sleep_hours = [s.get('hours_slept', 0) for s in sleep_data if s.get('hours_slept')]
-        sleep_quality = [s.get('quality', 0) for s in sleep_data if s.get('quality')]
+        sleep_hours = numeric_values(sleep_data, 'hours_slept')
+        sleep_quality = numeric_values(sleep_data, 'quality')
 
         # Process wellness data
-        fatigue = [w.get('fatigue', 0) for w in wellness if w.get('fatigue')]
-        energy = [w.get('energy', 0) for w in wellness if w.get('energy')]
-        body_aches = [w.get('body_aches', 0) for w in wellness if w.get('body_aches')]
+        fatigue = numeric_values(wellness, 'fatigue')
+        energy = numeric_values(wellness, 'energy')
+        body_aches = numeric_values(wellness, 'body_aches')
 
         # Calculate trends
         sleep_trend = "stable"
@@ -191,37 +292,44 @@ class FitnessDataAnalyzer:
             elif recent_fatigue < early_fatigue - 1:
                 fatigue_trend = "decreasing"
 
+        # None means "not logged" — distinct from a logged value of 0
         return {
-            "time_window": f"{month_name} {year}",
-            "avg_sleep_hours": round(statistics.mean(sleep_hours), 1) if sleep_hours else 0,
-            "sleep_range": [round(min(sleep_hours), 1), round(max(sleep_hours), 1)] if sleep_hours else [0, 0],
-            "avg_sleep_quality": round(statistics.mean(sleep_quality), 1) if sleep_quality else 0,
+            "time_window": label,
+            "days_sleep_logged": len(sleep_hours),
+            "days_wellness_logged": len(wellness),
+            "avg_sleep_hours": round(statistics.mean(sleep_hours), 1) if sleep_hours else None,
+            "sleep_range": [round(min(sleep_hours), 1), round(max(sleep_hours), 1)] if sleep_hours else None,
+            "avg_sleep_quality": round(statistics.mean(sleep_quality), 1) if sleep_quality else None,
             "sleep_trend": sleep_trend,
-            "avg_fatigue": round(statistics.mean(fatigue), 1) if fatigue else 0,
+            "avg_fatigue": round(statistics.mean(fatigue), 1) if fatigue else None,
             "fatigue_trend": fatigue_trend,
-            "avg_energy": round(statistics.mean(energy), 1) if energy else 0,
-            "avg_body_aches": round(statistics.mean(body_aches), 1) if body_aches else 0
+            "avg_energy": round(statistics.mean(energy), 1) if energy else None,
+            "avg_body_aches": round(statistics.mean(body_aches), 1) if body_aches else None
         }
 
     def build_lifestyle_summary(self, year: int, month: int) -> Dict[str, Any]:
         """Build lifestyle metrics summary for a specific month."""
         start_date, end_date = self._get_month_date_range(year, month)
-        month_name = calendar.month_name[month]
+        return self._lifestyle_summary(start_date, end_date, f"{calendar.month_name[month]} {year}")
 
+    def _lifestyle_summary(self, start_date: str, end_date: str, label: str) -> Dict[str, Any]:
+        """Build lifestyle metrics for an arbitrary date range."""
         stress = self._fetch_collection_data('stress', start_date, end_date)
         activities = self._fetch_collection_data('physical_activities', start_date, end_date)
 
-        stress_levels = [s.get('level', 5) for s in stress] if stress else [5]
-        steps = [a.get('steps', 0) for a in activities if a.get('steps')] if activities else [0]
+        stress_levels = numeric_values(stress, 'level')
+        steps = numeric_values(activities, 'steps')
 
-        high_stress_days = sum(1 for s in stress_levels if s >= 7)
-
+        # None means "not logged" — never invent a stress level the user
+        # did not report, or the AI will comment on data that doesn't exist
         return {
-            "time_window": f"{month_name} {year}",
-            "avg_stress": round(statistics.mean(stress_levels), 1),
-            "high_stress_days": high_stress_days,
-            "avg_steps": round(statistics.mean(steps)) if steps else 0,
-            "active_days": sum(1 for s in steps if s > 5000)
+            "time_window": label,
+            "days_stress_logged": len(stress_levels),
+            "avg_stress": round(statistics.mean(stress_levels), 1) if stress_levels else None,
+            "high_stress_days": sum(1 for s in stress_levels if s >= 7) if stress_levels else None,
+            "days_steps_logged": len(steps),
+            "avg_steps": round(statistics.mean(steps)) if steps else None,
+            "active_days": sum(1 for s in steps if s > 5000) if steps else None
         }
 
     def build_complete_summary(self, year: int, month: int) -> Dict[str, Any]:
@@ -234,4 +342,26 @@ class FitnessDataAnalyzer:
             "nutrition": self.build_nutrition_summary(year, month),
             "recovery": self.build_recovery_summary(year, month),
             "lifestyle": self.build_lifestyle_summary(year, month)
+        }
+
+    def build_rolling_summary(self, window_days: int = 28, end_date: Optional[datetime] = None) -> Dict[str, Any]:
+        """
+        Build a summary over the last N days rather than a calendar month.
+
+        The coach uses this so its context doesn't reset to near-empty on the
+        1st of each month, and so "recently" means the last few weeks rather
+        than "since the 1st".
+        """
+        end = end_date or datetime.now()
+        start = end - timedelta(days=window_days - 1)
+        start_str, end_str = start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
+        label = f"last {window_days} days ({start_str} to {end_str})"
+
+        return {
+            "user_id": self.user_id,
+            "analysis_period": label,
+            "training": self._training_summary(start_str, end_str, label, window_days),
+            "nutrition": self._nutrition_summary(start_str, end_str, label),
+            "recovery": self._recovery_summary(start_str, end_str, label),
+            "lifestyle": self._lifestyle_summary(start_str, end_str, label)
         }

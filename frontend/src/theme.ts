@@ -1,19 +1,22 @@
 export const colors = {
-  background: "#0B0C10",
-  cardBackground: "#161A22",
-  surface: "#0B0C10",
+  background: "#070708",
+  cardBackground: "#111113",
+  surface: "#0C0C0E",
   accentPrimary: "#FF6B35",
   accentSecondary: "#FF6B35",
   ai: "#5EEAD4",
-  success: "#10B981",
+  success: "#4ADE80",
   danger: "#EF4444",
   warning: "#F59E0B",
+  protein: "#E4B896",
+  water: "#8B95A1",
   textPrimary: "#FFFFFF",
   text: "#FFFFFF",
   textSecondary: "#8E8E93",
   textMuted: "#636366",
-  border: "#2A2D35",
-  borderHover: "#3A3A3C",
+  border: "#1C1C1F",
+  borderHover: "#2A2A2E",
+  tabBar: "#070708",
 };
 
 export const spacing = {
@@ -38,28 +41,28 @@ export const shadows = {
   small: {
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.35,
     shadowRadius: 4,
     elevation: 2,
   },
   medium: {
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.4,
     shadowRadius: 8,
     elevation: 4,
   },
   large: {
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.45,
     shadowRadius: 16,
     elevation: 8,
   },
   xl: {
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.35,
+    shadowOpacity: 0.5,
     shadowRadius: 24,
     elevation: 12,
   },
@@ -67,5 +70,5 @@ export const shadows = {
 
 export const gradients = {
   primary: [colors.accentPrimary, "#E85A2A"],
-  card: [colors.cardBackground, "#1C1C1E"],
+  card: [colors.cardBackground, "#0C0C0E"],
 };

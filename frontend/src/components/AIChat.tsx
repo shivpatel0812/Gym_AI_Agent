@@ -10,11 +10,22 @@ import {
   Platform,
   Alert,
   Animated,
+  Modal,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import LinearGradient from "./shared/LinearGradient";
 import Button from "./shared/Button";
+import Markdown from "./shared/Markdown";
+import ConversationSidebar from "./chat/ConversationSidebar";
 import apiClient from "../api/client";
+import { streamChat } from "../api/streamChat";
+import {
+  ConversationSummary,
+  listConversations,
+  getConversation,
+  renameConversation,
+  deleteConversation,
+} from "../api/conversations";
 import { colors, spacing, borderRadius, shadows } from "../theme";
 
 interface Message {
@@ -22,12 +33,113 @@ interface Message {
   content: string;
 }
 
+// Shown while the coach is pulling data mid-answer
+const TOOL_LABELS: Record<string, string> = {
+  get_recent_sessions: "Checking your recent workouts...",
+  get_exercise_history: "Looking up your lift history...",
+  get_todays_plan: "Checking today's plan...",
+  get_nutrition_log: "Reviewing your nutrition log...",
+  get_wellness_log: "Reviewing your sleep and recovery...",
+  get_personal_records: "Looking up your personal bests...",
+};
+
 export default function AIChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [toolStatus, setToolStatus] = useState<string | null>(null);
   const [conversationHistory, setConversationHistory] = useState<any[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loadingList, setLoadingList] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [renameText, setRenameText] = useState("");
   const flatListRef = useRef<FlatList>(null);
+  const cancelStreamRef = useRef<(() => void) | null>(null);
+
+  const refreshConversations = async () => {
+    setLoadingList(true);
+    try {
+      setConversations(await listConversations());
+    } catch (error) {
+      console.error("Error loading conversations:", error);
+    } finally {
+      setLoadingList(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshConversations();
+  }, []);
+
+  const startNewChat = () => {
+    cancelStreamRef.current?.();
+    cancelStreamRef.current = null;
+    setMessages([]);
+    setConversationHistory([]);
+    setConversationId(null);
+    setLoading(false);
+    setToolStatus(null);
+    setSidebarOpen(false);
+  };
+
+  const openConversation = async (id: string) => {
+    cancelStreamRef.current?.();
+    cancelStreamRef.current = null;
+    setSidebarOpen(false);
+    setLoading(false);
+    setToolStatus(null);
+
+    try {
+      const conversation = await getConversation(id);
+      if (!conversation) return;
+      const loaded: Message[] = conversation.messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role, content: m.content }));
+      setMessages(loaded);
+      setConversationHistory(loaded);
+      setConversationId(id);
+    } catch (error) {
+      console.error("Error opening conversation:", error);
+      Alert.alert("Error", "Could not open that chat.");
+    }
+  };
+
+  const handleDeleteConversation = async (id: string) => {
+    try {
+      await deleteConversation(id);
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      // Deleting the open chat leaves the view on a fresh thread
+      if (id === conversationId) startNewChat();
+    } catch (error) {
+      console.error("Error deleting conversation:", error);
+      Alert.alert("Error", "Could not delete that chat.");
+    }
+  };
+
+  // Alert.prompt is iOS-only, so renaming uses a modal to work on Android too
+  const handleRenameConversation = (id: string, currentTitle: string) => {
+    setRenameTarget({ id, title: currentTitle });
+    setRenameText(currentTitle);
+  };
+
+  const submitRename = async () => {
+    const target = renameTarget;
+    const title = renameText.trim();
+    setRenameTarget(null);
+    if (!target || !title) return;
+
+    try {
+      await renameConversation(target.id, title);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === target.id ? { ...c, title } : c))
+      );
+    } catch (error) {
+      console.error("Error renaming conversation:", error);
+      Alert.alert("Error", "Could not rename that chat.");
+    }
+  };
 
   useEffect(() => {
     // Scroll to bottom when messages change
@@ -38,60 +150,95 @@ export default function AIChat() {
     }
   }, [messages]);
 
-  const sendMessage = async () => {
-    if (!inputMessage.trim() || loading) return;
+  // Abort any in-flight stream when the tab unmounts
+  useEffect(() => () => cancelStreamRef.current?.(), []);
 
-    const messageToSend = inputMessage.trim();
-    const userMessage: Message = { role: "user", content: messageToSend };
-    const updatedMessages = [...messages, userMessage];
-    setMessages(updatedMessages);
-    setInputMessage("");
-    setLoading(true);
-
+  // Falls back to the buffered endpoint when streaming fails before any text
+  // has arrived, so a proxy that won't pass SSE through still gets an answer
+  const sendBuffered = async (messageToSend: string, baseMessages: Message[]) => {
     try {
-      const res = await apiClient.post("/api/ai-analysis/chat", {
-        message: messageToSend,
-        conversation_history: conversationHistory,
-      });
+      const res = await apiClient.post(
+        "/api/ai-analysis/chat",
+        {
+          message: messageToSend,
+          conversation_id: conversationId,
+          conversation_history: conversationHistory,
+        },
+        // GPT-4o responses regularly run past the default 30s client timeout
+        { timeout: 90000 }
+      );
 
-      if (res.data.status === "success") {
-        const assistantMessage: Message = {
-          role: "assistant",
-          content: res.data.response,
-        };
-        setMessages([...updatedMessages, assistantMessage]);
-        setConversationHistory(res.data.conversation_history || []);
-      } else {
-        throw new Error("Chat failed");
-      }
+      if (res.data.status !== "success") throw new Error("Chat failed");
+
+      setMessages([...baseMessages, { role: "assistant", content: res.data.response }]);
+      setConversationHistory(res.data.conversation_history || []);
+      if (res.data.conversation_id) setConversationId(res.data.conversation_id);
+      refreshConversations();
     } catch (error: any) {
       console.error("Error sending message:", error);
-      const errorMessage: Message = {
-        role: "assistant",
-        content:
-          error.response?.data?.detail || "Sorry, I encountered an error. Please try again.",
-      };
-      setMessages([...updatedMessages, errorMessage]);
+      setMessages([
+        ...baseMessages,
+        {
+          role: "assistant",
+          content:
+            error.response?.data?.detail ||
+            "Sorry, I encountered an error. Please try again.",
+        },
+      ]);
     } finally {
       setLoading(false);
+      setToolStatus(null);
     }
   };
 
-  const clearConversation = () => {
-    Alert.alert(
-      "Clear Conversation",
-      "Are you sure you want to clear the conversation history?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Clear",
-          style: "destructive",
-          onPress: () => {
-            setMessages([]);
-            setConversationHistory([]);
-          },
+  const sendMessage = () => {
+    if (!inputMessage.trim() || loading) return;
+
+    const messageToSend = inputMessage.trim();
+    const updatedMessages: Message[] = [...messages, { role: "user", content: messageToSend }];
+    setMessages(updatedMessages);
+    setInputMessage("");
+    setLoading(true);
+    setToolStatus(null);
+
+    let streamed = "";
+
+    cancelStreamRef.current = streamChat(
+      { message: messageToSend, conversationId, conversationHistory },
+      {
+        onTool: (name) => setToolStatus(TOOL_LABELS[name] || "Looking that up..."),
+        onDelta: (text) => {
+          streamed += text;
+          setToolStatus(null);
+          // Replace the in-progress assistant bubble on each chunk
+          setMessages([...updatedMessages, { role: "assistant", content: streamed }]);
         },
-      ]
+        onDone: (payload) => {
+          setMessages([
+            ...updatedMessages,
+            { role: "assistant", content: payload.response || streamed },
+          ]);
+          setConversationHistory(payload.conversation_history || []);
+          if (payload.conversation_id) setConversationId(payload.conversation_id);
+          setLoading(false);
+          setToolStatus(null);
+          cancelStreamRef.current = null;
+          refreshConversations();
+        },
+        onError: (error) => {
+          cancelStreamRef.current = null;
+          if (streamed) {
+            // Partial answer on screen — keep it rather than discarding
+            console.error("Stream interrupted:", error);
+            setMessages([...updatedMessages, { role: "assistant", content: streamed }]);
+            setLoading(false);
+            setToolStatus(null);
+            return;
+          }
+          console.warn("Streaming unavailable, falling back:", error.message);
+          sendBuffered(messageToSend, updatedMessages);
+        },
+      }
     );
   };
 
@@ -114,7 +261,7 @@ export default function AIChat() {
           </LinearGradient>
         ) : (
           <View style={[styles.messageBubble, styles.assistantBubble]}>
-            <Text style={styles.messageText}>{item.content}</Text>
+            <Markdown style={styles.messageText}>{item.content}</Markdown>
           </View>
         )}
       </View>
@@ -135,14 +282,26 @@ export default function AIChat() {
   const renderLoadingIndicator = () => (
     <View style={[styles.messageContainer, styles.assistantMessageContainer]}>
       <View style={[styles.messageBubble, styles.assistantBubble, styles.loadingBubble]}>
-        <View style={styles.loadingDots}>
-          <LoadingDot delay={0} />
-          <LoadingDot delay={150} />
-          <LoadingDot delay={300} />
-        </View>
+        {toolStatus ? (
+          <Text style={styles.toolStatusText}>{toolStatus}</Text>
+        ) : (
+          <View style={styles.loadingDots}>
+            <LoadingDot delay={0} />
+            <LoadingDot delay={150} />
+            <LoadingDot delay={300} />
+          </View>
+        )}
       </View>
     </View>
   );
+
+  // Once tokens start arriving the assistant bubble itself shows progress, so
+  // the dots would be redundant
+  const isAwaitingFirstToken =
+    loading && messages[messages.length - 1]?.role !== "assistant";
+
+  const activeTitle =
+    conversations.find((c) => c.id === conversationId)?.title || "AI Coach";
 
   return (
     <KeyboardAvoidingView
@@ -153,15 +312,25 @@ export default function AIChat() {
       <LinearGradient colors={[colors.background, colors.cardBackground]} style={styles.header}>
         <View style={styles.headerContent}>
           <View style={styles.headerLeft}>
-            <MaterialCommunityIcons name="robot" size={32} color={colors.accentPrimary} />
+            <TouchableOpacity
+              onPress={() => setSidebarOpen(true)}
+              style={styles.menuButton}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <MaterialCommunityIcons name="menu" size={26} color={colors.textPrimary} />
+            </TouchableOpacity>
             <View>
-              <Text style={styles.headerTitle}>AI Coach</Text>
+              <Text style={styles.headerTitle}>{activeTitle}</Text>
               <Text style={styles.headerSubtitle}>Your fitness companion</Text>
             </View>
           </View>
           {messages.length > 0 && (
-            <TouchableOpacity onPress={clearConversation} style={styles.clearButton}>
-              <MaterialCommunityIcons name="delete" size={20} color={colors.danger} />
+            <TouchableOpacity onPress={startNewChat} style={styles.clearButton}>
+              <MaterialCommunityIcons
+                name="plus-circle-outline"
+                size={22}
+                color={colors.accentPrimary}
+              />
             </TouchableOpacity>
           )}
         </View>
@@ -177,7 +346,7 @@ export default function AIChat() {
           messages.length === 0 && styles.messagesListEmpty,
         ]}
         ListEmptyComponent={renderEmpty}
-        ListFooterComponent={loading ? renderLoadingIndicator : null}
+        ListFooterComponent={isAwaitingFirstToken ? renderLoadingIndicator : null}
         keyboardShouldPersistTaps="handled"
       />
 
@@ -206,6 +375,56 @@ export default function AIChat() {
           </TouchableOpacity>
         </View>
       </View>
+
+      <ConversationSidebar
+        open={sidebarOpen}
+        conversations={conversations}
+        activeId={conversationId}
+        loading={loadingList}
+        onClose={() => setSidebarOpen(false)}
+        onSelect={openConversation}
+        onNewChat={startNewChat}
+        onDelete={handleDeleteConversation}
+        onRename={handleRenameConversation}
+      />
+
+      <Modal
+        visible={renameTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRenameTarget(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Rename chat</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={renameText}
+              onChangeText={setRenameText}
+              placeholder="Chat name"
+              placeholderTextColor={colors.textMuted}
+              autoFocus
+              maxLength={48}
+              onSubmitEditing={submitRename}
+              returnKeyType="done"
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity onPress={() => setRenameTarget(null)} style={styles.modalButton}>
+                <Text style={styles.modalCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={submitRename}
+                style={styles.modalButton}
+                disabled={!renameText.trim()}
+              >
+                <Text style={[styles.modalSave, !renameText.trim() && styles.modalSaveDisabled]}>
+                  Save
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -328,6 +547,65 @@ const styles = StyleSheet.create({
   },
   loadingBubble: {
     paddingVertical: spacing.lg,
+  },
+  toolStatusText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    fontStyle: "italic",
+  },
+  menuButton: {
+    paddingRight: spacing.xs,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    justifyContent: "center",
+    paddingHorizontal: spacing.xl,
+  },
+  modalCard: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    marginBottom: spacing.md,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.background,
+    color: colors.textPrimary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: 15,
+  },
+  modalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: spacing.lg,
+    marginTop: spacing.lg,
+  },
+  modalButton: {
+    paddingVertical: spacing.xs,
+  },
+  modalCancel: {
+    color: colors.textSecondary,
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  modalSave: {
+    color: colors.accentPrimary,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  modalSaveDisabled: {
+    opacity: 0.4,
   },
   loadingDots: {
     flexDirection: "row",

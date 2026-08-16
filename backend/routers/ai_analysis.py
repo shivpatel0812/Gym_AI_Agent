@@ -4,16 +4,108 @@ Endpoints for generating and retrieving AI-powered fitness insights.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi.responses import StreamingResponse
 from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel
+import json
 import os
 
 from auth import get_user_id
 from db import db
 from ai_analysis import FitnessDataAnalyzer, FitnessAICoach, get_user_profile_for_ai
+from ai_analysis.coach_tools import CoachToolbox
+from ai_analysis.conversation_store import ConversationStore
 
 router = APIRouter(prefix="/api/ai-analysis", tags=["ai-analysis"])
+
+# How many prior months of analysis to feed back in as context. Capped so the
+# prompt doesn't grow without bound as the year fills up.
+PREVIOUS_ANALYSIS_MONTHS = 3
+
+# Rolling window the coach uses for headline numbers when no month is specified
+CHAT_CONTEXT_WINDOW_DAYS = 28
+
+
+def previous_month_ids(year: int, month: int, count: int) -> List[str]:
+    """
+    Build the document IDs of the N months preceding (year, month).
+
+    Walks backwards across the year boundary, so a January analysis still sees
+    the previous October–December. Returned oldest-first.
+    """
+    ids = []
+    y, m = year, month
+    for _ in range(count):
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+        ids.append(f"{y}-{m:02d}")
+    return list(reversed(ids))
+
+
+def _chat_summary(user_id: str, request: "ChatRequest") -> dict:
+    """
+    Headline numbers for the coach's system prompt.
+
+    Defaults to a rolling window so context doesn't collapse to near-empty on
+    the 1st of the month; an explicit year/month still asks for that month.
+    """
+    analyzer = FitnessDataAnalyzer(db, user_id)
+    if request.year and request.month:
+        return analyzer.build_complete_summary(request.year, request.month)
+    return analyzer.build_rolling_summary(window_days=CHAT_CONTEXT_WINDOW_DAYS)
+
+
+def _chat_history(store: ConversationStore, request: "ChatRequest") -> list:
+    """
+    History to replay to the model.
+
+    A conversation_id reads from Firestore and ignores whatever the client
+    sent. Without one we fall back to the client-supplied list so older app
+    builds keep working.
+    """
+    if request.conversation_id:
+        return store.get_history_for_model(request.conversation_id)
+    return request.conversation_history or []
+
+
+def _persist_exchange(
+    store: ConversationStore, conversation_id, user_message: str, assistant_message: str
+):
+    """
+    Save the exchange. Never fails the request — a chat that answered but
+    couldn't be saved is better than an error after the model already ran.
+    """
+    try:
+        return store.append_exchange(conversation_id, user_message, assistant_message)
+    except Exception as e:
+        print(f"Warning: could not persist conversation: {e}")
+        return conversation_id
+
+
+def summary_has_data(summary: dict) -> bool:
+    """
+    Check whether the summary contains any actually-logged data.
+
+    Looks at explicit counts rather than truthiness of the whole dict — several
+    fields (progression, notes) are always populated and would otherwise make
+    an entirely empty month look like it has data.
+    """
+    training = summary.get("training") or {}
+    nutrition = summary.get("nutrition") or {}
+    recovery = summary.get("recovery") or {}
+    lifestyle = summary.get("lifestyle") or {}
+
+    return any([
+        training.get("total_sessions", 0) > 0,
+        nutrition.get("days_logged", 0) > 0,
+        recovery.get("days_sleep_logged", 0) > 0,
+        recovery.get("days_wellness_logged", 0) > 0,
+        lifestyle.get("days_stress_logged", 0) > 0,
+        lifestyle.get("days_steps_logged", 0) > 0,
+    ])
 
 
 class GenerateAnalysisRequest(BaseModel):
@@ -26,7 +118,14 @@ class ChatRequest(BaseModel):
     message: str
     year: Optional[int] = None
     month: Optional[int] = None
+    # Server-side thread. When set, history is loaded from Firestore and
+    # conversation_history is ignored. Omit to start a new conversation.
+    conversation_id: Optional[str] = None
     conversation_history: Optional[List[dict]] = None
+
+
+class RenameConversationRequest(BaseModel):
+    title: str
 
 
 @router.get("/summary")
@@ -70,17 +169,7 @@ async def generate_ai_analysis(
         summary = analyzer.build_complete_summary(request.year, request.month)
 
         # Validate that there's actual data to analyze
-        has_data = False
-        for category in ["training", "nutrition", "recovery", "lifestyle"]:
-            category_data = summary.get(category, {})
-            # Check if category has data (not just error messages)
-            if category_data and not category_data.get("error"):
-                # Check if there's meaningful data (not just zeros)
-                if any(v for k, v in category_data.items() if k != "time_window" and k != "start_date" and k != "end_date" and v):
-                    has_data = True
-                    break
-        
-        if not has_data:
+        if not summary_has_data(summary):
             raise HTTPException(
                 status_code=400, 
                 detail=f"No fitness data available for {request.year}-{request.month:02d}. Please log some workouts, nutrition, or wellness data first."
@@ -129,15 +218,17 @@ async def generate_ai_analysis(
                 detail="Please complete your 'About Myself' profile before generating analysis."
             )
 
-        # Get previous analyses if requested
+        # Get previous analyses if requested. Fetched by document ID (YYYY-MM)
+        # so the window crosses year boundaries and needs no composite index.
         previous_analyses = []
         if request.include_previous_months:
             try:
                 analyses_ref = db.collection("users").document(user_id).collection("ai_analyses")
-                analyses_docs = analyses_ref.where("year", "==", request.year).where("month", "<", request.month).order_by("month").stream()
-
-                for doc in analyses_docs:
-                    doc_data = doc.to_dict()
+                for doc_id in previous_month_ids(request.year, request.month, PREVIOUS_ANALYSIS_MONTHS):
+                    doc = analyses_ref.document(doc_id).get()
+                    if not doc.exists:
+                        continue
+                    doc_data = doc.to_dict() or {}
                     if doc_data.get("status") == "success" and doc_data.get("analysis"):
                         analysis_text = str(doc_data["analysis"]).strip()
                         if analysis_text:
@@ -298,35 +389,34 @@ async def chat_with_ai(
         if not openai_api_key:
             raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
-        # Determine which month's data to use
-        now = datetime.now()
-        year = request.year or now.year
-        month = request.month or now.month
-
-        # Build summary for context
-        analyzer = FitnessDataAnalyzer(db, user_id)
-        summary = analyzer.build_complete_summary(year, month)
-
-        # Get user profile for personalized responses
+        summary = _chat_summary(user_id, request)
         user_profile = get_user_profile_for_ai(db, user_id)
-
-        # Initialize AI Coach with user's actual profile
         coach = FitnessAICoach(api_key=openai_api_key, user_profile=user_profile)
 
-        # Get chat response
+        store = ConversationStore(db, user_id)
+        history = _chat_history(store, request)
+
+        # Get chat response, with tools so the coach can look up specifics
         result = coach.chat(
             user_message=request.message,
             summary=summary,
-            conversation_history=request.conversation_history
+            conversation_history=history,
+            toolbox=CoachToolbox(db, user_id),
         )
 
         if result["status"] == "error":
             raise HTTPException(status_code=500, detail=f"Chat failed: {result.get('error')}")
 
+        conversation_id = _persist_exchange(
+            store, request.conversation_id, request.message, result["response"]
+        )
+
         return {
             "status": "success",
             "response": result["response"],
             "tokens_used": result["tokens_used"],
+            "tools_used": result.get("tools_used", []),
+            "conversation_id": conversation_id,
             "conversation_history": result["conversation_history"]
         }
 
@@ -334,6 +424,118 @@ async def chat_with_ai(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in chat: {str(e)}")
+
+
+@router.get("/conversations")
+async def list_conversations(
+    limit: int = Query(50, ge=1, le=100),
+    user_id: str = Depends(get_user_id)
+):
+    """List saved coach conversations, most recently updated first."""
+    try:
+        store = ConversationStore(db, user_id)
+        conversations = store.list_conversations(limit=limit)
+        return {
+            "status": "success",
+            "count": len(conversations),
+            "conversations": conversations,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing conversations: {str(e)}")
+
+
+@router.post("/conversations")
+async def create_conversation(user_id: str = Depends(get_user_id)):
+    """Create an empty conversation. Chatting without an id also creates one."""
+    try:
+        conversation_id = ConversationStore(db, user_id).create_conversation()
+        return {"status": "success", "conversation_id": conversation_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating conversation: {str(e)}")
+
+
+@router.get("/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str, user_id: str = Depends(get_user_id)):
+    """Get one conversation with its full message list."""
+    conversation = ConversationStore(db, user_id).get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"status": "success", "conversation": conversation}
+
+
+@router.patch("/conversations/{conversation_id}")
+async def rename_conversation(
+    conversation_id: str,
+    request: RenameConversationRequest,
+    user_id: str = Depends(get_user_id)
+):
+    """Rename a conversation."""
+    if not ConversationStore(db, user_id).rename_conversation(conversation_id, request.title):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"status": "success"}
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str, user_id: str = Depends(get_user_id)):
+    """Delete a conversation."""
+    if not ConversationStore(db, user_id).delete_conversation(conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"status": "success"}
+
+
+@router.post("/chat/stream")
+async def chat_with_ai_stream(
+    request: ChatRequest,
+    user_id: str = Depends(get_user_id)
+):
+    """
+    Chat with the AI coach over SSE, streaming the answer as it is generated.
+
+    Emits one JSON object per `data:` frame — see FitnessAICoach.chat_stream
+    for the event shapes. Errors after the stream opens arrive as an error
+    event rather than an HTTP status, since the response has already begun.
+    """
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+
+    summary = _chat_summary(user_id, request)
+    user_profile = get_user_profile_for_ai(db, user_id)
+    coach = FitnessAICoach(api_key=openai_api_key, user_profile=user_profile)
+    toolbox = CoachToolbox(db, user_id)
+
+    store = ConversationStore(db, user_id)
+    history = _chat_history(store, request)
+
+    def event_stream():
+        try:
+            for event in coach.chat_stream(
+                user_message=request.message,
+                summary=summary,
+                conversation_history=history,
+                toolbox=toolbox,
+            ):
+                # Save on the way through, so the id reaches the client in the
+                # same done event that ends the stream
+                if event.get("type") == "done":
+                    event["conversation_id"] = _persist_exchange(
+                        store, request.conversation_id,
+                        request.message, event.get("response", ""),
+                    )
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Stops nginx and similar proxies buffering the stream into one blob
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.delete("/analyses/{analysis_id}")

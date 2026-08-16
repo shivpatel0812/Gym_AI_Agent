@@ -136,6 +136,15 @@ class SleepEntry(BaseModel):
     wake_time: Optional[str] = None
     notes: Optional[str] = None
 
+class DailyRoutine(BaseModel):
+    id: Optional[str] = None
+    name: str
+    description: Optional[str] = None
+    icon: Optional[str] = "checkbox-marked-circle-outline"
+    sort_order: Optional[int] = 0
+    completed_dates: Optional[List[str]] = None
+
+
 class HydrationEntry(BaseModel):
     id: Optional[str] = None
     date: str

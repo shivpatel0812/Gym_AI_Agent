@@ -27,6 +27,7 @@ import defaultExercises, { categoryToMuscleGroup } from "../../data/defaultExerc
 import { colors, spacing, borderRadius } from "../../theme";
 import { persistFromSession, useSessionTimer } from "../../hooks/useSessionTimer";
 import Button from "../shared/Button";
+import { todayKey } from "../wellness/types";
 import ExercisePicker, { PickerExercise } from "./ExercisePicker";
 import {
   buildSessionPayload,
@@ -34,7 +35,9 @@ import {
   emptySessionForm,
   formatLastPerformance,
   formatShortDate,
+  formatDateOrdinal,
   getBestSetLabel,
+  groupSessionsByWeek,
   hasCardioLog,
   hydrateAiRecommendations,
   isCardioExercise,
@@ -49,10 +52,12 @@ import {
   recCopiesLastWorkout,
   recHasWeightedSets,
   resolveLastExercise,
+  sessionDurationMinutes,
   sessionHeadline,
-  sessionListTitle,
   sessionToForm,
   setsFromLastWorkout,
+  splitBadgeColors,
+  splitLabel,
   toStoredRecommendation,
 } from "./sessionLogic";
 
@@ -99,6 +104,17 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   editingSessionIdRef.current = editingSessionId;
 
   const editingSession = sessions.find((s) => s.id === editingSessionId);
+  const weekGroups = useMemo(() => groupSessionsByWeek(sessions), [sessions]);
+  const todaySession = useMemo(() => {
+    const key = todayKey();
+    return (
+      sessions.find((s) => String(s.date || "").slice(0, 10) === key) || null
+    );
+  }, [sessions]);
+  const todaySessionExercises = useMemo(
+    () => (todaySession ? migrateSessionCardioToExercises(todaySession) : []),
+    [todaySession]
+  );
   const timer = useSessionTimer(
     showForm ? editingSessionId || "draft" : null,
     persistFromSession(editingSession)
@@ -292,7 +308,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   useEffect(() => {
     if (!showForm) return;
     formData.exercises.forEach((ex, idx) => {
-      if (!ex.exercise_id) return;
+      if (!ex.exercise_id || isCardioExercise(ex)) return;
       const rec = aiRecommendations[ex.exercise_id] || ex.ai_recommendation;
       if (!rec?.sets?.length || aiRecommendationLoading[ex.exercise_id]) return;
       const lastData = resolveLastExercise(
@@ -384,7 +400,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
             },
       ],
     });
-    fetchAiRecommendation(exerciseId, exerciseName, positionInWorkout);
+    if (!isCardio) {
+      fetchAiRecommendation(exerciseId, exerciseName, positionInWorkout);
+    }
     setExerciseSearchQuery("");
     setCategoryFilter(null);
     setShowExercisePicker(false);
@@ -452,6 +470,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     setFormData(sessionToForm(session));
     setAiRecommendations(hydrateAiRecommendations(session.exercises || []));
     setEditingSessionId(session.id || null);
+    setShowDatePicker(false);
     setShowForm(true);
   };
 
@@ -529,6 +548,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
       });
       setShowForm(true);
       planExercises.forEach((ex: any, idx: number) => {
+        if (isCardioExercise(ex) || String(ex.exercise_id || "").startsWith("default-cardio")) {
+          return;
+        }
         const planEx = todayData.exercises[idx];
         fetchAiRecommendation(
           ex.exercise_id,
@@ -657,19 +679,48 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
               <MaterialCommunityIcons name="arrow-left" size={20} color={colors.textSecondary} />
             </TouchableOpacity>
             <View style={styles.flex}>
-              <Text style={styles.formTitle}>
-                {sessionHeadline(formData.split_name, formData.split_day, formData.date)}
-              </Text>
-              <TouchableOpacity onPress={() => setShowDatePicker(true)}>
-                <Text style={styles.dateLink}>{formData.date}</Text>
-              </TouchableOpacity>
-              {showDatePicker && (
+              <View style={styles.titleRow}>
+                <Text style={styles.formTitle}>
+                  {sessionHeadline(
+                    formData.split_name,
+                    formData.split_day,
+                    formData.date
+                  )}
+                </Text>
+                <View>
+                  <TouchableOpacity onPress={() => setShowDatePicker(true)} hitSlop={8}>
+                    <MaterialCommunityIcons name="calendar" size={18} color={colors.accentPrimary} />
+                  </TouchableOpacity>
+                  {Platform.OS === "web" ? (
+                    <input
+                      type="date"
+                      value={formData.date}
+                      onChange={(e: any) => {
+                        if (e.target.value) {
+                          setFormData({ ...formData, date: e.target.value });
+                        }
+                      }}
+                      aria-label="Workout date"
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        top: 0,
+                        width: 28,
+                        height: 28,
+                        opacity: 0,
+                        cursor: "pointer",
+                      }}
+                    />
+                  ) : null}
+                </View>
+              </View>
+              {Platform.OS !== "web" && showDatePicker && (
                 <DateTimePicker
                   value={new Date(`${formData.date}T00:00:00`)}
                   mode="date"
-                  display="default"
+                  display="spinner"
                   onChange={(_, date) => {
-                    if (Platform.OS !== "ios") setShowDatePicker(false);
+                    setShowDatePicker(false);
                     if (date) {
                       const y = date.getFullYear();
                       const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -687,12 +738,12 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                     setShowDayDropdown(false);
                   }}
                 >
-                  <Text style={styles.dropBtnText} numberOfLines={1}>
+                  <Text style={styles.dropBtnText}>
                     {formData.split_id
                       ? splits.find((s) => s.id === formData.split_id)?.name ||
                         formData.split_name ||
                         "Split"
-                      : "Choose split"}
+                      : "Split"}
                   </Text>
                   <MaterialCommunityIcons name="chevron-down" size={16} color={colors.textSecondary} />
                 </TouchableOpacity>
@@ -704,8 +755,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                       setShowSplitDropdown(false);
                     }}
                   >
-                    <Text style={styles.dropBtnText} numberOfLines={1}>
-                      {formData.split_day || "Choose day"}
+                    <Text style={styles.dropBtnText}>
+                      {formData.split_day || "Day"}
                     </Text>
                     <MaterialCommunityIcons name="chevron-down" size={16} color={colors.textSecondary} />
                   </TouchableOpacity>
@@ -941,6 +992,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
             const confPct =
               aiRec && !aiRec.needs_starting_weight ? confidencePct(aiRec.confidence) : null;
             const lastLine = formatLastPerformance(lastData);
+            const showAi = !isCardio && !!(aiRec || aiLoading);
 
             return (
               <View key={`${ex.exercise_id}-${idx}`} style={styles.exCard}>
@@ -950,8 +1002,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                     <Text style={styles.exMeta}>
                       {categoryLabel} · {roleLabel}
                     </Text>
-                    {lastLine && (!aiRec || isCollapsed) ? (
-                      <Text style={styles.lastTeal}>
+                    {lastLine && isCollapsed ? (
+                      <Text style={styles.lastOrangeHeader}>
                         Last {lastData?.date ? formatShortDate(lastData.date) : ""}: {lastLine}
                       </Text>
                     ) : null}
@@ -962,7 +1014,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                         {completedCount}/{exerciseSets.length} sets
                       </Text>
                     )}
-                    {(aiRec || aiLoading) && (
+                    {showAi && (
                       <View style={styles.aiBadge}>
                         <Text style={styles.aiBadgeText}>AI</Text>
                       </View>
@@ -987,7 +1039,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
 
                 {!isCollapsed && (
                   <View>
-                    {aiLoading ? (
+                    {showAi &&
+                      (aiLoading ? (
                       <View style={styles.aiBand}>
                         <ActivityIndicator color={colors.ai} />
                         <Text style={styles.aiLoading}>Getting AI recommendation...</Text>
@@ -1006,11 +1059,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                               </View>
                             ) : null}
                           </View>
-                          {lastLine ? (
-                            <Text style={styles.aiLast}>
-                              Last: {lastData?.date ? formatShortDate(lastData.date) : ""} · {lastLine}
-                            </Text>
-                          ) : null}
                           {aiRec.needs_starting_weight &&
                             !(lastWorkoutHasWeight(lastData) && isLastWorkoutRecent(lastData)) &&
                             !recHasWeightedSets(aiRec) && (
@@ -1075,26 +1123,38 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                           )}
                         </View>
                       )
-                    )}
+                    ))}
 
-                    {maxData?.max_weight != null && (
-                      <View style={styles.statsBand}>
-                        <View style={styles.stat}>
-                          <Text style={styles.statLabelOrange}>PR</Text>
-                          <Text style={styles.statVal}>{maxData.max_weight} lbs</Text>
-                        </View>
-                        {maxData.max_reps != null && maxData.max_reps > 0 && (
-                          <View style={styles.stat}>
-                            <Text style={styles.statLabel}>Est. 1RM</Text>
-                            <Text style={styles.statVal}>
-                              {Math.round(maxData.max_weight * (1 + maxData.max_reps / 30))} lbs
+                    {(lastLine || maxData?.max_weight != null) && (
+                      <View style={styles.historyBox}>
+                        {lastLine ? (
+                          <View style={[styles.historyLast, maxData?.max_weight != null && { marginBottom: 10 }]}>
+                            <Text style={styles.statLabelOrange}>
+                              LAST{lastData?.date ? ` · ${formatShortDate(lastData.date)}` : ""}
                             </Text>
+                            <Text style={styles.lastOrange}>{lastLine}</Text>
                           </View>
-                        )}
-                        {bestSetLabel && (
-                          <View style={styles.stat}>
-                            <Text style={styles.statLabel}>Best Set</Text>
-                            <Text style={styles.statVal}>{bestSetLabel}</Text>
+                        ) : null}
+                        {maxData?.max_weight != null && (
+                          <View style={styles.statsRow}>
+                            <View style={styles.stat}>
+                              <Text style={styles.statLabelOrange}>PR</Text>
+                              <Text style={styles.statVal}>{maxData.max_weight} lbs</Text>
+                            </View>
+                            {maxData.max_reps != null && maxData.max_reps > 0 && (
+                              <View style={styles.stat}>
+                                <Text style={styles.statLabel}>Est. 1RM</Text>
+                                <Text style={styles.statVal}>
+                                  {Math.round(maxData.max_weight * (1 + maxData.max_reps / 30))} lbs
+                                </Text>
+                              </View>
+                            )}
+                            {bestSetLabel && (
+                              <View style={styles.stat}>
+                                <Text style={styles.statLabel}>Best Set</Text>
+                                <Text style={styles.statVal}>{bestSetLabel}</Text>
+                              </View>
+                            )}
                           </View>
                         )}
                       </View>
@@ -1299,56 +1359,132 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         <Button title="New Session" onPress={() => setShowForm(true)} />
       </View>
 
-      {todaysPlanWorkout &&
-        todaysPlanWorkout.status === "workout_day" &&
-        !todaysPlanWorkout.already_logged && (
-          <View style={styles.todayCard}>
-            <View style={styles.todayLeft}>
-              <View style={styles.todayIcon}>
-                <MaterialCommunityIcons name="dumbbell" size={22} color={colors.accentPrimary} />
-              </View>
-              <View>
-                <Text style={styles.todayBadge}>TODAY</Text>
-                <Text style={styles.todayTitle}>{todaysPlanWorkout.day_name}</Text>
-                <Text style={styles.muted}>
-                  {todaysPlanWorkout.exercises?.length || 0} exercises
-                </Text>
-              </View>
+      {todaySession ? (
+        <View style={styles.todayCard}>
+          <View style={styles.todayLeft}>
+            <View style={styles.todayIcon}>
+              <MaterialCommunityIcons name="dumbbell" size={22} color={colors.accentPrimary} />
             </View>
-            <TouchableOpacity style={styles.startPlan} onPress={handleStartPlan}>
-              <Text style={styles.startPlanText}>Start Workout</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-      {sessions.map((session) => {
-        const listedExercises = migrateSessionCardioToExercises(session);
-        const exerciseCount = listedExercises.length;
-        const sportEx = listedExercises.find(isSportCardio);
-        return (
-          <TouchableOpacity
-            key={session.id}
-            style={styles.sessionCard}
-            onPress={() => handleEdit(session)}
-          >
             <View style={styles.flex}>
-              <Text style={styles.sessionTitle}>{sessionListTitle(session)}</Text>
+              <Text style={styles.todayBadge}>TODAY'S WORKOUT</Text>
+              <Text style={styles.todayTitle}>
+                {splitLabel(todaySession) || todaySession.workout_name || "Workout"}
+              </Text>
               <Text style={styles.muted}>
-                {exerciseCount} exercise{exerciseCount !== 1 ? "s" : ""}
-                {sportEx
-                  ? ` · ${[sportEx.exercise_name, sportEx.time ? `${sportEx.time} min` : ""]
-                      .filter(Boolean)
-                      .join(" · ")}`
+                {todaySessionExercises.length} exercise
+                {todaySessionExercises.length !== 1 ? "s" : ""}
+                {sessionDurationMinutes(todaySession)
+                  ? ` · ${sessionDurationMinutes(todaySession)} min`
                   : ""}
               </Text>
             </View>
-            <TouchableOpacity onPress={() => handleDelete(session.id!)} hitSlop={12}>
-              <MaterialCommunityIcons name="delete-outline" size={18} color={colors.textMuted} />
-            </TouchableOpacity>
-            <MaterialCommunityIcons name="chevron-right" size={22} color={colors.borderHover} />
+          </View>
+          {todaySessionExercises.length > 0 && (
+            <View style={styles.lastExRow}>
+              {todaySessionExercises.slice(0, 4).map((ex, i) => (
+                <View key={`${ex.exercise_id}-${i}`} style={styles.lastExChip}>
+                  <Text style={styles.lastExChipText} numberOfLines={1}>
+                    {ex.exercise_name}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
+          <TouchableOpacity style={styles.startPlan} onPress={() => handleEdit(todaySession)}>
+            <Text style={styles.startPlanText}>Open session</Text>
           </TouchableOpacity>
-        );
-      })}
+        </View>
+      ) : todaysPlanWorkout?.status === "workout_day" ? (
+        <View style={styles.todayCard}>
+          <View style={styles.todayLeft}>
+            <View style={styles.todayIcon}>
+              <MaterialCommunityIcons name="dumbbell" size={22} color={colors.accentPrimary} />
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.todayBadge}>TODAY'S WORKOUT</Text>
+              <Text style={styles.todayTitle}>{todaysPlanWorkout.day_name || "Workout"}</Text>
+              <Text style={styles.muted}>
+                {todaysPlanWorkout.exercises?.length || 0} exercises
+              </Text>
+            </View>
+          </View>
+          {(todaysPlanWorkout.exercises?.length || 0) > 0 && (
+            <View style={styles.lastExRow}>
+              {todaysPlanWorkout.exercises!.slice(0, 4).map((ex, i) => (
+                <View key={`${ex.exercise_id}-${i}`} style={styles.lastExChip}>
+                  <Text style={styles.lastExChipText} numberOfLines={1}>
+                    {ex.exercise_name}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
+          <TouchableOpacity style={styles.startPlan} onPress={handleStartPlan}>
+            <Text style={styles.startPlanText}>Start Workout</Text>
+          </TouchableOpacity>
+        </View>
+      ) : todaysPlanWorkout?.status === "rest_day" ? (
+        <View style={styles.todayCard}>
+          <Text style={styles.todayBadge}>TODAY'S WORKOUT</Text>
+          <Text style={styles.todayTitle}>Rest day</Text>
+        </View>
+      ) : null}
+
+      {weekGroups.map((group) => (
+        <View key={group.key} style={styles.weekBlock}>
+          <Text style={styles.weekLabel}>{group.label}</Text>
+          <View style={styles.weekCard}>
+            {group.sessions.map((session, index) => {
+              const listedExercises = migrateSessionCardioToExercises(session);
+              const exerciseCount = listedExercises.length;
+              const minutes = sessionDurationMinutes(session);
+              const label = splitLabel(session);
+              const badge = splitBadgeColors(label);
+              return (
+                <View key={session.id || `${session.date}-${index}`}>
+                  {index > 0 ? <View style={styles.weekDivider} /> : null}
+                  <TouchableOpacity
+                    style={styles.sessionRow}
+                    onPress={() => handleEdit(session)}
+                  >
+                    <View style={styles.flex}>
+                      <View style={styles.sessionTop}>
+                        <Text style={styles.sessionDate}>{formatDateOrdinal(session.date)}</Text>
+                        {badge && label ? (
+                          <View style={[styles.splitBadge, { backgroundColor: badge.bg }]}>
+                            <Text style={[styles.splitBadgeText, { color: badge.text }]}>
+                              {label}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <Text style={styles.sessionMeta}>
+                        {exerciseCount} exercise{exerciseCount !== 1 ? "s" : ""}
+                        {minutes != null ? ` · ${minutes} min` : ""}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => session.id && handleDelete(session.id)}
+                      hitSlop={12}
+                    >
+                      <MaterialCommunityIcons
+                        name="delete-outline"
+                        size={18}
+                        color={colors.textMuted}
+                      />
+                    </TouchableOpacity>
+                    <MaterialCommunityIcons
+                      name="chevron-right"
+                      size={22}
+                      color={colors.borderHover}
+                    />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      ))}
     </ScrollView>
   );
 }
@@ -1368,7 +1504,7 @@ const styles = StyleSheet.create({
   todayCard: {
     backgroundColor: colors.cardBackground,
     borderWidth: 1,
-    borderColor: "rgba(255,107,53,0.3)",
+    borderColor: "#FF6B35",
     borderRadius: 16,
     padding: 20,
     marginBottom: spacing.lg,
@@ -1395,27 +1531,61 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: "center",
   },
-  startPlanText: { color: "#fff", fontWeight: "700" },
-  sessionCard: {
+  startPlanText: { color: "#0B0C10", fontWeight: "700" },
+  lastExRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
+  lastExChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    maxWidth: "48%",
+  },
+  lastExChipText: { color: colors.textSecondary, fontSize: 12, fontWeight: "500" },
+  weekBlock: { marginBottom: 20 },
+  weekLabel: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1.4,
+    marginBottom: 10,
+  },
+  weekCard: {
     backgroundColor: colors.cardBackground,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 16,
-    padding: 20,
-    marginBottom: 12,
+    overflow: "hidden",
+  },
+  weekDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginHorizontal: 16,
+  },
+  sessionRow: {
     flexDirection: "row",
     alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     gap: 8,
   },
-  sessionTitle: { color: "#fff", fontSize: 16, fontWeight: "700", marginBottom: 4 },
+  sessionTop: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  sessionDate: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  splitBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  splitBadgeText: { fontSize: 11, fontWeight: "700" },
+  sessionMeta: { color: colors.textSecondary, fontSize: 13, marginTop: 4 },
   formHeader: { flexDirection: "row", gap: 10, marginBottom: 8 },
   backBtn: { paddingTop: 4 },
-  formTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
-  dateLink: { color: colors.ai, fontSize: 13, marginTop: 4 },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  formTitle: { color: "#fff", fontSize: 18, fontWeight: "700", flexShrink: 1 },
   splitRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
   dropBtn: {
     height: 36,
-    minWidth: 120,
     paddingHorizontal: 12,
     borderRadius: 8,
     borderWidth: 1,
@@ -1423,10 +1593,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8,
+    alignSelf: "flex-start",
+    gap: 6,
   },
-  dropBtnText: { color: "#fff", fontSize: 12, fontWeight: "600", flex: 1 },
+  dropBtnText: { color: "#fff", fontSize: 12, fontWeight: "600" },
   menu: {
     marginTop: 6,
     backgroundColor: colors.cardBackground,
@@ -1542,7 +1712,8 @@ const styles = StyleSheet.create({
   },
   exName: { color: "#fff", fontSize: 16, fontWeight: "700" },
   exMeta: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
-  lastTeal: { color: "rgba(94,234,212,0.9)", fontSize: 12, marginTop: 4 },
+  lastOrange: { color: colors.accentPrimary, fontSize: 12, lineHeight: 18 },
+  lastOrangeHeader: { color: colors.accentPrimary, fontSize: 12, marginTop: 4, lineHeight: 18 },
   exHeaderRight: { flexDirection: "row", alignItems: "center", gap: 8 },
   setCount: { color: colors.textSecondary, fontSize: 12 },
   aiBadge: {
@@ -1640,6 +1811,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
+  historyBox: {
+    marginHorizontal: 16,
+    marginBottom: 4,
+    marginTop: 4,
+    backgroundColor: "#0C0C0E",
+    borderWidth: 1,
+    borderColor: "rgba(255,107,53,0.28)",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  historyLast: {},
+  statsRow: { flexDirection: "row" },
   stat: { flex: 1 },
   statLabelOrange: { color: colors.accentPrimary, fontSize: 10, fontWeight: "700" },
   statLabel: { color: colors.textMuted, fontSize: 10, fontWeight: "600" },

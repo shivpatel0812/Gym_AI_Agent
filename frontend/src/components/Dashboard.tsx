@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
-import LinearGradient from './shared/LinearGradient';
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import apiClient from '../api/client';
 import { colors, spacing, borderRadius, shadows } from '../theme';
@@ -61,20 +60,15 @@ export default function Dashboard() {
     fetchStats();
   }, []);
 
-  const StatCard = ({ label, value, icon, gradient }: { label: string; value: number; icon: string; gradient: string[] }) => (
+  const StatCard = ({ label, value, icon }: { label: string; value: number; icon: string }) => (
     <View style={styles.statCardContainer}>
-      <LinearGradient
-        colors={gradient}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.statCard}
-      >
+      <View style={styles.statCard}>
         <View style={styles.statIconContainer}>
-          <MaterialCommunityIcons name={icon as any} size={32} color={colors.textPrimary} />
+          <MaterialCommunityIcons name={icon as any} size={22} color={colors.accentPrimary} />
         </View>
         <Text style={styles.statValue}>{value || 0}</Text>
         <Text style={styles.statLabel}>{label}</Text>
-      </LinearGradient>
+      </View>
     </View>
   );
 
@@ -92,25 +86,21 @@ export default function Dashboard() {
           label="Workouts Today"
           value={stats.workouts || 0}
           icon="dumbbell"
-          gradient={[colors.accentPrimary, colors.accentSecondary]}
         />
         <StatCard
           label="Activities"
           value={stats.activities || 0}
           icon="run-fast"
-          gradient={[colors.success, '#059669']}
         />
         <StatCard
           label="Macro Entries"
           value={stats.macros || 0}
           icon="food-apple"
-          gradient={[colors.warning, '#D97706']}
         />
         <StatCard
           label="Wellness"
           value={stats.stress || 0}
           icon="heart-pulse"
-          gradient={[colors.accentSecondary, '#7C3AED']}
         />
       </View>
     </ScrollView>
@@ -151,12 +141,15 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     minHeight: 140,
     justifyContent: 'space-between',
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   statIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: borderRadius.lg,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.md,
+    backgroundColor: 'rgba(255, 107, 53, 0.12)',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: spacing.md,
@@ -170,7 +163,6 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: colors.textPrimary,
-    opacity: 0.9,
+    color: colors.textSecondary,
   },
 });

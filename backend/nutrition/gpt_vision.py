@@ -1,48 +1,11 @@
 """
 GPT vision nutrition estimate from a meal photo plus optional user description.
 """
-import os
-import json
 import base64
 import mimetypes
 from typing import Dict, Optional
-from openai import OpenAI
-
-
-def get_openai_client() -> Optional[OpenAI]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
-    return OpenAI(api_key=api_key)
-
-
-def _parse_json(content: str) -> Optional[Dict]:
-    text = (content or "").strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        last_brace = text.rfind("}")
-        if last_brace > 0:
-            try:
-                return json.loads(text[: last_brace + 1])
-            except json.JSONDecodeError:
-                return None
-        return None
-
-
-def _num(value, default=0):
-    try:
-        n = float(value)
-        if n < 0:
-            return default
-        return n
-    except (TypeError, ValueError):
-        return default
+from .gpt_fallback import get_openai_client
+from .gpt_food_lookup import ESTIMATE_RULES, _parse_json, finalize_estimated_macros
 
 
 def gpt_vision_estimate(image_path: str, description: Optional[str] = None) -> Optional[Dict]:
@@ -62,17 +25,21 @@ def gpt_vision_estimate(image_path: str, description: Optional[str] = None) -> O
         mime = mimetypes.guess_type(image_path)[0] or "image/jpeg"
         hint = (description or "").strip()
 
-        prompt = f"""You are a nutrition estimator. Analyze this meal photo and estimate macros for the portion shown — not per 100g.
+        prompt = f"""You are a nutrition estimator. Analyze this meal photo and estimate macros for the FULL portion eaten — not per 100g, not one unit if they said they had several.
 
 The user described the food as:
 {hint if hint else "(no description — identify from the photo)"}
 
-Use the user's description as the primary identity (name, ingredients, restaurant, cooking method). Use the photo to judge portion size, extras (oils, sauces, cheese, drinks), and anything they did not mention.
+Use the user's description as the primary identity (name, ingredients, restaurant, cooking method, quantity). Use the photo to judge extras (oils, sauces, cheese, drinks) and anything they did not mention.
 
-Return JSON only with:
+{ESTIMATE_RULES}
 {{
   "name": "short food name matching what the user said when possible",
-  "amount": "portion as eaten, e.g. 1 bowl, 8 oz, 2 slices",
+  "amount": "full portion as eaten, e.g. 3 frankie wraps",
+  "components": [
+    {{"item": "flour tortilla", "qty": 3, "calories": 450}},
+    {{"item": "chickpea and pea filling with oil", "qty": 3, "calories": 360}}
+  ],
   "calories": number,
   "protein": number,
   "carbs": number,
@@ -101,8 +68,8 @@ If several items are on the plate, estimate the whole plate as one entry unless 
                 }
             ],
             response_format={"type": "json_object"},
-            max_tokens=400,
-            temperature=0.2,
+            max_tokens=700,
+            temperature=0.1,
         )
 
         content = response.choices[0].message.content or ""
@@ -111,15 +78,15 @@ If several items are on the plate, estimate the whole plate as one entry unless 
             return None
 
         name = str(parsed.get("name") or hint or "Meal").strip() or "Meal"
-        fats = parsed.get("fats", parsed.get("fat"))
+        calories, protein, carbs, fats, fiber = finalize_estimated_macros(parsed)
         return {
             "name": name[:120],
-            "amount": str(parsed.get("amount") or "").strip()[:80] or None,
-            "calories": int(round(_num(parsed.get("calories")))),
-            "protein": round(_num(parsed.get("protein")), 1),
-            "carbs": round(_num(parsed.get("carbs")), 1),
-            "fats": round(_num(fats), 1),
-            "fiber": round(_num(parsed.get("fiber")), 1),
+            "amount": str(parsed.get("amount") or parsed.get("serving") or "").strip()[:80] or None,
+            "calories": calories,
+            "protein": protein,
+            "carbs": carbs,
+            "fats": fats,
+            "fiber": fiber,
         }
     except Exception as e:
         print(f"Error calling GPT vision API: {e}")

@@ -1,51 +1,27 @@
 import { useState, useEffect } from "react";
-import {
-  View,
-  Text,
-  ScrollView,
-  StyleSheet,
-  Modal,
-  TouchableOpacity,
-  Alert,
-  Platform,
-} from "react-native";
-import DateTimePicker from "@react-native-community/datetimepicker";
-import Slider from "@react-native-community/slider";
+import { View, Text, TouchableOpacity, Alert, Platform } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import apiClient from "../../api/client";
-import Button from "../shared/Button";
-import Card from "../shared/Card";
-import Input from "../shared/Input";
-import { colors, spacing, borderRadius } from "../../theme";
+import { SleepEntry, todayKey } from "./types";
+import { EmptyNote, Field, FormCard, LevelSlider, Meter, logStyles } from "./ui";
 
-interface SleepEntry {
-  id?: string;
-  date: string;
-  hours_slept: number;
-  quality: number;
-  bedtime?: string;
-  wake_time?: string;
-  notes?: string;
-}
+const emptySleep = (): SleepEntry => ({
+  date: todayKey(),
+  hours_slept: 8,
+  quality: 5,
+  bedtime: "",
+  wake_time: "",
+  notes: "",
+});
 
 export default function SleepSection() {
   const [entries, setEntries] = useState<SleepEntry[]>([]);
   const [showForm, setShowForm] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
-  const [formData, setFormData] = useState<SleepEntry>({
-    date: new Date().toISOString().split("T")[0],
-    hours_slept: 8,
-    quality: 5,
-    bedtime: "",
-    wake_time: "",
-    notes: "",
-  });
-
-  // Date picker states
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showBedtimePicker, setShowBedtimePicker] = useState(false);
-  const [showWaketimePicker, setShowWaketimePicker] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<SleepEntry>(emptySleep());
+  const [showDate, setShowDate] = useState(false);
+  const [timeField, setTimeField] = useState<"bedtime" | "wake_time" | null>(null);
 
   useEffect(() => {
     fetchEntries();
@@ -54,32 +30,31 @@ export default function SleepSection() {
   const fetchEntries = async () => {
     try {
       const res = await apiClient.get("/api/sleep");
-      setEntries(res.data);
+      setEntries(Array.isArray(res.data) ? res.data : []);
     } catch (error) {
       console.error("Error fetching sleep entries:", error);
     }
   };
 
-  const handleSubmit = async () => {
-    setLoading(true);
+  const reset = () => {
+    setForm(emptySleep());
+    setEditingId(null);
+    setShowForm(false);
+  };
+
+  const save = async () => {
     try {
-      if (editingEntryId) {
-        await apiClient.put(`/api/sleep/${editingEntryId}`, formData);
-      } else {
-        await apiClient.post("/api/sleep", formData);
-      }
-      resetForm();
+      if (editingId) await apiClient.put(`/api/sleep/${editingId}`, form);
+      else await apiClient.post("/api/sleep", form);
+      reset();
       fetchEntries();
     } catch (error) {
       console.error("Error saving sleep entry:", error);
-      Alert.alert("Error", "Failed to save sleep entry");
-    } finally {
-      setLoading(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    Alert.alert("Delete Entry", "Are you sure you want to delete this entry?", [
+  const remove = (id: string) => {
+    Alert.alert("Delete sleep entry?", "", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
@@ -90,443 +65,146 @@ export default function SleepSection() {
             fetchEntries();
           } catch (error) {
             console.error("Error deleting entry:", error);
-            Alert.alert("Error", "Failed to delete entry");
           }
         },
       },
     ]);
   };
 
-  const resetForm = () => {
-    setFormData({
-      date: new Date().toISOString().split("T")[0],
-      hours_slept: 8,
-      quality: 5,
-      bedtime: "",
-      wake_time: "",
-      notes: "",
-    });
-    setEditingEntryId(null);
-    setShowForm(false);
-  };
-
-  const getQualityColor = (quality: number) => {
-    if (quality <= 3) return colors.danger;
-    if (quality <= 6) return colors.warning;
-    return colors.success;
-  };
-
-  const handleDateChange = (event: any, selectedDate?: Date) => {
-    setShowDatePicker(Platform.OS === "ios");
-    if (selectedDate) {
-      setFormData({ ...formData, date: selectedDate.toISOString().split("T")[0] });
-    }
-  };
-
-  const handleBedtimeChange = (event: any, selectedTime?: Date) => {
-    setShowBedtimePicker(Platform.OS === "ios");
-    if (selectedTime) {
-      const hours = selectedTime.getHours().toString().padStart(2, "0");
-      const minutes = selectedTime.getMinutes().toString().padStart(2, "0");
-      setFormData({ ...formData, bedtime: `${hours}:${minutes}` });
-    }
-  };
-
-  const handleWaketimeChange = (event: any, selectedTime?: Date) => {
-    setShowWaketimePicker(Platform.OS === "ios");
-    if (selectedTime) {
-      const hours = selectedTime.getHours().toString().padStart(2, "0");
-      const minutes = selectedTime.getMinutes().toString().padStart(2, "0");
-      setFormData({ ...formData, wake_time: `${hours}:${minutes}` });
-    }
+  const timeValue = (raw?: string) => {
+    if (!raw) return new Date();
+    const [h, m] = raw.split(":").map(Number);
+    const d = new Date();
+    if (Number.isFinite(h)) d.setHours(h, Number.isFinite(m) ? m : 0, 0, 0);
+    return d;
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Button onPress={() => setShowForm(true)} variant="primary">
-          <MaterialCommunityIcons name="plus" size={18} color={colors.textPrimary} />
-          <Text style={styles.buttonText}>Log Sleep</Text>
-        </Button>
+    <View style={logStyles.wrap}>
+      <View style={logStyles.topRow}>
+        {!showForm && (
+          <TouchableOpacity style={logStyles.logBtn} onPress={() => setShowForm(true)}>
+            <MaterialCommunityIcons name="plus" size={18} color="#fff" />
+            <Text style={logStyles.logBtnText}>Log Sleep</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {entries.length === 0 ? (
-          <View style={styles.emptyState}>
-            <MaterialCommunityIcons name="bedtime" size={64} color={colors.textSecondary} />
-            <Text style={styles.emptyText}>No sleep entries yet</Text>
-            <Text style={styles.emptySubtext}>Start tracking your sleep!</Text>
-          </View>
-        ) : (
-          <View style={styles.grid}>
-            {entries.map((entry) => (
-              <Card key={entry.id} variant="default">
-                <View style={styles.cardHeader}>
-                  <View>
-                    <Text style={styles.cardDate}>{entry.date}</Text>
-                    <View style={styles.statsRow}>
-                      <View style={styles.stat}>
-                        <MaterialCommunityIcons
-                          name="bedtime"
-                          size={20}
-                          color={colors.accentPrimary}
-                        />
-                        <Text style={styles.statValue}>{entry.hours_slept}h</Text>
-                      </View>
-                      <View style={styles.stat}>
-                        <Text style={[styles.qualityValue, { color: getQualityColor(entry.quality) }]}>
-                          {entry.quality}
-                        </Text>
-                        <Text style={styles.qualityLabel}>/10</Text>
-                      </View>
-                    </View>
-                  </View>
-                  <TouchableOpacity onPress={() => handleDelete(entry.id!)} style={styles.deleteButton}>
-                    <MaterialCommunityIcons name="delete" size={20} color={colors.danger} />
-                  </TouchableOpacity>
-                </View>
+      {showForm && (
+        <FormCard title={editingId ? "Edit Sleep" : "Log Sleep"} onClose={reset}>
+          <TouchableOpacity onPress={() => setShowDate(true)}>
+            <Field label="Date" value={form.date} onChangeText={() => {}} />
+          </TouchableOpacity>
+          {showDate && (
+            <DateTimePicker
+              value={new Date(`${form.date}T00:00:00`)}
+              mode="date"
+              display={Platform.OS === "ios" ? "spinner" : "default"}
+              onChange={(_, date) => {
+                if (Platform.OS !== "ios") setShowDate(false);
+                if (date) {
+                  const y = date.getFullYear();
+                  const m = String(date.getMonth() + 1).padStart(2, "0");
+                  const d = String(date.getDate()).padStart(2, "0");
+                  setForm({ ...form, date: `${y}-${m}-${d}` });
+                }
+              }}
+            />
+          )}
+          <Field
+            label="Hours slept"
+            value={String(form.hours_slept)}
+            onChangeText={(v) =>
+              setForm({ ...form, hours_slept: v ? parseFloat(v) : 0 })
+            }
+            keyboardType="decimal-pad"
+            placeholder="8"
+          />
+          <LevelSlider
+            label="Sleep quality"
+            value={form.quality ?? 5}
+            onChange={(v) => setForm({ ...form, quality: v })}
+            minLabel="Poor"
+            maxLabel="Excellent"
+          />
+          <TouchableOpacity onPress={() => setTimeField("bedtime")}>
+            <Field
+              label="Bedtime (optional)"
+              value={form.bedtime || "Tap to set"}
+              onChangeText={() => {}}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setTimeField("wake_time")}>
+            <Field
+              label="Wake time (optional)"
+              value={form.wake_time || "Tap to set"}
+              onChangeText={() => {}}
+            />
+          </TouchableOpacity>
+          {timeField && (
+            <DateTimePicker
+              value={timeValue(form[timeField])}
+              mode="time"
+              display={Platform.OS === "ios" ? "spinner" : "default"}
+              onChange={(_, date) => {
+                if (Platform.OS !== "ios") setTimeField(null);
+                if (date && timeField) {
+                  const hh = String(date.getHours()).padStart(2, "0");
+                  const mm = String(date.getMinutes()).padStart(2, "0");
+                  setForm({ ...form, [timeField]: `${hh}:${mm}` });
+                }
+              }}
+            />
+          )}
+          <Field
+            label="Notes (optional)"
+            value={form.notes || ""}
+            onChangeText={(v) => setForm({ ...form, notes: v })}
+            placeholder="How did you sleep?"
+            multiline
+          />
+          <TouchableOpacity style={logStyles.saveBtn} onPress={save}>
+            <Text style={logStyles.saveText}>{editingId ? "Update" : "Save"}</Text>
+          </TouchableOpacity>
+        </FormCard>
+      )}
 
-                <View style={styles.qualityBar}>
-                  <View
-                    style={[
-                      styles.qualityProgress,
-                      {
-                        backgroundColor: getQualityColor(entry.quality),
-                        width: `${(entry.quality / 10) * 100}%`,
-                      },
-                    ]}
-                  />
-                </View>
-
-                {(entry.bedtime || entry.wake_time) && (
-                  <View style={styles.timesContainer}>
-                    {entry.bedtime && (
-                      <Text style={styles.timeText}>
-                        <Text style={styles.timeLabel}>Bedtime:</Text> {entry.bedtime}
-                      </Text>
-                    )}
-                    {entry.wake_time && (
-                      <Text style={styles.timeText}>
-                        <Text style={styles.timeLabel}>Wake:</Text> {entry.wake_time}
-                      </Text>
-                    )}
-                  </View>
-                )}
-
-                {entry.notes && <Text style={styles.notes}>{entry.notes}</Text>}
-              </Card>
-            ))}
-          </View>
-        )}
-      </ScrollView>
-
-      {/* Form Modal */}
-      <Modal visible={showForm} animationType="slide" transparent={true}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {editingEntryId ? "Edit Sleep Entry" : "Log Sleep"}
-              </Text>
-              <TouchableOpacity onPress={resetForm}>
-                <MaterialCommunityIcons name="close" size={24} color={colors.textSecondary} />
+      {entries.length === 0 && !showForm ? (
+        <EmptyNote text="No sleep entries yet. Start tracking your sleep." />
+      ) : (
+        entries.map((entry) => (
+          <TouchableOpacity
+            key={entry.id}
+            style={logStyles.card}
+            onPress={() => {
+              setForm(entry);
+              setEditingId(entry.id || null);
+              setShowForm(true);
+            }}
+          >
+            <View style={logStyles.cardTop}>
+              <View>
+                <Text style={logStyles.cardDate}>{entry.date}</Text>
+                <Text style={[logStyles.cardSub, { marginTop: 4 }]}>
+                  {entry.hours_slept} hours
+                  {entry.bedtime || entry.wake_time
+                    ? ` · ${entry.bedtime || "—"} – ${entry.wake_time || "—"}`
+                    : ""}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => entry.id && remove(entry.id)} hitSlop={10}>
+                <MaterialCommunityIcons name="delete-outline" size={18} color="#636366" />
               </TouchableOpacity>
             </View>
-
-            <ScrollView style={styles.formScroll} showsVerticalScrollIndicator={false}>
-              <TouchableOpacity
-                style={styles.inputWrapper}
-                onPress={() => setShowDatePicker(true)}
-              >
-                <Text style={styles.label}>Date</Text>
-                <View style={styles.dateInput}>
-                  <Text style={styles.dateText}>{formData.date}</Text>
-                  <MaterialCommunityIcons name="calendar" size={20} color={colors.accentPrimary} />
-                </View>
-              </TouchableOpacity>
-
-              {showDatePicker && (
-                <DateTimePicker
-                  value={new Date(formData.date)}
-                  mode="date"
-                  display="default"
-                  onChange={handleDateChange}
-                />
-              )}
-
-              <Input
-                label="Hours Slept"
-                value={formData.hours_slept.toString()}
-                onChangeText={(text) =>
-                  setFormData({ ...formData, hours_slept: parseFloat(text) || 0 })
-                }
-                keyboardType="decimal-pad"
-                placeholder="8.0"
-              />
-
-              <View style={styles.sliderWrapper}>
-                <Text style={styles.label}>Sleep Quality: {formData.quality}</Text>
-                <Slider
-                  style={styles.slider}
-                  minimumValue={1}
-                  maximumValue={10}
-                  step={1}
-                  value={formData.quality}
-                  onValueChange={(value) => setFormData({ ...formData, quality: value })}
-                  minimumTrackTintColor={colors.accentPrimary}
-                  maximumTrackTintColor={colors.border}
-                  thumbTintColor={colors.accentPrimary}
-                />
-                <View style={styles.sliderLabels}>
-                  <Text style={styles.sliderLabel}>Poor (1)</Text>
-                  <Text style={styles.sliderLabel}>Excellent (10)</Text>
-                </View>
+            {entry.quality != null ? (
+              <View style={{ marginTop: 10 }}>
+                <Meter label="Quality" value={entry.quality} />
               </View>
-
-              <TouchableOpacity
-                style={styles.inputWrapper}
-                onPress={() => setShowBedtimePicker(true)}
-              >
-                <Text style={styles.label}>Bedtime (Optional)</Text>
-                <View style={styles.dateInput}>
-                  <Text style={styles.dateText}>{formData.bedtime || "Not set"}</Text>
-                  <MaterialCommunityIcons name="clock-outline" size={20} color={colors.accentPrimary} />
-                </View>
-              </TouchableOpacity>
-
-              {showBedtimePicker && (
-                <DateTimePicker
-                  value={new Date()}
-                  mode="time"
-                  display="default"
-                  onChange={handleBedtimeChange}
-                />
-              )}
-
-              <TouchableOpacity
-                style={styles.inputWrapper}
-                onPress={() => setShowWaketimePicker(true)}
-              >
-                <Text style={styles.label}>Wake Time (Optional)</Text>
-                <View style={styles.dateInput}>
-                  <Text style={styles.dateText}>{formData.wake_time || "Not set"}</Text>
-                  <MaterialCommunityIcons name="clock-outline" size={20} color={colors.accentPrimary} />
-                </View>
-              </TouchableOpacity>
-
-              {showWaketimePicker && (
-                <DateTimePicker
-                  value={new Date()}
-                  mode="time"
-                  display="default"
-                  onChange={handleWaketimeChange}
-                />
-              )}
-
-              <Input
-                label="Notes (Optional)"
-                value={formData.notes}
-                onChangeText={(text) => setFormData({ ...formData, notes: text })}
-                placeholder="How did you sleep?"
-                multiline
-                numberOfLines={3}
-              />
-
-              <View style={styles.buttonRow}>
-                <Button
-                  onPress={handleSubmit}
-                  variant="primary"
-                  loading={loading}
-                  style={{ flex: 1 }}
-                >
-                  {editingEntryId ? "Update" : "Save"}
-                </Button>
-                <Button onPress={resetForm} variant="secondary" style={{ flex: 1 }}>
-                  Cancel
-                </Button>
-              </View>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+            ) : null}
+            {entry.notes ? <Text style={logStyles.cardSub}>{entry.notes}</Text> : null}
+          </TouchableOpacity>
+        ))
+      )}
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  header: {
-    padding: spacing.lg,
-    paddingBottom: spacing.md,
-  },
-  buttonText: {
-    color: colors.textPrimary,
-    fontWeight: "600",
-    marginLeft: spacing.xs,
-  },
-  scrollView: {
-    flex: 1,
-    paddingHorizontal: spacing.lg,
-  },
-  emptyState: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: spacing["3xl"],
-  },
-  emptyText: {
-    color: colors.textSecondary,
-    fontSize: 16,
-    marginTop: spacing.lg,
-  },
-  emptySubtext: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    marginTop: spacing.xs,
-  },
-  grid: {
-    gap: spacing.md,
-    paddingBottom: spacing.xl,
-  },
-  cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: spacing.md,
-  },
-  cardDate: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: colors.textPrimary,
-    marginBottom: spacing.sm,
-  },
-  statsRow: {
-    flexDirection: "row",
-    gap: spacing.lg,
-  },
-  stat: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  statValue: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: colors.textPrimary,
-  },
-  qualityValue: {
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  qualityLabel: {
-    fontSize: 12,
-    color: colors.textSecondary,
-  },
-  deleteButton: {
-    padding: spacing.sm,
-  },
-  qualityBar: {
-    width: "100%",
-    height: 8,
-    backgroundColor: colors.border,
-    borderRadius: borderRadius.sm,
-    marginBottom: spacing.md,
-    overflow: "hidden",
-  },
-  qualityProgress: {
-    height: "100%",
-    borderRadius: borderRadius.sm,
-  },
-  timesContainer: {
-    gap: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  timeText: {
-    fontSize: 12,
-    color: colors.textSecondary,
-  },
-  timeLabel: {
-    fontWeight: "600",
-  },
-  notes: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: spacing.sm,
-    paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
-    justifyContent: "flex-end",
-  },
-  modalContent: {
-    backgroundColor: colors.cardBackground,
-    borderTopLeftRadius: borderRadius["2xl"],
-    borderTopRightRadius: borderRadius["2xl"],
-    maxHeight: "90%",
-  },
-  modalHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: colors.textPrimary,
-  },
-  formScroll: {
-    padding: spacing.lg,
-  },
-  inputWrapper: {
-    marginBottom: spacing.lg,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: colors.textPrimary,
-    marginBottom: spacing.sm,
-  },
-  dateInput: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-  },
-  dateText: {
-    fontSize: 16,
-    color: colors.textPrimary,
-  },
-  sliderWrapper: {
-    marginBottom: spacing.lg,
-  },
-  slider: {
-    width: "100%",
-    height: 40,
-  },
-  sliderLabels: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: -spacing.sm,
-  },
-  sliderLabel: {
-    fontSize: 12,
-    color: colors.textSecondary,
-  },
-  buttonRow: {
-    flexDirection: "row",
-    gap: spacing.md,
-    marginTop: spacing.lg,
-  },
-});

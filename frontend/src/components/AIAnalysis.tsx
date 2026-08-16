@@ -13,6 +13,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import LinearGradient from "./shared/LinearGradient";
 import Button from "./shared/Button";
 import Card from "./shared/Card";
+import Markdown, { stripMarkdown } from "./shared/Markdown";
 import apiClient from "../api/client";
 import { colors, spacing, borderRadius, shadows } from "../theme";
 
@@ -56,13 +57,14 @@ export default function AIAnalysis() {
 
   useEffect(() => {
     fetchAnalyses();
-  }, []);
+  }, [selectedYear]);
 
   const fetchAnalyses = async () => {
     setLoading(true);
     try {
-      const res = await apiClient.get(`/api/ai-analysis/analyses?year=${currentYear}&limit=12`);
-      setAnalyses(Array.isArray(res.data) ? res.data : []);
+      const res = await apiClient.get(`/api/ai-analysis/analyses?year=${selectedYear}&limit=12`);
+      // The endpoint returns { status, count, analyses } — not a bare array
+      setAnalyses(Array.isArray(res.data?.analyses) ? res.data.analyses : []);
     } catch (error) {
       console.error("Error fetching analyses:", error);
       setAnalyses([]); // Ensure it's always an array
@@ -74,11 +76,17 @@ export default function AIAnalysis() {
   const generateAnalysis = async () => {
     setGenerating(true);
     try {
-      await apiClient.post("/api/ai-analysis/generate", {
-        year: selectedYear,
-        month: selectedMonth,
-        include_previous_months: true,
-      });
+      await apiClient.post(
+        "/api/ai-analysis/generate",
+        {
+          year: selectedYear,
+          month: selectedMonth,
+          include_previous_months: true,
+        },
+        // Generation is a long GPT-4o call with months of context — the
+        // default 30s client timeout is not enough
+        { timeout: 120000 }
+      );
       Alert.alert("Success", "Analysis generated successfully!");
       fetchAnalyses();
     } catch (error: any) {
@@ -115,9 +123,14 @@ export default function AIAnalysis() {
     setExpandedAnalysis(expandedAnalysis === id ? null : id);
   };
 
+  // Preview is plain text: truncating raw markdown cuts mid-syntax and leaves
+  // stray "**" or half a heading on screen
   const getPreview = (text: string) => {
-    return text.length > 200 ? text.substring(0, 200) + "..." : text;
+    const plain = stripMarkdown(text || "");
+    return plain.length > 200 ? plain.substring(0, 200).trimEnd() + "..." : plain;
   };
+
+  const isTruncated = (text: string) => stripMarkdown(text || "").length > 200;
 
   return (
     <View style={styles.container}>
@@ -179,7 +192,7 @@ export default function AIAnalysis() {
             loading={generating}
             style={styles.generateButton}
           >
-            <MaterialCommunityIcons name="sparkles" size={18} color={colors.textPrimary} />
+            <MaterialCommunityIcons name="creation" size={18} color={colors.textPrimary} />
             <Text style={styles.generateButtonText}>Generate Analysis</Text>
           </Button>
         </Card>
@@ -226,11 +239,13 @@ export default function AIAnalysis() {
                     </TouchableOpacity>
                   </View>
 
-                  <Text style={styles.analysisText}>
-                    {isExpanded ? analysis.analysis : getPreview(analysis.analysis)}
-                  </Text>
+                  {isExpanded ? (
+                    <Markdown style={styles.analysisText}>{analysis.analysis || ""}</Markdown>
+                  ) : (
+                    <Text style={styles.analysisText}>{getPreview(analysis.analysis)}</Text>
+                  )}
 
-                  {analysis.analysis.length > 200 && (
+                  {isTruncated(analysis.analysis) && (
                     <TouchableOpacity
                       onPress={() => toggleExpanded(analysis.id)}
                       style={styles.expandButton}

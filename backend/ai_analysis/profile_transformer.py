@@ -90,8 +90,19 @@ def transform_user_profile(profile_data: Optional[Dict[str, Any]]) -> Dict[str, 
     # Constraints (from lifestyle/schedule)
     constraints = []
 
-    if profile_data.get('work_school_hours'):
-        constraints.append(f"Works/studies {profile_data['work_school_hours']} hours/day")
+    # The mobile form asks for hours per WEEK while the web form asks for hours
+    # per DAY, and both write this one field. Disambiguate by magnitude so the
+    # AI isn't told someone works 40 hours a day.
+    work_hours = profile_data.get('work_school_hours')
+    if work_hours:
+        try:
+            hours = float(work_hours)
+            if hours > 16:
+                constraints.append(f"Works/studies {hours:g} hours/week")
+            else:
+                constraints.append(f"Works/studies {hours:g} hours/day")
+        except (TypeError, ValueError):
+            pass
 
     # Busy level scale: 1-10 (1 = not busy, 10 = extremely busy)
     busy_level = profile_data.get('busy_level')

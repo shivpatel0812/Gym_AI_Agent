@@ -1,7 +1,6 @@
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import LinearGradient from "./shared/LinearGradient";
-import { colors, spacing, borderRadius, shadows } from "../theme";
+import { colors, spacing, borderRadius } from "../theme";
 
 interface MoreHomeProps {
   navigation: any;
@@ -10,35 +9,31 @@ interface MoreHomeProps {
 export default function MoreHome({ navigation }: MoreHomeProps) {
   const features = [
     {
+      id: "Activity",
+      title: "Activity",
+      subtitle: "Steps and daily movement",
+      icon: "run-fast" as keyof typeof MaterialCommunityIcons.glyphMap,
+      screen: "Activity",
+    },
+    {
+      id: "Wellness",
+      title: "Wellness",
+      subtitle: "Sleep, stress, body, and survey",
+      icon: "heart-pulse" as keyof typeof MaterialCommunityIcons.glyphMap,
+      screen: "Wellness",
+    },
+    {
       id: "Dashboard",
       title: "Dashboard",
       subtitle: "Overview of your fitness",
       icon: "view-dashboard" as keyof typeof MaterialCommunityIcons.glyphMap,
-      gradient: [colors.accentPrimary, colors.accentSecondary],
       screen: "Dashboard",
-    },
-    {
-      id: "AIChat",
-      title: "AI Coach",
-      subtitle: "Chat with your fitness AI",
-      icon: "robot" as keyof typeof MaterialCommunityIcons.glyphMap,
-      gradient: [colors.accentPrimary, colors.accentSecondary],
-      screen: "AIChat",
-    },
-    {
-      id: "AIAnalysis",
-      title: "AI Analysis",
-      subtitle: "Monthly fitness insights",
-      icon: "chart-line" as keyof typeof MaterialCommunityIcons.glyphMap,
-      gradient: [colors.accentSecondary, "#A78BFA"],
-      screen: "AIAnalysis",
     },
     {
       id: "UserProfile",
       title: "My Profile",
       subtitle: "Complete fitness profile",
       icon: "account-circle" as keyof typeof MaterialCommunityIcons.glyphMap,
-      gradient: [colors.success, "#34D399"],
       screen: "UserProfile",
     },
     {
@@ -46,31 +41,31 @@ export default function MoreHome({ navigation }: MoreHomeProps) {
       title: "Calendar",
       subtitle: "View all activities",
       icon: "calendar-month" as keyof typeof MaterialCommunityIcons.glyphMap,
-      gradient: [colors.warning, "#FBBF24"],
       screen: "Calendar",
     },
   ];
 
   return (
     <ScrollView style={styles.container}>
-      <LinearGradient colors={[colors.background, colors.cardBackground]} style={styles.header}>
-        <Text style={styles.title}>More Features</Text>
-        <Text style={styles.subtitle}>Explore advanced fitness tools</Text>
-      </LinearGradient>
+      <View style={styles.header}>
+        <Text style={styles.title}>More</Text>
+        <Text style={styles.subtitle}>Activity, wellness, and profile</Text>
+      </View>
 
       <View style={styles.grid}>
         {features.map((feature) => (
           <TouchableOpacity
             key={feature.id}
-            style={styles.cardWrapper}
+            style={styles.card}
             onPress={() => navigation.navigate(feature.screen)}
             activeOpacity={0.8}
           >
-            <LinearGradient colors={feature.gradient} style={styles.card}>
-              <MaterialCommunityIcons name={feature.icon} size={48} color={colors.textPrimary} />
+            <MaterialCommunityIcons name={feature.icon} size={22} color={colors.accentPrimary} />
+            <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>{feature.title}</Text>
               <Text style={styles.cardSubtitle}>{feature.subtitle}</Text>
-            </LinearGradient>
+            </View>
+            <MaterialCommunityIcons name="chevron-right" size={20} color={colors.textMuted} />
           </TouchableOpacity>
         ))}
       </View>
@@ -85,8 +80,8 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: spacing.xl,
-    paddingVertical: spacing["2xl"],
-    paddingTop: spacing["3xl"],
+    paddingVertical: spacing.xl,
+    paddingTop: spacing["2xl"],
   },
   title: {
     fontSize: 32,
@@ -100,32 +95,27 @@ const styles = StyleSheet.create({
   },
   grid: {
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xl,
-    gap: spacing.lg,
-  },
-  cardWrapper: {
-    marginBottom: spacing.md,
+    paddingBottom: spacing.xl,
+    gap: 10,
   },
   card: {
-    borderRadius: borderRadius.xl,
-    padding: spacing.xl,
+    borderRadius: borderRadius.lg,
+    padding: spacing.lg,
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
+    flexDirection: "row",
     alignItems: "center",
-    ...shadows.large,
-    minHeight: 180,
-    justifyContent: "center",
+    gap: 12,
   },
   cardTitle: {
-    fontSize: 24,
+    fontSize: 16,
     fontWeight: "700",
     color: colors.textPrimary,
-    marginTop: spacing.lg,
-    textAlign: "center",
   },
   cardSubtitle: {
-    fontSize: 14,
-    color: colors.textPrimary,
-    opacity: 0.9,
-    marginTop: spacing.xs,
-    textAlign: "center",
+    fontSize: 13,
+    color: colors.textSecondary,
+    marginTop: 2,
   },
 });

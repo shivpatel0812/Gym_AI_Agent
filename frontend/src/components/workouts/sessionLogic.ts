@@ -102,21 +102,96 @@ export function formatDateOrdinal(dateStr?: string) {
   return `${month} ${day}${suffix}`;
 }
 
+export function splitLabel(session: {
+  split_name?: string;
+  split_day?: string;
+  workout_name?: string;
+}) {
+  const raw = (session.split_day || session.split_name || session.workout_name || "").trim();
+  if (!raw) return "";
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+export function splitBadgeColors(label: string): { bg: string; text: string } | null {
+  const l = label.toLowerCase();
+  if (!l) return null;
+  if (l.includes("push")) return { bg: "#3D2B56", text: "#C084FC" };
+  if (l.includes("pull")) return { bg: "#064E3B", text: "#34D399" };
+  if (l.includes("leg") || l.includes("lower")) return { bg: "#3D2A14", text: "#FF6B35" };
+  if (l.includes("upper")) return { bg: "#2A1A14", text: "#FF8F66" };
+  if (l.includes("full")) return { bg: "#2A2D35", text: "#E4B896" };
+  return { bg: "#2A2D35", text: "#A1A1AA" };
+}
+
+export function sessionDurationMinutes(session: WorkoutSession): number | null {
+  const ms = Number(session.timer_accumulated_ms) || 0;
+  if (ms > 0) return Math.max(1, Math.round(ms / 60000));
+  if (session.cardio_minutes && session.cardio_minutes > 0) {
+    return Math.round(session.cardio_minutes);
+  }
+  const cardioTimes = (session.exercises || []).reduce(
+    (sum, ex) => sum + (Number(ex.time) || 0),
+    0
+  );
+  if (cardioTimes > 0) return Math.round(cardioTimes);
+  return null;
+}
+
+function startOfWeekMonday(d: Date) {
+  const copy = new Date(d);
+  copy.setHours(0, 0, 0, 0);
+  const day = copy.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  copy.setDate(copy.getDate() + diff);
+  return copy;
+}
+
+export function weekGroupLabel(weekStart: Date, now = new Date()) {
+  const thisWeek = startOfWeekMonday(now);
+  if (weekStart.getTime() === thisWeek.getTime()) return "THIS WEEK";
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  const startMonth = weekStart.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+  const endMonth = weekEnd.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+  if (startMonth === endMonth) {
+    return `WEEK OF ${startMonth} ${weekStart.getDate()}–${weekEnd.getDate()}`;
+  }
+  return `WEEK OF ${startMonth} ${weekStart.getDate()}–${endMonth} ${weekEnd.getDate()}`;
+}
+
+export function groupSessionsByWeek(sessions: WorkoutSession[]) {
+  const sorted = [...sessions].sort((a, b) =>
+    String(b.date || "").localeCompare(String(a.date || ""))
+  );
+  const map = new Map<string, { weekStart: Date; sessions: WorkoutSession[] }>();
+  for (const session of sorted) {
+    const parsed = new Date(`${String(session.date).slice(0, 10)}T00:00:00`);
+    const base = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+    const weekStart = startOfWeekMonday(base);
+    const key = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`;
+    if (!map.has(key)) map.set(key, { weekStart, sessions: [] });
+    map.get(key)!.sessions.push(session);
+  }
+  return Array.from(map.entries())
+    .sort((a, b) => b[1].weekStart.getTime() - a[1].weekStart.getTime())
+    .map(([key, group]) => ({
+      key,
+      label: weekGroupLabel(group.weekStart),
+      sessions: group.sessions,
+    }));
+}
+
 export function sessionListTitle(session: {
   date?: string;
   split_name?: string;
   split_day?: string;
   workout_name?: string;
 }) {
-  const datePart = formatDateOrdinal(session.date);
-  const split = (
-    session.split_day ||
-    session.split_name ||
-    session.workout_name ||
-    ""
-  ).trim();
-  if (datePart && split) return `${datePart} ${split}`;
-  return datePart || split || "Workout Session";
+  return sessionHeadline(
+    session.split_name || session.workout_name,
+    session.split_day,
+    session.date
+  );
 }
 
 export function sessionHeadline(
@@ -383,7 +458,7 @@ export function sessionToForm(session: WorkoutSession): SessionFormData {
   return {
     date: session.date,
     split_id: session.split_id || "",
-    split_name: session.split_name || "",
+    split_name: session.split_name || session.workout_name || "",
     split_day: session.split_day || "",
     exercises: migrateSessionCardioToExercises(session),
     notes: session.notes || "",

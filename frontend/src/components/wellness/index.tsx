@@ -1,85 +1,40 @@
 import { useState } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, StatusBar } from "react-native";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
 import StressSection from "./StressSection";
 import BodyFeelingsSection from "./BodyFeelingsSection";
 import WellnessSurveySection from "./WellnessSurveySection";
 import SleepSection from "./SleepSection";
-import { colors, spacing, borderRadius } from "../../theme";
+import { colors, spacing } from "../../theme";
 
 type TabType = "stress" | "body" | "survey" | "sleep";
 
 export default function Wellness() {
   const [activeTab, setActiveTab] = useState<TabType>("stress");
+  const tabs: { id: TabType; label: string }[] = [
+    { id: "stress", label: "Stress" },
+    { id: "body", label: "Body" },
+    { id: "survey", label: "Survey" },
+    { id: "sleep", label: "Sleep" },
+  ];
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Wellness</Text>
+        <Text style={styles.sub}>Track mental and physical well-being</Text>
       </View>
       <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === "stress" && styles.tabActive]}
-          onPress={() => setActiveTab("stress")}
-        >
-          <MaterialCommunityIcons
-            name={activeTab === "stress" ? "brain" : "brain-outline"}
-            size={20}
-            color={activeTab === "stress" ? colors.accentPrimary : colors.textSecondary}
-            style={styles.tabIcon}
-          />
-          <Text style={[styles.tabText, activeTab === "stress" && styles.tabTextActive]}>
-            Stress
-          </Text>
-          {activeTab === "stress" && <View style={styles.tabIndicator} />}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === "body" && styles.tabActive]}
-          onPress={() => setActiveTab("body")}
-        >
-          <MaterialCommunityIcons
-            name={activeTab === "body" ? "body" : "body-outline"}
-            size={20}
-            color={activeTab === "body" ? colors.accentPrimary : colors.textSecondary}
-            style={styles.tabIcon}
-          />
-          <Text style={[styles.tabText, activeTab === "body" && styles.tabTextActive]}>
-            Body
-          </Text>
-          {activeTab === "body" && <View style={styles.tabIndicator} />}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === "survey" && styles.tabActive]}
-          onPress={() => setActiveTab("survey")}
-        >
-          <MaterialCommunityIcons
-            name={activeTab === "survey" ? "clipboard-text" : "clipboard-text-outline"}
-            size={20}
-            color={activeTab === "survey" ? colors.accentPrimary : colors.textSecondary}
-            style={styles.tabIcon}
-          />
-          <Text style={[styles.tabText, activeTab === "survey" && styles.tabTextActive]}>
-            Survey
-          </Text>
-          {activeTab === "survey" && <View style={styles.tabIndicator} />}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === "sleep" && styles.tabActive]}
-          onPress={() => setActiveTab("sleep")}
-        >
-          <MaterialCommunityIcons
-            name={activeTab === "sleep" ? "bedtime" : "bedtime-outline"}
-            size={20}
-            color={activeTab === "sleep" ? colors.accentPrimary : colors.textSecondary}
-            style={styles.tabIcon}
-          />
-          <Text style={[styles.tabText, activeTab === "sleep" && styles.tabTextActive]}>
-            Sleep
-          </Text>
-          {activeTab === "sleep" && <View style={styles.tabIndicator} />}
-        </TouchableOpacity>
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.id;
+          return (
+            <TouchableOpacity key={tab.id} style={styles.tab} onPress={() => setActiveTab(tab.id)}>
+              <Text style={[styles.tabText, isActive && styles.tabTextActive]}>{tab.label}</Text>
+              {isActive ? <View style={styles.tabIndicator} /> : null}
+            </TouchableOpacity>
+          );
+        })}
       </View>
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
         {activeTab === "stress" && <StressSection />}
         {activeTab === "body" && <BodyFeelingsSection />}
         {activeTab === "survey" && <WellnessSurveySection />}
@@ -90,59 +45,32 @@ export default function Wellness() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
   header: {
     paddingTop: Platform.OS === "ios" ? 60 : StatusBar.currentHeight ? StatusBar.currentHeight + 16 : 16,
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.md,
   },
-  title: {
-    fontSize: 32,
-    fontWeight: "700",
-    color: colors.textPrimary,
-    textAlign: "left",
-  },
+  title: { fontSize: 32, fontWeight: "700", color: "#fff" },
+  sub: { color: "#8E8E93", fontSize: 14, marginTop: 4 },
   tabBar: {
     flexDirection: "row",
-    backgroundColor: colors.cardBackground,
+    gap: 24,
+    paddingHorizontal: spacing.lg,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    paddingHorizontal: spacing.sm,
   },
-  tab: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    alignItems: "center",
-    position: "relative",
-  },
-  tabActive: {
-    backgroundColor: colors.cardBackground,
-  },
-  tabIcon: {
-    marginBottom: spacing.xs,
-  },
-  tabText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: colors.textSecondary,
-  },
-  tabTextActive: {
-    color: colors.accentPrimary,
-  },
+  tab: { paddingVertical: 12, position: "relative" },
+  tabText: { fontSize: 14, fontWeight: "600", color: colors.textSecondary },
+  tabTextActive: { color: "#fff" },
   tabIndicator: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    height: 3,
+    height: 2,
     backgroundColor: colors.accentPrimary,
-    borderTopLeftRadius: borderRadius.sm,
-    borderTopRightRadius: borderRadius.sm,
+    borderRadius: 999,
   },
-  content: {
-    flex: 1,
-  },
+  content: { flex: 1 },
 });
