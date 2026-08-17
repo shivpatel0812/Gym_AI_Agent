@@ -14,9 +14,13 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import apiClient from "../api/client";
+import { useNavigation } from "@react-navigation/native";
 import { colors, spacing } from "../theme";
 import Ring from "./nutrition/Ring";
 import LogFoodForm from "./nutrition/LogFoodForm";
+import TodayGuidanceCard from "./nutrition/plan/TodayGuidanceCard";
+import NutritionPlanTab from "./nutrition/plan/NutritionPlanTab";
+import { getTodayGuidance, TodayGuidance } from "../api/nutritionPlan";
 import {
   DEFAULT_TARGETS,
   FoodItem,
@@ -154,6 +158,12 @@ function FoodRowEditor({
 }
 
 export default function Nutrition() {
+  const navigation = useNavigation<any>();
+  const askNutritionCoach = (prompt: string) => {
+    navigation.navigate("AIHub", { coachMode: "nutrition", prompt });
+  };
+  const [hubTab, setHubTab] = useState<"today" | "plan">("today");
+  const [guidance, setGuidance] = useState<TodayGuidance | null>(null);
   const [entries, setEntries] = useState<MacroEntry[]>([]);
   const [hydrationEntries, setHydrationEntries] = useState<HydrationEntry[]>([]);
   const [selectedDate, setSelectedDate] = useState(() => toDateKey(new Date()));
@@ -193,12 +203,26 @@ export default function Nutrition() {
   }, []);
 
   useEffect(() => {
-    loadCachedTargets().then((cached) => {
-      setTargets(cached);
-      setTargetDraft(cached);
-    });
-    fetchAll();
+    let cancelled = false;
+    (async () => {
+      const cached = await loadCachedTargets();
+      if (!cancelled) {
+        setTargets(cached);
+        setTargetDraft(cached);
+      }
+      if (!cancelled) {
+        await fetchAll();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [fetchAll]);
+
+  useEffect(() => {
+    if (hubTab !== "today") return;
+    fetchAll();
+  }, [hubTab, fetchAll]);
 
   const dayTabs = useMemo(() => {
     const tabs: { key: string; label: string }[] = [];
@@ -263,6 +287,13 @@ export default function Nutrition() {
       fiber: Math.round(fiber),
     };
   }, [dayEntries]);
+
+  useEffect(() => {
+    if (hubTab !== "today") return;
+    getTodayGuidance(selectedDate)
+      .then(setGuidance)
+      .catch(() => setGuidance(null));
+  }, [hubTab, selectedDate, totals.calories, totals.protein]);
 
   const hydrationForDay = useMemo(
     () => hydrationEntries.find((h) => h.date === selectedDate),
@@ -443,7 +474,26 @@ export default function Nutrition() {
 
   return (
     <View style={styles.container}>
-      <KeyboardAvoidingView
+      <View style={styles.hubHeader}>
+        <View style={styles.hubTabs}>
+          {(["today", "plan"] as const).map((tab) => {
+            const active = hubTab === tab;
+            return (
+              <TouchableOpacity key={tab} style={styles.hubTab} onPress={() => setHubTab(tab)}>
+                <Text style={[styles.hubTabText, active && styles.hubTabTextOn]}>
+                  {tab === "today" ? "Today" : "Plan"}
+                </Text>
+                {active ? <View style={styles.hubUnderline} /> : null}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
+      {hubTab === "plan" ? (
+        <NutritionPlanTab onAskCoach={askNutritionCoach} />
+      ) : (
+    <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
@@ -511,6 +561,8 @@ export default function Nutrition() {
               <Text style={{ color: "#FF6B35", fontWeight: "600", marginBottom: 8 }}>Done</Text>
             </TouchableOpacity>
           )}
+
+          <TodayGuidanceCard guidance={guidance} />
 
           {showTargets && (
             <View style={styles.targetsCard}>
@@ -857,23 +909,49 @@ export default function Nutrition() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+      )}
 
+      {hubTab === "today" ? (
       <TouchableOpacity style={styles.fab} onPress={() => openLogFood()}>
         <MaterialCommunityIcons name="plus" size={20} color="#fff" />
         <Text style={styles.fabText}>Log Food</Text>
       </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  hubHeader: {
+    paddingTop: Platform.OS === "ios" ? 54 : StatusBar.currentHeight ? StatusBar.currentHeight + 8 : 8,
+    backgroundColor: colors.background,
+  },
+  hubTabs: {
+    flexDirection: "row",
+    gap: 24,
+    paddingHorizontal: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  hubTab: { paddingVertical: 12, position: "relative" },
+  hubTabText: { fontSize: 14, fontWeight: "600", color: colors.textSecondary },
+  hubTabTextOn: { color: "#fff" },
+  hubUnderline: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: colors.accentPrimary,
+    borderRadius: 999,
+  },
   scroll: {
     paddingHorizontal: spacing.lg,
     paddingBottom: 100,
   },
   header: {
-    paddingTop: Platform.OS === "ios" ? 60 : StatusBar.currentHeight ? StatusBar.currentHeight + 16 : 16,
+    paddingTop: spacing.md,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",

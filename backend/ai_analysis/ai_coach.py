@@ -25,6 +25,10 @@ PLAN_MAX_TOOL_CALLS = 8
 PLAN_MAX_TOKENS = 1200
 
 
+def _is_design_mode(mode: str) -> bool:
+    return mode in ("plan", "nutrition")
+
+
 def clean_for_json(obj: Any) -> Any:
     """Recursively remove None values and ensure all values are JSON-serializable."""
     if obj is None:
@@ -356,6 +360,47 @@ Where a metric reads "not logged", say you don't have that data instead of guess
 Use tools in this mode. Look up recent sessions and the current split early so follow-ups are specific (e.g. "You've been pressing incline once a week — want a second day?"). If a tool returns no data, say so plainly."""
         return prompt
 
+    def _build_nutrition_mode_prompt(
+        self,
+        context: str,
+        today: datetime,
+        nutrition_context: Optional[Dict[str, Any]],
+        toolbox: Optional[CoachToolbox],
+    ) -> str:
+        """Interview prompt used when the user is designing or adjusting nutrition."""
+        payload = json.dumps(nutrition_context or {}, indent=2, default=str)
+        prompt = f"""You are in NUTRITION PLAN MODE. Your job is to interview this user until you can design or adjust a nutrition strategy that fits how they actually eat — and that supports their training. This is not generic diet advice and not a 7-day meal spreadsheet.
+
+Today is {today.strftime('%A, %B %d, %Y')}.
+
+{context}
+
+TRAINING + CURRENT NUTRITION (use this so food supports the workout goal):
+{payload}
+
+How to run the interview:
+- Start from what they just said. Ask 1–2 follow-up questions at a time.
+- If they have a training plan or a lift goal (bench, incline press, etc.), treat nutrition as support for that — protein, calories, and timing — not a separate body-composition lecture unless they ask.
+- Anything already present in TRAINING + CURRENT NUTRITION above is KNOWN. Never ask the user to repeat it. That includes their goal, regular foods, flexible meals, likes, dislikes, dietary restrictions and typical day. Asking again is the single worst thing you can do here — they already filled this in.
+- If nutrition_plan is present, they have an ACTIVE plan and want an adjustment, not a fresh start. Open by naming what you already know ("You're at 2,800 kcal with yogurt/oatmeal breakfast and a flexible family dinner") and ask only what would change it.
+- Cover, across the conversation (ask ONLY for what is genuinely missing above):
+  1. Goal: fuel training, lose fat, gain muscle, or maintain — and how they'll know it worked.
+  2. Foods they already eat on most days (anchors: yogurt, oatmeal, shake, etc.).
+  3. Meals they don't fully control (family dinner, work lunch) and rough calorie ranges.
+  4. Likes, dislikes, restrictions, foods they usually have around.
+  5. How many meals they prefer and whether dinner is the big meal.
+- Be conversational and precise. Reference their logged intake and training when you have it.
+- Do NOT output a JSON plan or a full daily menu to activate. When you have enough, summarise the brief in a few bullets and tell them to tap Generate Nutrition Plan so it can be built and reviewed.
+- If they ask to generate now and you still have a critical gap, ask that one question first.
+
+Where a metric reads "not logged", say you don't have that data instead of guessing."""
+
+        if toolbox is not None:
+            prompt += """
+
+Use tools in this mode. Look up the nutrition plan, recent eating, and the training plan early so follow-ups are specific."""
+        return prompt
+
     def _build_chat_messages(
         self,
         user_message: str,
@@ -364,15 +409,20 @@ Use tools in this mode. Look up recent sessions and the current split early so f
         toolbox: Optional[CoachToolbox],
         mode: str = "coach",
         split_context: Optional[Dict[str, Any]] = None,
+        nutrition_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Assemble the message list shared by the buffered and streaming paths."""
         context = self._build_chatbot_context(summary)
         today = datetime.now()
-        plan_mode = mode == "plan"
+        design_mode = _is_design_mode(mode)
 
-        if plan_mode:
+        if mode == "plan":
             system_message = self._build_plan_mode_prompt(
                 context, today, split_context, toolbox
+            )
+        elif mode == "nutrition":
+            system_message = self._build_nutrition_mode_prompt(
+                context, today, nutrition_context, toolbox
             )
         else:
             system_message = f"""You are a personal fitness coach who knows this user's training history and current status.
@@ -394,7 +444,7 @@ workouts, exercises, dates, personal bests, or what to train today, call the
 tools to look up the actual records rather than answering from the averages or
 guessing. If a tool returns no data, say so plainly."""
 
-        history_limit = PLAN_MODE_HISTORY_MESSAGES if plan_mode else MAX_HISTORY_MESSAGES
+        history_limit = PLAN_MODE_HISTORY_MESSAGES if design_mode else MAX_HISTORY_MESSAGES
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_message}]
         messages.extend(self._sanitize_history(conversation_history or [], limit=history_limit))
         messages.append({"role": "user", "content": user_message})
@@ -406,14 +456,14 @@ guessing. If a tool returns no data, say so plainly."""
         mode: str = "coach",
     ) -> Dict[str, Any]:
         """Build the API kwargs for one round, applying the tool budget."""
-        plan_mode = mode == "plan"
-        max_rounds = PLAN_MAX_TOOL_ROUNDS if plan_mode else MAX_TOOL_ROUNDS
-        max_calls = PLAN_MAX_TOOL_CALLS if plan_mode else MAX_TOOL_CALLS
+        design_mode = _is_design_mode(mode)
+        max_rounds = PLAN_MAX_TOOL_ROUNDS if design_mode else MAX_TOOL_ROUNDS
+        max_calls = PLAN_MAX_TOOL_CALLS if design_mode else MAX_TOOL_CALLS
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": PLAN_MAX_TOKENS if plan_mode else 800,
+            "max_tokens": PLAN_MAX_TOKENS if design_mode else 800,
         }
         # Withhold tools on the last round, and once the call budget is spent,
         # so a tool-happy model still ends with a text answer
@@ -430,6 +480,7 @@ guessing. If a tool returns no data, say so plainly."""
         toolbox: Optional[CoachToolbox] = None,
         mode: str = "coach",
         split_context: Optional[Dict[str, Any]] = None,
+        nutrition_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Handle chatbot interactions with context awareness.
@@ -447,12 +498,13 @@ guessing. If a tool returns no data, say so plainly."""
         """
         # Sanitize once and hand the same clean list back to the client, so its
         # stored history stays valid and bounded instead of accumulating junk
-        history_limit = PLAN_MODE_HISTORY_MESSAGES if mode == "plan" else MAX_HISTORY_MESSAGES
+        history_limit = PLAN_MODE_HISTORY_MESSAGES if _is_design_mode(mode) else MAX_HISTORY_MESSAGES
         clean_history = self._sanitize_history(conversation_history or [], limit=history_limit)
         messages = self._build_chat_messages(
-            user_message, summary, clean_history, toolbox, mode, split_context
+            user_message, summary, clean_history, toolbox, mode, split_context,
+            nutrition_context,
         )
-        max_rounds = PLAN_MAX_TOOL_ROUNDS if mode == "plan" else MAX_TOOL_ROUNDS
+        max_rounds = PLAN_MAX_TOOL_ROUNDS if _is_design_mode(mode) else MAX_TOOL_ROUNDS
 
         try:
             total_tokens = 0
@@ -533,6 +585,7 @@ guessing. If a tool returns no data, say so plainly."""
         toolbox: Optional[CoachToolbox] = None,
         mode: str = "coach",
         split_context: Optional[Dict[str, Any]] = None,
+        nutrition_context: Optional[Dict[str, Any]] = None,
     ) -> Iterator[Dict[str, Any]]:
         """
         Streaming variant of chat(). Yields event dicts for the SSE endpoint.
@@ -543,12 +596,13 @@ guessing. If a tool returns no data, say so plainly."""
             {"type": "done",  ...}           final totals and history
             {"type": "error", "error": str}  failed before/while answering
         """
-        history_limit = PLAN_MODE_HISTORY_MESSAGES if mode == "plan" else MAX_HISTORY_MESSAGES
+        history_limit = PLAN_MODE_HISTORY_MESSAGES if _is_design_mode(mode) else MAX_HISTORY_MESSAGES
         clean_history = self._sanitize_history(conversation_history or [], limit=history_limit)
         messages = self._build_chat_messages(
-            user_message, summary, clean_history, toolbox, mode, split_context
+            user_message, summary, clean_history, toolbox, mode, split_context,
+            nutrition_context,
         )
-        max_rounds = PLAN_MAX_TOOL_ROUNDS if mode == "plan" else MAX_TOOL_ROUNDS
+        max_rounds = PLAN_MAX_TOOL_ROUNDS if _is_design_mode(mode) else MAX_TOOL_ROUNDS
 
         try:
             total_tokens = 0

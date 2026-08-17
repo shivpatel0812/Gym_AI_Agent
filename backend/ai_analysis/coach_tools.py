@@ -265,6 +265,57 @@ class CoachToolbox:
             ],
         }
 
+    def get_training_plan(self) -> Dict[str, Any]:
+        """Active workout/training plan so nutrition advice can support the lifts."""
+        try:
+            from nutrition.training_context import load_training_context
+            context = load_training_context(self.db, self.user_id)
+        except Exception as e:
+            return {"error": f"Could not load training plan: {e}"}
+        if not context.get("has_plan"):
+            return {"status": "no_plan", "message": "No active training plan."}
+        return {"status": "active", **context}
+
+    def get_nutrition_plan(self) -> Dict[str, Any]:
+        """The user's active nutrition strategy: targets, anchors, flexible meals."""
+        try:
+            from nutrition.plan_store import NutritionPlanStore
+            plan = NutritionPlanStore(self.db, self.user_id).get_active()
+        except Exception as e:
+            return {"error": f"Could not load nutrition plan: {e}"}
+        if not plan:
+            return {"status": "no_plan", "message": "No active nutrition plan."}
+        return {
+            "status": plan.get("status"),
+            "goal": plan.get("goal"),
+            "goal_detail": plan.get("goal_detail"),
+            "strategy": plan.get("strategy"),
+            "targets": plan.get("targets"),
+            "meal_anchors": [
+                {
+                    "label": a.get("label"),
+                    "slot": a.get("slot"),
+                    "frequency": a.get("frequency"),
+                    "foods": [f.get("name") for f in (a.get("foods") or []) if f.get("name")],
+                }
+                for a in (plan.get("meal_anchors") or [])
+            ],
+            "flexible_meals": [
+                {
+                    "name": m.get("name"),
+                    "frequency": m.get("frequency"),
+                    "calorie_min": m.get("calorie_min"),
+                    "calorie_max": m.get("calorie_max"),
+                    "protein_min": m.get("protein_min"),
+                    "protein_max": m.get("protein_max"),
+                    "notes": m.get("notes"),
+                }
+                for m in (plan.get("flexible_meals") or [])
+            ],
+            "food_priorities": plan.get("food_priorities") or [],
+            "preferences": plan.get("preferences") or {},
+        }
+
     def get_wellness_log(self, days: int = 7) -> Dict[str, Any]:
         """Day-by-day sleep, stress, and wellness-survey entries."""
         sleep = self._fetch_range("sleep", days)
@@ -325,6 +376,8 @@ class CoachToolbox:
             "get_todays_plan": self.get_todays_plan,
             "get_current_split": self.get_current_split,
             "get_nutrition_log": self.get_nutrition_log,
+            "get_nutrition_plan": self.get_nutrition_plan,
+            "get_training_plan": self.get_training_plan,
             "get_wellness_log": self.get_wellness_log,
             "get_personal_records": self.get_personal_records,
         }.get(name)
@@ -421,6 +474,30 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {"days": _days_param("How many days back to look", 7)},
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_training_plan",
+            "description": (
+                "Get the user's active workout/training plan: the main goal, weekly days, "
+                "and key lifts. Use in nutrition interviews so eating supports the training "
+                "goal (e.g. incline bench, hypertrophy block)."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_nutrition_plan",
+            "description": (
+                "Get the user's active nutrition plan: calorie/protein targets, regular "
+                "foods (meal anchors), and flexible/uncontrolled meals. Use this before "
+                "suggesting meals so advice fits how they actually eat."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {

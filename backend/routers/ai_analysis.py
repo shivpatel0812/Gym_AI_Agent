@@ -60,7 +60,7 @@ def _chat_summary(user_id: str, request: "ChatRequest") -> dict:
         return analyzer.build_complete_summary(request.year, request.month)
     window = (
         PLAN_MODE_CONTEXT_WINDOW_DAYS
-        if getattr(request, "mode", None) == "plan"
+        if getattr(request, "mode", None) in ("plan", "nutrition")
         else CHAT_CONTEXT_WINDOW_DAYS
     )
     return analyzer.build_rolling_summary(window_days=window)
@@ -75,7 +75,7 @@ def _chat_history(store: ConversationStore, request: "ChatRequest") -> list:
     builds keep working.
     """
     if request.conversation_id:
-        limit = PLAN_MODE_HISTORY_MESSAGES if request.mode == "plan" else None
+        limit = PLAN_MODE_HISTORY_MESSAGES if request.mode in ("plan", "nutrition") else None
         return store.get_history_for_model(request.conversation_id, limit=limit)
     return request.conversation_history or []
 
@@ -101,7 +101,9 @@ def _persist_exchange(
 
 
 def _chat_mode(request: "ChatRequest") -> str:
-    return "plan" if request.mode == "plan" else "coach"
+    if request.mode in ("plan", "nutrition"):
+        return request.mode
+    return "coach"
 
 
 def _split_context_for_plan(user_id: str) -> dict:
@@ -112,6 +114,51 @@ def _split_context_for_plan(user_id: str) -> dict:
     except Exception as e:
         print(f"Warning: could not load split for plan mode: {e}")
         return {"split_id": None, "split_name": None, "days": []}
+
+
+def _nutrition_context_for_chat(user_id: str) -> dict:
+    """Training plan + current nutrition plan for Nutrition Plan Mode."""
+    from nutrition.training_context import load_training_context
+    from nutrition.plan_store import NutritionPlanStore
+
+    training = load_training_context(db, user_id)
+    try:
+        plan = NutritionPlanStore(db, user_id).get_active()
+    except Exception as e:
+        print(f"Warning: could not load nutrition plan for chat: {e}")
+        plan = None
+    current = None
+    if plan:
+        current = {
+            "status": plan.get("status"),
+            "goal": plan.get("goal"),
+            "goal_detail": plan.get("goal_detail"),
+            "targets": plan.get("targets"),
+            "strategy": plan.get("strategy"),
+            "meal_anchors": [
+                {
+                    "label": a.get("label"),
+                    "foods": [f.get("name") for f in (a.get("foods") or []) if f.get("name")],
+                }
+                for a in (plan.get("meal_anchors") or [])
+            ],
+            "flexible_meals": [
+                {
+                    "name": m.get("name"),
+                    "calorie_min": m.get("calorie_min"),
+                    "calorie_max": m.get("calorie_max"),
+                    "user_controls_food": m.get("user_controls_food"),
+                    "notes": m.get("notes"),
+                }
+                for m in (plan.get("flexible_meals") or [])
+            ],
+            # The coach used to re-ask for these every time because they were
+            # never passed through, which defeats the point of storing them.
+            "preferences": plan.get("preferences"),
+            "typical_day_notes": plan.get("typical_day_notes"),
+            "food_priorities": plan.get("food_priorities"),
+        }
+    return {"training": training, "nutrition_plan": current}
 
 
 def summary_has_data(summary: dict) -> bool:
@@ -151,7 +198,7 @@ class ChatRequest(BaseModel):
     # conversation_history is ignored. Omit to start a new conversation.
     conversation_id: Optional[str] = None
     conversation_history: Optional[List[dict]] = None
-    # "plan" runs an interview for a training plan; anything else is coach chat
+    # "plan" = training interview, "nutrition" = nutrition interview, else coach
     mode: Optional[str] = "coach"
 
 
@@ -428,6 +475,7 @@ async def chat_with_ai(
         history = _chat_history(store, request)
         mode = _chat_mode(request)
         split_context = _split_context_for_plan(user_id) if mode == "plan" else None
+        nutrition_context = _nutrition_context_for_chat(user_id) if mode == "nutrition" else None
 
         # Get chat response, with tools so the coach can look up specifics
         result = coach.chat(
@@ -437,6 +485,7 @@ async def chat_with_ai(
             toolbox=CoachToolbox(db, user_id),
             mode=mode,
             split_context=split_context,
+            nutrition_context=nutrition_context,
         )
 
         if result["status"] == "error":
@@ -543,6 +592,7 @@ async def chat_with_ai_stream(
     history = _chat_history(store, request)
     mode = _chat_mode(request)
     split_context = _split_context_for_plan(user_id) if mode == "plan" else None
+    nutrition_context = _nutrition_context_for_chat(user_id) if mode == "nutrition" else None
 
     def event_stream():
         try:
@@ -553,6 +603,7 @@ async def chat_with_ai_stream(
                 toolbox=toolbox,
                 mode=mode,
                 split_context=split_context,
+                nutrition_context=nutrition_context,
             ):
                 # Save on the way through, so the id reaches the client in the
                 # same done event that ends the stream

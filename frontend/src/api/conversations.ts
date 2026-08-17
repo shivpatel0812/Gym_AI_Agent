@@ -7,7 +7,7 @@ export interface ConversationSummary {
   updated_at?: string;
   message_count: number;
   preview: string;
-  mode?: "coach" | "plan";
+  mode?: "coach" | "plan" | "nutrition";
 }
 
 export interface ConversationMessage {
@@ -22,7 +22,7 @@ export interface Conversation {
   created_at?: string;
   updated_at?: string;
   messages: ConversationMessage[];
-  mode?: "coach" | "plan";
+  mode?: "coach" | "plan" | "nutrition";
 }
 
 export async function listConversations(): Promise<ConversationSummary[]> {

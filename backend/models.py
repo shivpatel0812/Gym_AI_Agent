@@ -284,3 +284,82 @@ class WorkoutPlan(BaseModel):
     version: int = 1
     supersedes_plan_id: Optional[str] = None
 
+
+# --- Nutrition Plan -------------------------------------------------------
+
+class MealAnchorFood(BaseModel):
+    name: str
+    amount: Optional[str] = None
+    calories: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fats: Optional[float] = None
+    fiber: Optional[float] = None
+
+
+class MealAnchor(BaseModel):
+    """A predictable food or meal the user eats often."""
+    id: Optional[str] = None
+    slot: str = "other"  # breakfast, lunch, snack, shake, dinner, late_night, other
+    label: str
+    foods: List[MealAnchorFood] = []
+    frequency: str = "most_days"
+    notes: Optional[str] = None
+
+
+class FlexibleMeal(BaseModel):
+    """A meal the user does not fully control (e.g. family dinner)."""
+    id: Optional[str] = None
+    name: str
+    frequency: str = "most_days"
+    calorie_min: Optional[float] = None
+    calorie_max: Optional[float] = None
+    protein_min: Optional[float] = None
+    protein_max: Optional[float] = None
+    user_controls_food: bool = False
+    notes: Optional[str] = None
+
+
+class NutritionPlanPreferences(BaseModel):
+    likes: List[str] = []
+    dislikes: List[str] = []
+    dietary_restrictions: Optional[str] = None
+    foods_on_hand: List[str] = []
+    preferred_meal_count: Optional[int] = None
+    larger_dinner: Optional[bool] = None
+    guidance_style: Optional[str] = None  # "strict" | "flexible"
+
+
+class NutritionPlanTargets(BaseModel):
+    calories: Optional[float] = None
+    calories_min: Optional[float] = None
+    calories_max: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fats: Optional[float] = None
+    fiber: Optional[float] = None
+
+
+class NutritionPlan(BaseModel):
+    """
+    Persistent nutrition strategy — not a daily meal spreadsheet.
+
+    Structured fields drive Today guidance. `strategy` is the readable explanation.
+    """
+    id: Optional[str] = None
+    goal: str = "maintain"
+    goal_detail: Optional[str] = None
+    status: str = "draft"  # draft | active | paused | completed
+    targets: NutritionPlanTargets = NutritionPlanTargets()
+    strategy: Optional[str] = None
+    meal_anchors: List[MealAnchor] = []
+    flexible_meals: List[FlexibleMeal] = []
+    preferences: NutritionPlanPreferences = NutritionPlanPreferences()
+    food_priorities: List[str] = []
+    typical_day_notes: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    version: int = 1
+
+

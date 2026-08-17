@@ -56,4 +56,30 @@ def test_coach_mode_does_not_use_plan_interview():
     )
     system = messages[0]["content"]
     assert "PLAN MODE" not in system
+    assert "NUTRITION PLAN MODE" not in system
     assert "personal fitness coach" in system.lower()
+
+
+def test_nutrition_mode_prompt_aligns_with_training():
+    coach = _coach()
+    messages = coach._build_chat_messages(
+        "I want food to support my incline bench",
+        SUMMARY,
+        [],
+        None,
+        mode="nutrition",
+        nutrition_context={
+            "training": {
+                "has_plan": True,
+                "primary_goal": "Hit 85s on incline press",
+                "days": [{"name": "Push", "exercises": ["Incline Dumbbell Press"]}],
+            },
+            "nutrition_plan": None,
+        },
+    )
+    system = messages[0]["content"]
+    assert "NUTRITION PLAN MODE" in system
+    assert "incline press" in system.lower() or "Incline" in system
+    assert "Generate Nutrition Plan" in system
+    assert "You are in PLAN MODE" not in system
+    assert messages[-1]["content"] == "I want food to support my incline bench"

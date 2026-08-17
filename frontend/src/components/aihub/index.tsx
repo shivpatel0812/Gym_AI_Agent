@@ -1,21 +1,42 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar } from "react-native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import AIChat from "../AIChat";
 import AIAnalysis from "../AIAnalysis";
 import PlanTab from "../plan/PlanTab";
 import { colors, spacing } from "../../theme";
 
 type TabType = "coach" | "plan" | "analysis";
+type ChatMode = "coach" | "plan" | "nutrition";
 
 export default function AIHub() {
+  const route = useRoute<any>();
+  const navigation = useNavigation<any>();
   const [activeTab, setActiveTab] = useState<TabType>("coach");
   // Lets the Plan tab hand a starter prompt to the Coach tab
   const [coachPrompt, setCoachPrompt] = useState<string | null>(null);
+  const [coachMode, setCoachMode] = useState<ChatMode | null>(null);
 
   const askCoach = (prompt: string) => {
     setCoachPrompt(prompt);
     setActiveTab("coach");
   };
+
+  useEffect(() => {
+    const mode = route.params?.coachMode;
+    const prompt = route.params?.prompt;
+    if (mode === "plan" || mode === "nutrition") {
+      setCoachMode(mode);
+      setActiveTab("coach");
+    }
+    if (typeof prompt === "string" && prompt) {
+      setCoachPrompt(prompt);
+      setActiveTab("coach");
+    }
+    if (mode || prompt) {
+      navigation.setParams({ coachMode: undefined, prompt: undefined });
+    }
+  }, [route.params, navigation]);
 
   return (
     <View style={styles.container}>
@@ -43,6 +64,8 @@ export default function AIHub() {
           <AIChat
             initialPrompt={coachPrompt}
             onPromptConsumed={() => setCoachPrompt(null)}
+            initialMode={coachMode}
+            onModeConsumed={() => setCoachMode(null)}
           />
         ) : activeTab === "plan" ? (
           <PlanTab onAskCoach={askCoach} />

@@ -29,6 +29,7 @@ MAX_CONTEXT_MESSAGES = 20
 
 DEFAULT_TITLE = "New chat"
 MAX_TITLE_LENGTH = 48
+VALID_MODES = ("coach", "plan", "nutrition")
 
 
 def derive_title(message: str) -> str:
@@ -137,7 +138,7 @@ class ConversationStore:
             "updated_at": now,
             "message_count": 0,
             "messages": [],
-            "mode": mode if mode in ("plan", "coach") else "coach",
+            "mode": mode if mode in VALID_MODES else "coach",
         })
         return doc_ref.id
 
@@ -177,7 +178,7 @@ class ConversationStore:
             # Backfill a title if the thread was created empty
             if not data.get("title") or data.get("title") == DEFAULT_TITLE:
                 update["title"] = derive_title(user_message)
-            if mode in ("plan", "coach"):
+            if mode in VALID_MODES:
                 update["mode"] = mode
             doc_ref.update(update)
         else:
@@ -188,7 +189,7 @@ class ConversationStore:
                 "message_count": len(new_messages),
                 "messages": new_messages,
             }
-            if mode in ("plan", "coach"):
+            if mode in VALID_MODES:
                 payload["mode"] = mode
             doc_ref.set(payload)
 

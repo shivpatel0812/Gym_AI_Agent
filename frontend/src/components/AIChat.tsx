@@ -18,6 +18,7 @@ import Button from "./shared/Button";
 import Markdown from "./shared/Markdown";
 import ConversationSidebar from "./chat/ConversationSidebar";
 import CreatePlanModal from "./plan/CreatePlanModal";
+import CreateNutritionPlanModal from "./nutrition/plan/CreateNutritionPlanModal";
 import apiClient from "../api/client";
 import { streamChat } from "../api/streamChat";
 import {
@@ -41,17 +42,29 @@ const TOOL_LABELS: Record<string, string> = {
   get_todays_plan: "Checking today's plan...",
   get_current_split: "Looking at your current split...",
   get_nutrition_log: "Reviewing your nutrition log...",
+  get_nutrition_plan: "Checking your nutrition plan...",
+  get_training_plan: "Looking at your training plan...",
   get_wellness_log: "Reviewing your sleep and recovery...",
   get_personal_records: "Looking up your personal bests...",
 };
+
+type ChatMode = "coach" | "plan" | "nutrition";
 
 interface AIChatProps {
   /** A starter prompt handed over from another tab (e.g. "Ask Coach About Plan"). */
   initialPrompt?: string | null;
   onPromptConsumed?: () => void;
+  /** Opens Plan or Nutrition interview mode from another tab. */
+  initialMode?: ChatMode | null;
+  onModeConsumed?: () => void;
 }
 
-export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps = {}) {
+export default function AIChat({
+  initialPrompt,
+  onPromptConsumed,
+  initialMode,
+  onModeConsumed,
+}: AIChatProps = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -64,7 +77,8 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameText, setRenameText] = useState("");
   const [createPlanOpen, setCreatePlanOpen] = useState(false);
-  const [planMode, setPlanMode] = useState(false);
+  const [createNutritionOpen, setCreateNutritionOpen] = useState(false);
+  const [chatMode, setChatMode] = useState<ChatMode>("coach");
   const flatListRef = useRef<FlatList>(null);
   const cancelStreamRef = useRef<(() => void) | null>(null);
 
@@ -92,7 +106,7 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
     setLoading(false);
     setToolStatus(null);
     setSidebarOpen(false);
-    if (!keepPlanMode) setPlanMode(false);
+    if (!keepPlanMode) setChatMode("coach");
   };
 
   const openConversation = async (id: string) => {
@@ -111,7 +125,11 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
       setMessages(loaded);
       setConversationHistory(loaded);
       setConversationId(id);
-      setPlanMode(conversation.mode === "plan");
+      setChatMode(
+        conversation.mode === "plan" || conversation.mode === "nutrition"
+          ? conversation.mode
+          : "coach"
+      );
     } catch (error) {
       console.error("Error opening conversation:", error);
       Alert.alert("Error", "Could not open that chat.");
@@ -130,14 +148,17 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
     }
   };
 
-  const enterPlanMode = () => {
-    if (messages.length > 0 && !planMode) {
+  const enterMode = (next: ChatMode) => {
+    if (messages.length > 0 && chatMode !== next) {
       startNewChat(true);
     }
-    setPlanMode(true);
+    setChatMode(next);
   };
 
-  const exitPlanMode = () => setPlanMode(false);
+  const toggleMode = (next: "plan" | "nutrition") => {
+    if (chatMode === next) setChatMode("coach");
+    else enterMode(next);
+  };
   const handleRenameConversation = (id: string, currentTitle: string) => {
     setRenameTarget({ id, title: currentTitle });
     setRenameText(currentTitle);
@@ -181,6 +202,13 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
     }
   }, [initialPrompt, onPromptConsumed]);
 
+  useEffect(() => {
+    if (initialMode === "plan" || initialMode === "nutrition") {
+      setChatMode(initialMode);
+      onModeConsumed?.();
+    }
+  }, [initialMode, onModeConsumed]);
+
   // Falls back to the buffered endpoint when streaming fails before any text
   // has arrived, so a proxy that won't pass SSE through still gets an answer
   const sendBuffered = async (messageToSend: string, baseMessages: Message[]) => {
@@ -191,10 +219,10 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
           message: messageToSend,
           conversation_id: conversationId,
           conversation_history: conversationHistory,
-          mode: planMode ? "plan" : "coach",
+          mode: chatMode,
         },
         // GPT-4o responses regularly run past the default 30s client timeout
-        { timeout: planMode ? 120000 : 90000 }
+        { timeout: chatMode === "coach" ? 90000 : 120000 }
       );
 
       if (res.data.status !== "success") throw new Error("Chat failed");
@@ -237,7 +265,7 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
         message: messageToSend,
         conversationId,
         conversationHistory,
-        mode: planMode ? "plan" : "coach",
+        mode: chatMode,
       },
       {
         onTool: (name) => setToolStatus(TOOL_LABELS[name] || "Looking that up..."),
@@ -305,17 +333,23 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
   const renderEmpty = () => (
     <View style={styles.emptyState}>
       <MaterialCommunityIcons
-        name={planMode ? "target" : "robot"}
+        name={chatMode === "plan" ? "target" : chatMode === "nutrition" ? "food-apple" : "robot"}
         size={80}
         color={colors.accentPrimary}
       />
       <Text style={styles.emptyTitle}>
-        {planMode ? "Let's design your plan" : "Start a conversation with your AI coach"}
+        {chatMode === "plan"
+          ? "Let's design your plan"
+          : chatMode === "nutrition"
+            ? "Let's design how you eat"
+            : "Start a conversation with your AI coach"}
       </Text>
       <Text style={styles.emptySubtitle}>
-        {planMode
+        {chatMode === "plan"
           ? "Tell me what you want this block to achieve. I'll look at your split and recent workouts, then ask follow-ups until we can build a program that fits."
-          : "Ask questions about your fitness progress, get personalized advice, or tap Plan to design a training program."}
+          : chatMode === "nutrition"
+            ? "Tell me how you actually eat and what your training is for. I'll ask follow-ups, then we can save a nutrition plan that supports your workouts."
+            : "Ask questions about your fitness progress, get personalized advice, or tap Plan / Nutrition to design a program."}
       </Text>
     </View>
   );
@@ -344,7 +378,9 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
   const hasUserMessage = messages.some((m) => m.role === "user");
 
   const conversationTitle = conversations.find((c) => c.id === conversationId)?.title;
-  const activeTitle = conversationTitle || (planMode ? "Plan Mode" : "AI Coach");
+  const activeTitle =
+    conversationTitle ||
+    (chatMode === "plan" ? "Plan Mode" : chatMode === "nutrition" ? "Nutrition Plan Mode" : "AI Coach");
 
   return (
     <KeyboardAvoidingView
@@ -362,25 +398,44 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
             >
               <MaterialCommunityIcons name="menu" size={26} color={colors.textPrimary} />
             </TouchableOpacity>
-            <View>
-              <Text style={styles.headerTitle}>{activeTitle}</Text>
-              <Text style={styles.headerSubtitle}>
-                {planMode ? "Interview, then generate a program" : "Your fitness companion"}
+            <View style={styles.headerText}>
+              <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
+                {activeTitle}
+              </Text>
+              <Text style={styles.headerSubtitle} numberOfLines={1} ellipsizeMode="tail">
+                {chatMode === "plan"
+                  ? "Interview, then generate a program"
+                  : chatMode === "nutrition"
+                    ? "Interview, then generate a nutrition plan"
+                    : "Your fitness companion"}
               </Text>
             </View>
           </View>
           <View style={styles.headerActions}>
             <TouchableOpacity
-              onPress={planMode ? exitPlanMode : enterPlanMode}
-              style={[styles.planButton, planMode && styles.planButtonActive]}
+              onPress={() => toggleMode("plan")}
+              style={[styles.planButton, chatMode === "plan" && styles.planButtonActive]}
             >
               <MaterialCommunityIcons
                 name="target"
                 size={16}
-                color={planMode ? "#fff" : colors.accentPrimary}
+                color={chatMode === "plan" ? "#fff" : colors.accentPrimary}
               />
-              <Text style={[styles.planButtonText, planMode && styles.planButtonTextActive]}>
+              <Text style={[styles.planButtonText, chatMode === "plan" && styles.planButtonTextActive]}>
                 Plan
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => toggleMode("nutrition")}
+              style={[styles.planButton, chatMode === "nutrition" && styles.planButtonActive]}
+            >
+              <MaterialCommunityIcons
+                name="food-apple"
+                size={16}
+                color={chatMode === "nutrition" ? "#fff" : colors.accentPrimary}
+              />
+              <Text style={[styles.planButtonText, chatMode === "nutrition" && styles.planButtonTextActive]}>
+                Food
               </Text>
             </TouchableOpacity>
             {messages.length > 0 && (
@@ -411,7 +466,7 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
       />
 
       <View style={styles.inputContainer}>
-        {planMode && hasUserMessage ? (
+        {chatMode === "plan" && hasUserMessage ? (
           <TouchableOpacity
             style={styles.generateBar}
             onPress={() => setCreatePlanOpen(true)}
@@ -421,19 +476,31 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
             <Text style={styles.generateBarText}>Generate Plan</Text>
           </TouchableOpacity>
         ) : null}
-        <View style={[styles.inputWrapper, planMode && styles.inputWrapperPlan]}>
+        {chatMode === "nutrition" && hasUserMessage ? (
+          <TouchableOpacity
+            style={styles.generateBar}
+            onPress={() => setCreateNutritionOpen(true)}
+            disabled={loading}
+          >
+            <MaterialCommunityIcons name="auto-fix" size={18} color="#fff" />
+            <Text style={styles.generateBarText}>Generate Nutrition Plan</Text>
+          </TouchableOpacity>
+        ) : null}
+        <View style={[styles.inputWrapper, chatMode !== "coach" && styles.inputWrapperPlan]}>
           <TextInput
             style={styles.input}
             value={inputMessage}
             onChangeText={setInputMessage}
             placeholder={
-              planMode
+              chatMode === "plan"
                 ? "What do you want this plan to achieve?"
-                : "Ask your AI coach a question..."
+                : chatMode === "nutrition"
+                  ? "How do you actually eat — and what should food support?"
+                  : "Ask your AI coach a question..."
             }
             placeholderTextColor={colors.textSecondary}
             multiline
-            maxLength={planMode ? 800 : 500}
+            maxLength={chatMode === "coach" ? 500 : 800}
             editable={!loading}
           />
           <TouchableOpacity
@@ -461,6 +528,19 @@ export default function AIChat({ initialPrompt, onPromptConsumed }: AIChatProps 
         onCreated={() => {
           setCreatePlanOpen(false);
           Alert.alert("Plan active", "Your workouts and recommendations now follow this plan.");
+        }}
+      />
+
+      <CreateNutritionPlanModal
+        visible={createNutritionOpen}
+        conversationId={conversationId}
+        onClose={() => setCreateNutritionOpen(false)}
+        onCreated={() => {
+          setCreateNutritionOpen(false);
+          Alert.alert(
+            "Nutrition plan active",
+            "Today guidance and your calorie rings now follow this plan."
+          );
         }}
       />
 
@@ -564,23 +644,31 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: spacing.sm,
   },
   headerLeft: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
+    flex: 1,
+    minWidth: 0,
+  },
+  headerText: {
+    flex: 1,
+    minWidth: 0,
   },
   headerTitle: {
-    fontSize: 24,
+    fontSize: 18,
     fontWeight: "700",
     color: colors.textPrimary,
   },
   headerSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: colors.textSecondary,
+    marginTop: 2,
   },
   clearButton: {
-    padding: spacing.sm,
+    padding: spacing.xs,
   },
   messagesList: {
     paddingHorizontal: spacing.lg,
@@ -647,18 +735,20 @@ const styles = StyleSheet.create({
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
+    gap: spacing.xs,
+    flexShrink: 0,
   },
   planButton: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
+    gap: 4,
+    paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs + 2,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: colors.accentPrimary,
     backgroundColor: "transparent",
+    flexShrink: 0,
   },
   planButtonActive: {
     backgroundColor: colors.accentPrimary,

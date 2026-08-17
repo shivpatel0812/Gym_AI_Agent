@@ -1,7 +1,29 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import apiClient from "../lib/api-client";
 import { MacroEntry, FoodItem, HydrationEntry } from "../types";
 import LogFoodForm, { MEALS } from "../components/nutrition/LogFoodModal";
+
+/**
+ * Meal rows on Today are fixed labels; plan anchors use slot ids. Map one to
+ * the other so an anchor shows up under the row a user would look for it in.
+ */
+const MEAL_TO_SLOTS: Record<string, string[]> = {
+  Breakfast: ["breakfast"],
+  Lunch: ["lunch"],
+  "Pre-Workout": ["shake"],
+  Dinner: ["dinner"],
+  Snacks: ["snack", "late_night", "other"],
+};
+import TodayGuidanceCard from "../components/nutrition/plan/TodayGuidanceCard";
+import NutritionPlanTab from "../components/nutrition/plan/NutritionPlanTab";
+import {
+  getActiveNutritionPlan,
+  getTodayGuidance,
+  MealAnchor,
+  NutritionPlan,
+  TodayGuidance,
+} from "../api/nutritionPlan";
 import { MdAdd, MdClose, MdEdit, MdKeyboardArrowUp, MdKeyboardArrowDown, MdCalendarToday } from "react-icons/md";
 
 type NutritionTargets = {
@@ -254,6 +276,11 @@ function Ring({
 }
 
 export default function NutritionPage() {
+  const navigate = useNavigate();
+  const [hubTab, setHubTab] = useState<"today" | "plan">("today");
+  const [guidance, setGuidance] = useState<TodayGuidance | null>(null);
+  const [plan, setPlan] = useState<NutritionPlan | null>(null);
+  const [loggingAnchor, setLoggingAnchor] = useState<string | null>(null);
   const [entries, setEntries] = useState<MacroEntry[]>([]);
   const [hydrationEntries, setHydrationEntries] = useState<HydrationEntry[]>([]);
   const [selectedDate, setSelectedDate] = useState(() => toDateKey(new Date()));
@@ -269,6 +296,10 @@ export default function NutritionPage() {
   const [targetDraft, setTargetDraft] = useState<NutritionTargets>(loadCachedTargets);
   const [showTargets, setShowTargets] = useState(false);
   const [savingTargets, setSavingTargets] = useState(false);
+
+  const askNutritionCoach = (prompt: string) => {
+    navigate(`/chatbot?mode=nutrition&prompt=${encodeURIComponent(prompt)}`);
+  };
 
   const fetchAll = useCallback(async () => {
     try {
@@ -513,6 +544,68 @@ export default function NutritionPage() {
     setEditingFood(null);
   }, [selectedDate]);
 
+  useEffect(() => {
+    if (hubTab !== "today") return;
+    getTodayGuidance(selectedDate)
+      .then(setGuidance)
+      .catch(() => setGuidance(null));
+  }, [hubTab, selectedDate, totals.calories, totals.protein]);
+
+  // Meal anchors power the one-tap "log my usual" shortcut.
+  useEffect(() => {
+    if (hubTab !== "today") return;
+    getActiveNutritionPlan()
+      .then(setPlan)
+      .catch(() => setPlan(null));
+  }, [hubTab]);
+
+  /** Anchors whose slot maps to this meal row, e.g. Breakfast -> slot "breakfast". */
+  const anchorsForMeal = useCallback(
+    (mealId: string): MealAnchor[] => {
+      const slots = MEAL_TO_SLOTS[mealId] || [];
+      return (plan?.meal_anchors || []).filter(
+        (a) =>
+          a.foods?.length &&
+          slots.includes(String(a.slot || "").toLowerCase())
+      );
+    },
+    [plan]
+  );
+
+  /** Log every food on an anchor in one go, using the macros already stored. */
+  const logAnchor = async (anchor: MealAnchor, mealId: string) => {
+    const items: FoodItem[] = (anchor.foods || []).map((food) => ({
+      name: food.name,
+      amount: food.amount || "1 serving",
+      calories: Math.round(Number(food.calories) || 0),
+      protein: Number(food.protein) || 0,
+      carbs: Number(food.carbs) || 0,
+      fats: Number(food.fats) || 0,
+      fiber: Number(food.fiber) || 0,
+      meal: mealId,
+    })) as FoodItem[];
+    if (!items.length) return;
+
+    setLoggingAnchor(anchor.id || anchor.label);
+    try {
+      const existing = dayEntries[0];
+      if (existing?.id) {
+        await apiClient.put(`/api/macros/${existing.id}`, {
+          date: selectedDate,
+          food_items: [...(existing.food_items || []), ...items],
+        });
+      } else {
+        await apiClient.post("/api/macros", { date: selectedDate, food_items: items });
+      }
+      fetchAll();
+      setLoggingMeal(null);
+    } catch (error) {
+      console.error("Error logging usual meal:", error);
+    } finally {
+      setLoggingAnchor(null);
+    }
+  };
+
   const selectedDateObj = new Date(selectedDate + "T00:00:00");
   const dateLabel = selectedDateObj.toLocaleDateString("en-US", {
     weekday: "long",
@@ -576,6 +669,32 @@ export default function NutritionPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-[1100px] mx-auto pb-28">
+      {/* Today | Plan hub tabs */}
+      <div className="mb-5 flex items-end gap-6 border-b border-[#2A2D35]">
+        {(["today", "plan"] as const).map((tab) => {
+          const active = hubTab === tab;
+          return (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setHubTab(tab)}
+              className={`relative pb-3 text-sm font-semibold transition-colors ${
+                active ? "text-white" : "text-[#8E8E93] hover:text-white"
+              }`}
+            >
+              {tab === "today" ? "Today" : "Plan"}
+              {active && (
+                <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#FF6B35] rounded-full" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {hubTab === "plan" ? (
+        <NutritionPlanTab onAskCoach={askNutritionCoach} />
+      ) : (
+        <>
       {/* Header */}
       <div className="mb-6 flex items-start justify-between gap-3">
         <div>
@@ -644,6 +763,8 @@ export default function NutritionPage() {
           />
         </div>
       </div>
+
+      <TodayGuidanceCard guidance={guidance} />
 
       {showTargets && (
         <div className="rounded-2xl bg-[#161A22] border border-[#2A2D35] p-5 mb-6">
@@ -1022,12 +1143,41 @@ export default function NutritionPage() {
                           onCancel={() => setLoggingMeal(null)}
                         />
                       ) : (
-                        <button
-                          onClick={() => openLogFood(meal.id)}
-                          className="w-full py-2.5 rounded-xl border border-dashed border-[#3A3A3C] text-[#8E8E93] hover:text-[#FF6B35] hover:border-[#FF6B35]/40 text-sm font-medium flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                          <MdAdd size={16} /> Add food
-                        </button>
+                        <div className="space-y-2">
+                          {anchorsForMeal(meal.id).map((anchor) => {
+                            const key = anchor.id || anchor.label;
+                            const kcal = Math.round(
+                              (anchor.foods || []).reduce(
+                                (sum, f) => sum + (Number(f.calories) || 0),
+                                0
+                              )
+                            );
+                            return (
+                              <button
+                                key={key}
+                                onClick={() => logAnchor(anchor, meal.id)}
+                                disabled={loggingAnchor === key}
+                                className="w-full px-4 py-2.5 rounded-xl border border-[#5EEAD4]/40 bg-[#5EEAD4]/[0.07] text-left hover:bg-[#5EEAD4]/[0.12] disabled:opacity-50 transition-colors"
+                              >
+                                <span className="block text-sm font-semibold text-[#5EEAD4]">
+                                  {loggingAnchor === key
+                                    ? "Logging..."
+                                    : `Log my usual ${anchor.label.toLowerCase()}`}
+                                </span>
+                                <span className="block text-xs text-[#8E8E93] mt-0.5">
+                                  {(anchor.foods || []).map((f) => f.name).join(", ")}
+                                  {kcal ? ` · ${kcal} kcal` : ""}
+                                </span>
+                              </button>
+                            );
+                          })}
+                          <button
+                            onClick={() => openLogFood(meal.id)}
+                            className="w-full py-2.5 rounded-xl border border-dashed border-[#3A3A3C] text-[#8E8E93] hover:text-[#FF6B35] hover:border-[#FF6B35]/40 text-sm font-medium flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <MdAdd size={16} /> Add food
+                          </button>
+                        </div>
                       )}
                     </div>
                   )}
@@ -1070,6 +1220,8 @@ export default function NutritionPage() {
       >
         <MdAdd size={20} /> Log Food
       </button>
+        </>
+      )}
     </div>
   );
 }
