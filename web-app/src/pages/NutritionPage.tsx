@@ -17,6 +17,7 @@ const MEAL_TO_SLOTS: Record<string, string[]> = {
 };
 import TodayGuidanceCard from "../components/nutrition/plan/TodayGuidanceCard";
 import NutritionPlanTab from "../components/nutrition/plan/NutritionPlanTab";
+import SavedFoodsTab from "../components/nutrition/SavedFoodsTab";
 import {
   getActiveNutritionPlan,
   getTodayGuidance,
@@ -277,7 +278,7 @@ function Ring({
 
 export default function NutritionPage() {
   const navigate = useNavigate();
-  const [hubTab, setHubTab] = useState<"today" | "plan">("today");
+  const [hubTab, setHubTab] = useState<"today" | "plan" | "foods">("today");
   const [guidance, setGuidance] = useState<TodayGuidance | null>(null);
   const [plan, setPlan] = useState<NutritionPlan | null>(null);
   const [loggingAnchor, setLoggingAnchor] = useState<string | null>(null);
@@ -671,7 +672,7 @@ export default function NutritionPage() {
     <div className="p-4 sm:p-6 lg:p-8 max-w-[1100px] mx-auto pb-28">
       {/* Today | Plan hub tabs */}
       <div className="mb-5 flex items-end gap-6 border-b border-[#2A2D35]">
-        {(["today", "plan"] as const).map((tab) => {
+        {(["today", "plan", "foods"] as const).map((tab) => {
           const active = hubTab === tab;
           return (
             <button
@@ -682,7 +683,7 @@ export default function NutritionPage() {
                 active ? "text-white" : "text-[#8E8E93] hover:text-white"
               }`}
             >
-              {tab === "today" ? "Today" : "Plan"}
+              {tab === "today" ? "Today" : tab === "plan" ? "Plan" : "Foods"}
               {active && (
                 <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#FF6B35] rounded-full" />
               )}
@@ -693,6 +694,8 @@ export default function NutritionPage() {
 
       {hubTab === "plan" ? (
         <NutritionPlanTab onAskCoach={askNutritionCoach} />
+      ) : hubTab === "foods" ? (
+        <SavedFoodsTab />
       ) : (
         <>
       {/* Header */}

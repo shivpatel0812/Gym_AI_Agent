@@ -4,7 +4,7 @@ from datetime import datetime
 import shutil
 import tempfile
 import os
-from models import MacroEntry, SavedFood, FoodEstimateRequest
+from models import MacroEntry, SavedFood, SavedFoodUpdate, FoodEstimateRequest
 from nutrition.gpt_food_lookup import estimate_food_from_query
 import re
 from auth import get_user_id
@@ -173,6 +173,31 @@ async def save_food(food: SavedFood, user_id: str = Depends(get_user_id)):
     doc_ref = _foods_ref(user_id).document()
     doc_ref.set(payload)
     return {"id": doc_ref.id, **payload}
+
+
+@router.patch("/foods/{food_id}")
+async def update_saved_food(food_id: str, patch: SavedFoodUpdate, user_id: str = Depends(get_user_id)):
+    doc_ref = _foods_ref(user_id).document(food_id)
+    snap = doc_ref.get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Saved food not found")
+    updates = {k: v for k, v in patch.dict(exclude_unset=True).items() if v is not None}
+    if "name" in updates and not str(updates["name"]).strip():
+        raise HTTPException(status_code=422, detail="Name is required")
+    if "name" in updates:
+        updates["name"] = str(updates["name"]).strip()
+    updates["updated_at"] = datetime.now().isoformat()
+    doc_ref.set(updates, merge=True)
+    return {"id": food_id, **{**(snap.to_dict() or {}), **updates}}
+
+
+@router.delete("/foods/{food_id}")
+async def delete_saved_food(food_id: str, user_id: str = Depends(get_user_id)):
+    doc_ref = _foods_ref(user_id).document(food_id)
+    if not doc_ref.get().exists:
+        raise HTTPException(status_code=404, detail="Saved food not found")
+    doc_ref.delete()
+    return {"message": "Saved food deleted"}
 
 
 @router.post("/estimate-food")

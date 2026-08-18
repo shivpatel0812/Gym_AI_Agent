@@ -43,6 +43,13 @@ export default function MoreHome({ navigation }: MoreHomeProps) {
       icon: "calendar-month" as keyof typeof MaterialCommunityIcons.glyphMap,
       screen: "Calendar",
     },
+    {
+      id: "SavedFoods",
+      title: "Saved Foods",
+      subtitle: "Edit foods you've logged before",
+      icon: "food-apple-outline" as keyof typeof MaterialCommunityIcons.glyphMap,
+      screen: "SavedFoods",
+    },
   ];
 
   return (
@@ -57,7 +64,13 @@ export default function MoreHome({ navigation }: MoreHomeProps) {
           <TouchableOpacity
             key={feature.id}
             style={styles.card}
-            onPress={() => navigation.navigate(feature.screen)}
+            onPress={() => {
+              if (feature.screen === "SavedFoods") {
+                navigation.getParent()?.navigate("Nutrition", { tab: "foods" });
+                return;
+              }
+              navigation.navigate(feature.screen);
+            }}
             activeOpacity={0.8}
           >
             <MaterialCommunityIcons name={feature.icon} size={22} color={colors.accentPrimary} />

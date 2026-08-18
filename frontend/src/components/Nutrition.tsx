@@ -14,12 +14,13 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import apiClient from "../api/client";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import { colors, spacing } from "../theme";
 import Ring from "./nutrition/Ring";
 import LogFoodForm from "./nutrition/LogFoodForm";
 import TodayGuidanceCard from "./nutrition/plan/TodayGuidanceCard";
 import NutritionPlanTab from "./nutrition/plan/NutritionPlanTab";
+import SavedFoodsTab from "./nutrition/SavedFoodsTab";
 import { getTodayGuidance, TodayGuidance } from "../api/nutritionPlan";
 import {
   DEFAULT_TARGETS,
@@ -159,10 +160,11 @@ function FoodRowEditor({
 
 export default function Nutrition() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
   const askNutritionCoach = (prompt: string) => {
     navigation.navigate("AIHub", { coachMode: "nutrition", prompt });
   };
-  const [hubTab, setHubTab] = useState<"today" | "plan">("today");
+  const [hubTab, setHubTab] = useState<"today" | "plan" | "foods">("today");
   const [guidance, setGuidance] = useState<TodayGuidance | null>(null);
   const [entries, setEntries] = useState<MacroEntry[]>([]);
   const [hydrationEntries, setHydrationEntries] = useState<HydrationEntry[]>([]);
@@ -179,6 +181,13 @@ export default function Nutrition() {
   const [targetDraft, setTargetDraft] = useState<NutritionTargets>({ ...DEFAULT_TARGETS });
   const [showTargets, setShowTargets] = useState(false);
   const [savingTargets, setSavingTargets] = useState(false);
+
+  useEffect(() => {
+    const tab = route.params?.tab;
+    if (tab === "foods" || tab === "plan" || tab === "today") {
+      setHubTab(tab);
+    }
+  }, [route.params?.tab]);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -476,12 +485,12 @@ export default function Nutrition() {
     <View style={styles.container}>
       <View style={styles.hubHeader}>
         <View style={styles.hubTabs}>
-          {(["today", "plan"] as const).map((tab) => {
+          {(["today", "plan", "foods"] as const).map((tab) => {
             const active = hubTab === tab;
             return (
               <TouchableOpacity key={tab} style={styles.hubTab} onPress={() => setHubTab(tab)}>
                 <Text style={[styles.hubTabText, active && styles.hubTabTextOn]}>
-                  {tab === "today" ? "Today" : "Plan"}
+                  {tab === "today" ? "Today" : tab === "plan" ? "Plan" : "Foods"}
                 </Text>
                 {active ? <View style={styles.hubUnderline} /> : null}
               </TouchableOpacity>
@@ -492,6 +501,8 @@ export default function Nutrition() {
 
       {hubTab === "plan" ? (
         <NutritionPlanTab onAskCoach={askNutritionCoach} />
+      ) : hubTab === "foods" ? (
+        <SavedFoodsTab />
       ) : (
     <KeyboardAvoidingView
         style={{ flex: 1 }}

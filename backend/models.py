@@ -77,6 +77,9 @@ class FoodItem(BaseModel):
     sodium: Optional[float] = None
     meal: Optional[str] = None
     amount: Optional[str] = None
+    # Set when the item came from a one-tap "usual" so the same tap can undo it.
+    # Kept on the model so re-saving a day's food_items does not strip the tag.
+    usual_id: Optional[str] = None
 
 class SavedFood(BaseModel):
     id: Optional[str] = None
@@ -88,6 +91,18 @@ class SavedFood(BaseModel):
     carbs: Optional[float] = 0
     fats: Optional[float] = 0
     fiber: Optional[float] = 0
+    aliases: Optional[List[str]] = None
+
+
+class SavedFoodUpdate(BaseModel):
+    name: Optional[str] = None
+    serving: Optional[str] = None
+    grams: Optional[float] = None
+    calories: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fats: Optional[float] = None
+    fiber: Optional[float] = None
     aliases: Optional[List[str]] = None
 
 
