@@ -26,6 +26,14 @@ import {
   proposeNutritionPlan,
 } from "../../../api/nutritionPlan";
 import { colors, spacing, borderRadius } from "../../../theme";
+import {
+  AI_MODEL_OPTIONS,
+  AI_MODEL_STORAGE_KEY,
+  AiModelId,
+  DEFAULT_AI_MODEL,
+  normalizeAiModel,
+} from "../../../lib/aiModels";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 interface Props {
   visible: boolean;
@@ -33,6 +41,8 @@ interface Props {
   onCreated: () => void;
   /** When set, generate from the nutrition interview instead of the wizard. */
   conversationId?: string | null;
+  /** Model for propose; defaults to stored preference / GPT-4o. */
+  model?: string | null;
 }
 
 type Step = "goal" | "habits" | "flexible" | "prefs" | "generating" | "review";
@@ -60,6 +70,7 @@ export default function CreateNutritionPlanModal({
   onClose,
   onCreated,
   conversationId,
+  model: modelProp,
 }: Props) {
   const [step, setStep] = useState<Step>("goal");
   const [goal, setGoal] = useState<NutritionGoal>("maintain");
@@ -78,7 +89,26 @@ export default function CreateNutritionPlanModal({
   const [largerDinner, setLargerDinner] = useState(true);
   const [style, setStyle] = useState<"flexible" | "strict">("flexible");
   const [draft, setDraft] = useState<NutritionPlan | null>(null);
+  const [aiModel, setAiModel] = useState<AiModelId>(DEFAULT_AI_MODEL);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    if (modelProp) {
+      setAiModel(normalizeAiModel(modelProp));
+      return;
+    }
+    AsyncStorage.getItem(AI_MODEL_STORAGE_KEY)
+      .then((raw) => {
+        if (raw) setAiModel(normalizeAiModel(raw));
+      })
+      .catch(() => {});
+  }, [modelProp, visible]);
+
+  const selectAiModel = (model: AiModelId) => {
+    setAiModel(model);
+    AsyncStorage.setItem(AI_MODEL_STORAGE_KEY, model).catch(() => {});
+  };
 
   useEffect(() => {
     if (!visible) return;
@@ -103,8 +133,22 @@ export default function CreateNutritionPlanModal({
 
     let cancelled = false;
     (async () => {
+      let model: AiModelId = modelProp
+        ? normalizeAiModel(modelProp)
+        : DEFAULT_AI_MODEL;
+      if (!modelProp) {
+        try {
+          const raw = await AsyncStorage.getItem(AI_MODEL_STORAGE_KEY);
+          if (raw) model = normalizeAiModel(raw);
+        } catch {
+          // keep default
+        }
+      }
       try {
-        const plan = await proposeNutritionPlan({ conversation_id: conversationId });
+        const plan = await proposeNutritionPlan({
+          conversation_id: conversationId,
+          model,
+        });
         if (cancelled) return;
         setDraft(plan);
         setStep("review");
@@ -120,7 +164,7 @@ export default function CreateNutritionPlanModal({
     return () => {
       cancelled = true;
     };
-  }, [visible, conversationId]);
+  }, [visible, conversationId, modelProp]);
 
   const addAnchor = () => {
     const foods = anchorFoodsText
@@ -160,6 +204,7 @@ export default function CreateNutritionPlanModal({
         meal_anchors: anchors,
         flexible_meals: flexible,
         conversation_id: conversationId || undefined,
+        model: aiModel,
         preferences: {
           likes: splitList(likes),
           dislikes: splitList(dislikes),
@@ -315,6 +360,23 @@ export default function CreateNutritionPlanModal({
                       placeholderTextColor={colors.textMuted}
                       multiline
                     />
+                    <Text style={styles.sub}>AI model</Text>
+                    <View style={styles.modelRow}>
+                      {AI_MODEL_OPTIONS.map((opt) => {
+                        const active = aiModel === opt.id;
+                        return (
+                          <TouchableOpacity
+                            key={opt.id}
+                            style={[styles.modelChip, active && styles.modelChipOn]}
+                            onPress={() => selectAiModel(opt.id)}
+                          >
+                            <Text style={[styles.modelChipText, active && styles.modelChipTextOn]}>
+                              {opt.label}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
                   </>
                 ) : null}
 
@@ -634,6 +696,21 @@ const styles = StyleSheet.create({
   choiceOn: { borderColor: colors.accentPrimary },
   choiceText: { color: colors.textSecondary, fontWeight: "600" },
   choiceTextOn: { color: colors.textPrimary },
+  modelRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.xs },
+  modelChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.cardBackground,
+  },
+  modelChipOn: {
+    borderColor: colors.accentPrimary,
+    backgroundColor: "rgba(255,107,53,0.18)",
+  },
+  modelChipText: { color: colors.textSecondary, fontWeight: "700", fontSize: 13 },
+  modelChipTextOn: { color: colors.accentPrimary },
   chipRow: {
     flexDirection: "row",
     alignItems: "center",

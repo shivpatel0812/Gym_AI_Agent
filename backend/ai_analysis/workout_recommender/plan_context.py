@@ -246,6 +246,19 @@ class PlanContextResolver:
             context.source = "training_focus"
             context.notes = focus.get("note") or context.notes
 
+        # Soft cue from latest body scan (JSON only; photos never stored).
+        # Does not invent loads — only annotates intent when a focus hasn't.
+        try:
+            from body_scan.store import BodyScanStore
+            latest = BodyScanStore(self.db, self.user_id).latest()
+            syn = (latest or {}).get("synthesis") or {}
+            if syn.get("explanation") and context.source in ("profile", "default"):
+                context.notes = (context.notes + " | " if context.notes else "") + (
+                    f"Body scan: {str(syn.get('explanation'))[:180]}"
+                )
+        except Exception:
+            pass
+
         plan = self.get_active_plan()
         if not plan:
             return context

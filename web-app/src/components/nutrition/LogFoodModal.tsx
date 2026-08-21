@@ -3,6 +3,12 @@ import { FoodItem } from "@/types";
 import foodDatabase, { FoodDbItem } from "@/data/foodDatabase";
 import apiClient from "@/lib/api-client";
 import { MdClose, MdSearch, MdPhotoCamera, MdImage } from "react-icons/md";
+import {
+  AI_MODEL_OPTIONS,
+  AiModelId,
+  loadStoredAiModel,
+  persistAiModel,
+} from "@/lib/aiModels";
 
 async function compressImage(file: File): Promise<File> {
   const maxWidth = 1280;
@@ -100,6 +106,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
   const [analyzing, setAnalyzing] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [fromPhoto, setFromPhoto] = useState(false);
+  const [aiModel, setAiModel] = useState<AiModelId>(() => loadStoredAiModel());
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const [savedFoods, setSavedFoods] = useState<FoodDbItem[]>([]);
@@ -107,6 +114,11 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
   const [estimateError, setEstimateError] = useState<string | null>(null);
   const estimateQueryRef = useRef("");
   const lastEstimatedRef = useRef("");
+
+  const selectAiModel = (model: AiModelId) => {
+    setAiModel(model);
+    persistAiModel(model);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -343,9 +355,10 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         payload.append("file", photoFile);
         if (note) payload.append("description", note);
         if (title) payload.append("title", title);
+        payload.append("model", aiModel);
 
         const response = await apiClient.post("/api/macros/analyze-image", payload, {
-          timeout: 60000,
+          timeout: aiModel === "gpt-5.6-sol" ? 120000 : 60000,
         });
         const item = response.data?.food || response.data?.food_items?.[0];
         if (!item) {
@@ -737,6 +750,31 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
               </button>
             </div>
           )}
+
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-2">
+              AI model
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {AI_MODEL_OPTIONS.map((opt) => {
+                const active = aiModel === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => selectAiModel(opt.id)}
+                    className={`px-3 py-2 rounded-xl border text-sm font-bold ${
+                      active
+                        ? "border-[#FF6B35] bg-[rgba(255,107,53,0.18)] text-[#FF6B35]"
+                        : "border-[#2A2D35] bg-[#161A22] text-[#8E8E93]"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-2">

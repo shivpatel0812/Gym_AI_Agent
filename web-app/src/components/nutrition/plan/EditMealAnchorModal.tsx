@@ -10,6 +10,7 @@ import {
   MdCookie,
   MdNightsStay,
   MdLunchDining,
+  MdFitnessCenter,
 } from "react-icons/md";
 import apiClient from "../../../lib/api-client";
 import foodDatabase, { FoodDbItem } from "../../../data/foodDatabase";
@@ -82,6 +83,8 @@ export function SlotIcon({ slot, size = 20, className }: { slot?: string; size?:
       return <MdWbSunny {...props} />;
     case "shake":
       return <MdLocalCafe {...props} />;
+    case "pre_workout":
+      return <MdFitnessCenter {...props} />;
     case "snack":
       return <MdCookie {...props} />;
     case "dinner":

@@ -11,6 +11,8 @@ from pydantic import BaseModel
 import json
 import os
 
+import ai_access
+import moderation
 from auth import get_user_id
 from db import db
 from ai_analysis import FitnessDataAnalyzer, FitnessAICoach, get_user_profile_for_ai
@@ -200,6 +202,8 @@ class ChatRequest(BaseModel):
     conversation_history: Optional[List[dict]] = None
     # "plan" = training interview, "nutrition" = nutrition interview, else coach
     mode: Optional[str] = "coach"
+    # "gpt-4o" (default) or "gpt-5.6-sol"
+    model: Optional[str] = None
 
 
 class RenameConversationRequest(BaseModel):
@@ -236,6 +240,8 @@ async def generate_ai_analysis(
     Generate AI-powered analysis for a specific month.
     Optionally includes context from previous months for trend analysis.
     """
+    ai_access.consume(user_id)
+
     try:
         # Get OpenAI API key
         openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -353,12 +359,14 @@ async def generate_ai_analysis(
         }
 
     except HTTPException:
+        ai_access.refund(user_id)
         raise
     except Exception as e:
+        ai_access.refund(user_id)
         print(f"Error generating analysis: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error generating analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail="Could not generate your analysis. Please try again.")
 
 
 @router.get("/analyses")
@@ -461,15 +469,25 @@ async def chat_with_ai(
     """
     Chat with AI coach. Uses current month's data or specified month for context.
     """
+    # Screen the message before it costs the user a call or reaches the model
+    moderation.enforce_input(request.message)
+    ai_access.consume(user_id)
+
     try:
         # Get OpenAI API key
         openai_api_key = os.getenv("OPENAI_API_KEY")
         if not openai_api_key:
             raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
+        from ai_models import resolve_model
+
         summary = _chat_summary(user_id, request)
         user_profile = get_user_profile_for_ai(db, user_id)
-        coach = FitnessAICoach(api_key=openai_api_key, user_profile=user_profile)
+        coach = FitnessAICoach(
+            api_key=openai_api_key,
+            model=resolve_model(request.model),
+            user_profile=user_profile,
+        )
 
         store = ConversationStore(db, user_id)
         history = _chat_history(store, request)
@@ -501,13 +519,18 @@ async def chat_with_ai(
             "tokens_used": result["tokens_used"],
             "tools_used": result.get("tools_used", []),
             "conversation_id": conversation_id,
-            "conversation_history": result["conversation_history"]
+            "conversation_history": result["conversation_history"],
+            "ai_access": ai_access.get_status(user_id),
         }
 
     except HTTPException:
+        # A failure on our side shouldn't burn the user's daily allowance
+        ai_access.refund(user_id)
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error in chat: {str(e)}")
+        ai_access.refund(user_id)
+        print(f"chat failed for {user_id}: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail="The AI coach could not answer that. Please try again.")
 
 
 @router.get("/conversations")
@@ -579,20 +602,39 @@ async def chat_with_ai_stream(
     for the event shapes. Errors after the stream opens arrive as an error
     event rather than an HTTP status, since the response has already begun.
     """
+    # Both checks run before the stream opens, so a block or an exhausted quota
+    # surfaces as a real HTTP status the client can branch on rather than an
+    # error event mid-stream.
+    moderation.enforce_input(request.message)
+    ai_access.consume(user_id)
+
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if not openai_api_key:
+        ai_access.refund(user_id)
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
-    summary = _chat_summary(user_id, request)
-    user_profile = get_user_profile_for_ai(db, user_id)
-    coach = FitnessAICoach(api_key=openai_api_key, user_profile=user_profile)
-    toolbox = CoachToolbox(db, user_id)
+    # Everything up to the first yielded token is set up here, so any failure
+    # hands the reserved call back before the response has begun.
+    try:
+        from ai_models import resolve_model
 
-    store = ConversationStore(db, user_id)
-    history = _chat_history(store, request)
-    mode = _chat_mode(request)
-    split_context = _split_context_for_plan(user_id) if mode == "plan" else None
-    nutrition_context = _nutrition_context_for_chat(user_id) if mode == "nutrition" else None
+        summary = _chat_summary(user_id, request)
+        user_profile = get_user_profile_for_ai(db, user_id)
+        coach = FitnessAICoach(
+            api_key=openai_api_key,
+            model=resolve_model(request.model),
+            user_profile=user_profile,
+        )
+        toolbox = CoachToolbox(db, user_id)
+
+        store = ConversationStore(db, user_id)
+        history = _chat_history(store, request)
+        mode = _chat_mode(request)
+        split_context = _split_context_for_plan(user_id) if mode == "plan" else None
+        nutrition_context = _nutrition_context_for_chat(user_id) if mode == "nutrition" else None
+    except Exception:
+        ai_access.refund(user_id)
+        raise
 
     def event_stream():
         try:
@@ -613,9 +655,24 @@ async def chat_with_ai_stream(
                         request.message, event.get("response", ""),
                         mode=mode,
                     )
+                    event["ai_access"] = ai_access.get_status(user_id)
+                elif event.get("type") == "error":
+                    # chat_stream catches its own failures and yields them as
+                    # events rather than raising, so the refund has to happen
+                    # here too — otherwise a model error costs the user a call.
+                    print(f"chat stream error for {user_id}: {event.get('error')}")
+                    ai_access.refund(user_id)
+                    event = {
+                        "type": "error",
+                        "error": "The AI coach could not answer that. Please try again.",
+                    }
                 yield f"data: {json.dumps(event, default=str)}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            # The stream died after the reservation, so hand the call back
+            ai_access.refund(user_id)
+            print(f"chat stream failed for {user_id}: {type(e).__name__}: {e}")
+            error = {'type': 'error', 'error': 'The AI coach could not answer that. Please try again.'}
+            yield f"data: {json.dumps(error)}\n\n"
 
     return StreamingResponse(
         event_stream(),

@@ -335,6 +335,20 @@ class FlexibleMeal(BaseModel):
     notes: Optional[str] = None
 
 
+class GoToItem(BaseModel):
+    """A staple food the user reaches for often — logged individually, not as a full meal."""
+    id: Optional[str] = None
+    slot: str = "other"  # breakfast, lunch, snack, shake, dinner, late_night, other (anytime)
+    name: str
+    amount: Optional[str] = None
+    calories: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fats: Optional[float] = None
+    fiber: Optional[float] = None
+    notes: Optional[str] = None
+
+
 class NutritionPlanPreferences(BaseModel):
     likes: List[str] = []
     dislikes: List[str] = []
@@ -369,6 +383,7 @@ class NutritionPlan(BaseModel):
     strategy: Optional[str] = None
     meal_anchors: List[MealAnchor] = []
     flexible_meals: List[FlexibleMeal] = []
+    go_to_items: List[GoToItem] = []
     preferences: NutritionPlanPreferences = NutritionPlanPreferences()
     food_priorities: List[str] = []
     typical_day_notes: Optional[str] = None

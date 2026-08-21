@@ -50,6 +50,20 @@ export default function MoreHome({ navigation }: MoreHomeProps) {
       icon: "food-apple-outline" as keyof typeof MaterialCommunityIcons.glyphMap,
       screen: "SavedFoods",
     },
+    {
+      id: "BodyScan",
+      title: "Body Scan",
+      subtitle: "Guided photos → AI coaching emphasis",
+      icon: "human-male-height" as keyof typeof MaterialCommunityIcons.glyphMap,
+      screen: "BodyScan",
+    },
+    {
+      id: "Settings",
+      title: "Settings",
+      subtitle: "AI usage, privacy, and account",
+      icon: "cog-outline" as keyof typeof MaterialCommunityIcons.glyphMap,
+      screen: "Settings",
+    },
   ];
 
   return (

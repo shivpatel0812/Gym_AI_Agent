@@ -100,11 +100,13 @@ async def delete_macro_entry(macro_id: str, user_id: str = Depends(get_user_id))
 async def analyze_food_image_endpoint(
     file: UploadFile = File(...),
     description: Optional[str] = Form(None),
+    model: Optional[str] = Form(None),
     user_id: str = Depends(get_user_id)
 ):
     """
     Analyze a meal photo with optional user description.
     GPT vision estimates the portion shown; YOLO/USDA is the fallback.
+    model: "gpt-4o" (default) or "gpt-5.6-sol"
     """
     # Save uploaded file temporarily
     temp_file = None
@@ -116,7 +118,7 @@ async def analyze_food_image_endpoint(
             shutil.copyfileobj(file.file, tmp)
         
         # Use the nutrition analyzer module
-        result = analyze_food_image(temp_file, description)
+        result = analyze_food_image(temp_file, description, model=model)
         return result
     
     except Exception as e:

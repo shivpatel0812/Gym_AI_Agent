@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   MdLunchDining,
   MdCheck,
@@ -8,8 +8,15 @@ import {
 } from "react-icons/md";
 import CreateNutritionPlanModal from "./CreateNutritionPlanModal";
 import EditMealAnchorModal, { SlotIcon, sumAnchorMacros } from "./EditMealAnchorModal";
+import EditGoToItemModal from "./EditGoToItemModal";
+import EditFlexibleMealModal from "./EditFlexibleMealModal";
+import DayMap from "./DayMap";
+import AddBlueprintModal, { BlueprintAddResult } from "./AddBlueprintModal";
 import {
+  BlueprintExtra,
+  DayBand,
   FlexibleMeal,
+  GoToItem,
   MealAnchor,
   NutritionPlan,
   endNutritionPlan,
@@ -18,8 +25,10 @@ import {
   goalLabel,
   pauseNutritionPlan,
   resumeNutritionPlan,
+  slotLabel,
   updateNutritionPlan,
 } from "../../../api/nutritionPlan";
+import { buildDayMap } from "../../../lib/dayMap";
 
 interface Props {
   onAskCoach?: (prompt: string) => void;
@@ -45,19 +54,19 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
   const [carbs, setCarbs] = useState("");
   const [fats, setFats] = useState("");
   const [fiber, setFiber] = useState("");
-  const [addingFlex, setAddingFlex] = useState(false);
+  const [editingFlex, setEditingFlex] = useState<FlexibleMeal | null>(null);
+  const [editingFlexIndex, setEditingFlexIndex] = useState<number | null>(null);
+  const [flexEditorOpen, setFlexEditorOpen] = useState(false);
   const [editingAnchor, setEditingAnchor] = useState<MealAnchor | null>(null);
   const [editingAnchorIndex, setEditingAnchorIndex] = useState<number | null>(null);
   const [anchorEditorOpen, setAnchorEditorOpen] = useState(false);
+  const [editingGoTo, setEditingGoTo] = useState<GoToItem | null>(null);
+  const [editingGoToIndex, setEditingGoToIndex] = useState<number | null>(null);
+  const [goToEditorOpen, setGoToEditorOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [newFlex, setNewFlex] = useState<FlexibleMeal>({
-    name: "Dinner",
-    frequency: "most_days",
-    calorie_min: 650,
-    calorie_max: 900,
-    protein_min: 25,
-    protein_max: 40,
-  });
+  const [strategyOpen, setStrategyOpen] = useState(false);
+  const [addBand, setAddBand] = useState<DayBand | null>(null);
+  const [editingExtra, setEditingExtra] = useState<BlueprintExtra | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -82,13 +91,25 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
   }, [load]);
 
   const savePatch = async (patch: Partial<NutritionPlan>) => {
-    if (!plan) return;
+    if (!plan) return false;
     try {
       const updated = await updateNutritionPlan(plan.id, patch);
-      setPlan(updated);
+      setPlan({
+        ...updated,
+        go_to_items: updated.go_to_items ?? patch.go_to_items ?? plan.go_to_items,
+        meal_anchors: updated.meal_anchors ?? patch.meal_anchors ?? plan.meal_anchors,
+        flexible_meals: updated.flexible_meals ?? patch.flexible_meals ?? plan.flexible_meals,
+        blueprint_extras:
+          updated.blueprint_extras ?? patch.blueprint_extras ?? plan.blueprint_extras,
+        slot_profiles: updated.slot_profiles ?? patch.slot_profiles ?? plan.slot_profiles,
+        fast_food_places:
+          updated.fast_food_places ?? patch.fast_food_places ?? plan.fast_food_places,
+      });
       setError(null);
+      return true;
     } catch {
       setError("Could not save that change.");
+      return false;
     }
   };
 
@@ -112,6 +133,7 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       label: "",
       foods: [],
       frequency: "daily",
+      days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
     });
     setEditingAnchorIndex(null);
     setAnchorEditorOpen(true);
@@ -121,6 +143,61 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     setEditingAnchor(anchor);
     setEditingAnchorIndex(index);
     setAnchorEditorOpen(true);
+  };
+
+  const findAnchorIndex = (slot: { sourceId?: string; sourceIndex?: number }) => {
+    if (!plan) return -1;
+    if (slot.sourceId) {
+      const byId = plan.meal_anchors.findIndex((a) => a.id === slot.sourceId);
+      if (byId >= 0) return byId;
+    }
+    return typeof slot.sourceIndex === "number" ? slot.sourceIndex : -1;
+  };
+
+  const findFlexIndex = (slot: { sourceId?: string; sourceIndex?: number }) => {
+    if (!plan) return -1;
+    if (slot.sourceId) {
+      const byId = (plan.flexible_meals || []).findIndex((m) => m.id === slot.sourceId);
+      if (byId >= 0) return byId;
+    }
+    return typeof slot.sourceIndex === "number" ? slot.sourceIndex : -1;
+  };
+
+  const findExtraIndex = (slot: { sourceId?: string; sourceIndex?: number }) => {
+    if (!plan) return -1;
+    if (slot.sourceId) {
+      const byId = (plan.blueprint_extras || []).findIndex((e) => e.id === slot.sourceId);
+      if (byId >= 0) return byId;
+    }
+    return typeof slot.sourceIndex === "number" ? slot.sourceIndex : -1;
+  };
+
+  const handlePressBlueprintSlot = (slot: import("../../../lib/dayMap").DayMapSlot) => {
+    if (!plan) return;
+    if (slot.kind === "anchor") {
+      const idx = findAnchorIndex(slot);
+      if (idx >= 0 && plan.meal_anchors[idx]) openEditAnchor(plan.meal_anchors[idx], idx);
+      return;
+    }
+    if (slot.kind === "flexible") {
+      const idx = findFlexIndex(slot);
+      if (idx >= 0 && plan.flexible_meals[idx]) openEditFlex(plan.flexible_meals[idx], idx);
+      return;
+    }
+    if (slot.kind === "one_time") {
+      const idx = findExtraIndex(slot);
+      const extra = idx >= 0 ? plan.blueprint_extras?.[idx] : null;
+      if (!extra) return;
+      setEditingExtra(extra);
+      setAddBand((extra.band as DayBand) || slot.band);
+      return;
+    }
+    if (slot.kind === "suggest") {
+      const items = plan.go_to_items || [];
+      const idx = items.findIndex((g) => g.id && g.id === slot.sourceId);
+      const resolved = idx >= 0 ? idx : typeof slot.sourceIndex === "number" ? slot.sourceIndex : -1;
+      if (resolved >= 0 && items[resolved]) openEditGoTo(items[resolved], resolved);
+    }
   };
 
   const saveAnchor = async (next: MealAnchor) => {
@@ -152,18 +229,179 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     setEditingAnchorIndex(null);
   };
 
-  const addFlexMeal = async () => {
-    if (!plan || !newFlex.name.trim()) return;
-    await savePatch({ flexible_meals: [...(plan.flexible_meals || []), newFlex] });
-    setAddingFlex(false);
+  const openNewFlex = () => {
+    setEditingFlex(null);
+    setEditingFlexIndex(null);
+    setFlexEditorOpen(true);
   };
 
-  const removeFlex = (id?: string, index?: number) => {
+  const openEditFlex = (meal: FlexibleMeal, index: number) => {
+    setEditingFlex(meal);
+    setEditingFlexIndex(index);
+    setFlexEditorOpen(true);
+  };
+
+  const saveFlex = async (next: FlexibleMeal) => {
+    if (!plan) return;
+    const meals = [...(plan.flexible_meals || [])];
+    if (editingFlexIndex != null && editingFlexIndex >= 0) {
+      meals[editingFlexIndex] = next;
+    } else if (next.id) {
+      const idx = meals.findIndex((m) => m.id === next.id);
+      if (idx >= 0) meals[idx] = next;
+      else meals.push(next);
+    } else {
+      meals.push(next);
+    }
+    const ok = await savePatch({ flexible_meals: meals });
+    if (!ok) return;
+    setFlexEditorOpen(false);
+    setEditingFlex(null);
+    setEditingFlexIndex(null);
+  };
+
+  const removeFlex = async (id?: string, index?: number) => {
     if (!plan) return;
     if (!confirm("Remove this flexible meal?")) return;
-    savePatch({
+    await savePatch({
       flexible_meals: plan.flexible_meals.filter((m, i) => (id ? m.id !== id : i !== index)),
     });
+    setFlexEditorOpen(false);
+    setEditingFlex(null);
+    setEditingFlexIndex(null);
+  };
+
+  const openNewGoTo = () => {
+    setEditingGoTo(null);
+    setEditingGoToIndex(null);
+    setGoToEditorOpen(true);
+  };
+
+  const openEditGoTo = (goTo: GoToItem, index: number) => {
+    setEditingGoTo(goTo);
+    setEditingGoToIndex(index);
+    setGoToEditorOpen(true);
+  };
+
+  const saveGoTo = async (next: GoToItem) => {
+    if (!plan) return;
+    const items = [...(plan.go_to_items || [])];
+    if (editingGoToIndex != null && editingGoToIndex >= 0) {
+      items[editingGoToIndex] = next;
+    } else if (next.id) {
+      const idx = items.findIndex((g) => g.id === next.id);
+      if (idx >= 0) items[idx] = next;
+      else items.push(next);
+    } else {
+      items.push(next);
+    }
+    const ok = await savePatch({ go_to_items: items });
+    if (!ok) return;
+    setGoToEditorOpen(false);
+    setEditingGoTo(null);
+    setEditingGoToIndex(null);
+  };
+
+  const removeGoTo = async (id?: string, index?: number) => {
+    if (!plan) return;
+    if (!confirm("Remove this go-to item?")) return;
+    await savePatch({
+      go_to_items: (plan.go_to_items || []).filter((g, i) => (id ? g.id !== id : i !== index)),
+    });
+    setGoToEditorOpen(false);
+    setEditingGoTo(null);
+    setEditingGoToIndex(null);
+  };
+
+  const handleBlueprintAdd = async (result: BlueprintAddResult) => {
+    if (!plan) return;
+    const editingId = editingExtra?.id || result.id;
+    const wasEditing = !!editingExtra;
+    setAddBand(null);
+    setEditingExtra(null);
+
+    if (wasEditing || editingId) {
+      const extras = [...(plan.blueprint_extras || [])];
+      const next: BlueprintExtra = {
+        id: editingId,
+        band: result.band,
+        slot: result.slot,
+        label: result.label,
+        foods: result.foods,
+        calories: result.calories,
+        protein: result.protein,
+        calorie_min: result.calorie_min,
+        calorie_max: result.calorie_max,
+        protein_min: result.protein_min,
+        protein_max: result.protein_max,
+        notes: result.notes,
+      };
+      const idx = extras.findIndex((e) => e.id && e.id === next.id);
+      if (idx >= 0) extras[idx] = { ...extras[idx], ...next };
+      else extras.push(next);
+      await savePatch({ blueprint_extras: extras });
+      return;
+    }
+
+    if (result.persistence === "anchor") {
+      const foods = (result.foods || []).map((f) => ({
+        name: f.name,
+        calories: result.calories,
+        protein: result.protein,
+      }));
+      setEditingAnchor({
+        slot: result.slot,
+        label: result.label,
+        foods,
+        frequency: "daily",
+        notes: result.notes,
+      });
+      setEditingAnchorIndex(null);
+      setAnchorEditorOpen(true);
+      return;
+    }
+
+    if (result.persistence === "flexible") {
+      setEditingFlex({
+        name: result.label,
+        frequency: "most_days",
+        calorie_min: result.calorie_min ?? result.calories,
+        calorie_max: result.calorie_max ?? result.calories,
+        protein_min: result.protein_min ?? result.protein,
+        protein_max: result.protein_max ?? result.protein,
+        notes: result.notes,
+      });
+      setEditingFlexIndex(null);
+      setFlexEditorOpen(true);
+      return;
+    }
+
+    const next: BlueprintExtra = {
+      band: result.band,
+      slot: result.slot,
+      label: result.label,
+      foods: result.foods,
+      calories: result.calories,
+      protein: result.protein,
+      calorie_min: result.calorie_min,
+      calorie_max: result.calorie_max,
+      protein_min: result.protein_min,
+      protein_max: result.protein_max,
+      notes: result.notes,
+    };
+    await savePatch({
+      blueprint_extras: [...(plan.blueprint_extras || []), next],
+    });
+  };
+
+  const removeBlueprintExtra = async (id?: string) => {
+    if (!plan || !id) return;
+    if (!confirm("Remove this one-time meal?")) return;
+    await savePatch({
+      blueprint_extras: (plan.blueprint_extras || []).filter((e) => e.id !== id),
+    });
+    setEditingExtra(null);
+    setAddBand(null);
   };
 
   const runStatus = async (title: string, message: string, action: () => Promise<void>) => {
@@ -175,6 +413,8 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       setError(`Could not ${title.toLowerCase()}.`);
     }
   };
+
+  const dayMap = useMemo(() => (plan ? buildDayMap(plan) : null), [plan]);
 
   if (loading) {
     return (
@@ -277,9 +517,50 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
         ) : null}
       </div>
 
-      <div className="rounded-2xl bg-[#1C1C1E] border border-[#2A2D35] p-5">
+      {dayMap ? (
+        <DayMap
+          map={dayMap}
+          strategyExpanded={strategyOpen}
+          onEditStrategy={() => setStrategyOpen((v) => !v)}
+          onAddAnchor={(slot) => {
+            setEditingAnchor({
+              slot,
+              label: slotLabel(slot),
+              foods: [],
+              frequency: "daily",
+              days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+            });
+            setEditingAnchorIndex(null);
+            setAnchorEditorOpen(true);
+          }}
+          onPressSlot={handlePressBlueprintSlot}
+          onStanceChange={async (slot, stance) => {
+            if (!plan) return;
+            const profiles = [...(plan.slot_profiles || [])];
+            const idx = profiles.findIndex((p) => p.slot === slot);
+            if (idx >= 0) profiles[idx] = { ...profiles[idx], stance };
+            else profiles.push({ slot, stance, notes: null });
+            await savePatch({ slot_profiles: profiles });
+          }}
+          onAddPlace={async (slot, name) => {
+            if (!plan) return;
+            const places = [...(plan.fast_food_places || [])];
+            const existing = places.find((p) => p.name.toLowerCase() === name.toLowerCase());
+            if (existing) {
+              const slots = Array.from(new Set([...(existing.slots || []), slot]));
+              const idx = places.findIndex((p) => p.id === existing.id || p.name === existing.name);
+              places[idx] = { ...existing, slots };
+            } else {
+              places.push({ name, slots: [slot] });
+            }
+            await savePatch({ fast_food_places: places });
+          }}
+        />
+      ) : null}
+
+      <div className="rounded-2xl bg-[#161A22] border border-[#2A2D35] p-5">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-[15px] font-bold text-white">Daily target</p>
+          <p className="text-[15px] font-bold text-white">Daily targets</p>
           <button
             type="button"
             onClick={() => (editingTargets ? saveTargets() : setEditingTargets(true))}
@@ -313,33 +594,28 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           </div>
         ) : (
           <>
-            <p className="text-[32px] font-bold text-white">
-              {plan.targets.calories?.toLocaleString() ?? "—"} kcal
+            <p className="text-4xl font-bold text-white">
+              {plan.targets.calories?.toLocaleString() ?? "—"}
             </p>
-            {range ? <p className="text-sm text-[#8E8E93] mt-0.5 mb-3">{range}</p> : null}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+            <p className="text-sm font-semibold text-[#636366] mt-1">kcal / day</p>
+            {range ? <p className="text-sm text-[#8E8E93] mt-1">{range}</p> : null}
+            <div className="flex flex-wrap gap-2 mt-3">
               {MACRO_TILES.map((tile) => {
                 const value = macroValues[tile.key];
                 return (
                   <div
                     key={tile.key}
-                    className="rounded-xl bg-[#0B0C10] border border-[#2A2D35] p-2.5 space-y-1"
+                    className="inline-flex items-center gap-1.5 rounded-full bg-[#0B0C10] border border-[#2A2D35] px-3 py-1.5"
                   >
-                    <div
-                      className="w-2 h-2 rounded-full"
+                    <span
+                      className="w-1.5 h-1.5 rounded-full"
                       style={{ backgroundColor: tile.color }}
                     />
-                    <p className="text-[15px] font-bold text-white">
+                    <span className="text-[13px] font-bold text-white">
                       {value ?? "—"}
                       {value != null ? tile.unit : ""}
-                    </p>
-                    <p className="text-[11px] font-semibold text-[#636366]">{tile.label}</p>
-                    <div className="h-0.5 rounded-full bg-[#2A2D35] overflow-hidden mt-1">
-                      <div
-                        className="h-full w-[70%] rounded-full"
-                        style={{ backgroundColor: tile.color }}
-                      />
-                    </div>
+                    </span>
+                    <span className="text-[11px] font-semibold text-[#636366]">{tile.label}</span>
                   </div>
                 );
               })}
@@ -348,13 +624,35 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
         )}
       </div>
 
-      <p className="text-[11px] font-extrabold text-[#636366] tracking-wider pt-2">MEAL STRUCTURE</p>
+      {!strategyOpen ? (
+        <button
+          type="button"
+          onClick={() => setStrategyOpen(true)}
+          className="w-full flex items-center gap-3 rounded-xl border border-[#2A2D35] bg-[#161A22] p-4 text-left"
+        >
+          <div className="flex-1">
+            <p className="font-bold text-white">Strategy under the map</p>
+            <p className="text-xs text-[#636366] mt-1">
+              {(plan.meal_anchors || []).length} anchors · {(plan.flexible_meals || []).length} flexible ·{" "}
+              {(plan.go_to_items || []).length} go-tos
+            </p>
+          </div>
+          <MdChevronRight className="text-[#636366] rotate-90" size={22} />
+        </button>
+      ) : null}
+
+      {strategyOpen ? (
+      <>
+      <p className="text-[11px] font-extrabold text-[#636366] tracking-wider pt-2">YOUR STRATEGY</p>
+      <p className="text-sm text-[#8E8E93] -mt-2">
+        Anchors are meals you repeat. Flexible meals are less controlled. Go-tos fill gaps on the day map.
+      </p>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-base font-bold text-white">Meal Anchors</p>
           <button type="button" onClick={openNewAnchor} className="text-[13px] font-bold text-[#FF6B35]">
-            + Add anchor
+            + Add
           </button>
         </div>
 
@@ -411,12 +709,8 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-base font-bold text-white">Flexible Meals</p>
-          <button
-            type="button"
-            onClick={() => setAddingFlex((v) => !v)}
-            className="text-[13px] font-bold text-[#FF6B35]"
-          >
-            {addingFlex ? "Cancel" : "+ Add meal"}
+          <button type="button" onClick={openNewFlex} className="text-[13px] font-bold text-[#FF6B35]">
+            + Add meal
           </button>
         </div>
 
@@ -424,9 +718,8 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           <button
             key={meal.id || `${meal.name}-${i}`}
             type="button"
-            onClick={() => removeFlex(meal.id, i)}
-            className="w-full flex items-start gap-2.5 rounded-[14px] bg-[#1C1C1E] border border-[#2A2D35] p-4 text-left"
-            title="Click to remove"
+            onClick={() => openEditFlex(meal, i)}
+            className="w-full flex items-start gap-2.5 rounded-[14px] bg-[#1C1C1E] border border-[#2A2D35] p-4 text-left hover:border-[#FF6B35]/40"
           >
             <div className="w-9 h-9 rounded-[10px] bg-[rgba(255,107,53,0.12)] flex items-center justify-center mt-0.5 shrink-0">
               <MdRestaurant size={20} className="text-[#FF6B35]" />
@@ -451,42 +744,76 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           </button>
         ))}
 
-        {addingFlex ? (
-          <div className="space-y-2">
-            <input
-              className={fieldClass}
-              value={newFlex.name}
-              onChange={(e) => setNewFlex((d) => ({ ...d, name: e.target.value }))}
-              placeholder="Dinner"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="number"
-                className={fieldClass}
-                value={newFlex.calorie_min ?? ""}
-                onChange={(e) =>
-                  setNewFlex((d) => ({ ...d, calorie_min: Number(e.target.value) || null }))
-                }
-                placeholder="Cal min"
-              />
-              <input
-                type="number"
-                className={fieldClass}
-                value={newFlex.calorie_max ?? ""}
-                onChange={(e) =>
-                  setNewFlex((d) => ({ ...d, calorie_max: Number(e.target.value) || null }))
-                }
-                placeholder="Cal max"
-              />
-            </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-base font-bold text-white">Go To</p>
+          <button type="button" onClick={openNewGoTo} className="text-[13px] font-bold text-[#FF6B35]">
+            + Add item
+          </button>
+        </div>
+        <p className="text-xs text-[#636366] leading-snug">
+          Staple foods you reach for often — searchable from your food database and one-tap on Home.
+        </p>
+
+        {(plan.go_to_items || []).map((goTo, i) => {
+          const hasMacros =
+            (Number(goTo.calories) || 0) > 0 ||
+            (Number(goTo.protein) || 0) > 0 ||
+            (Number(goTo.carbs) || 0) > 0 ||
+            (Number(goTo.fats) || 0) > 0;
+          return (
             <button
+              key={goTo.id || `${goTo.name}-${i}`}
               type="button"
-              onClick={addFlexMeal}
-              className="w-full py-2.5 rounded-xl bg-[#FF6B35] text-white font-bold"
+              onClick={() => openEditGoTo(goTo, i)}
+              className="w-full flex items-start gap-2.5 rounded-[14px] bg-[#1C1C1E] border border-[#2A2D35] p-4 text-left hover:border-[#FF6B35]/40"
             >
-              Save meal
+              <div className="w-9 h-9 rounded-[10px] bg-[rgba(255,107,53,0.12)] flex items-center justify-center mt-0.5 shrink-0">
+                <SlotIcon slot={goTo.slot || "other"} size={20} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[15px] font-bold text-white">{goTo.name}</p>
+                <p className="text-xs text-[#636366] mt-0.5">{slotLabel(goTo.slot)}</p>
+                {goTo.amount ? <p className="text-[13px] text-[#8E8E93] mt-1">{goTo.amount}</p> : null}
+                {hasMacros ? (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {(Number(goTo.calories) || 0) > 0 ? (
+                      <span className="px-2.5 py-1 rounded-full border border-[#2A2D35] bg-[#0B0C10] text-xs font-semibold text-[#8E8E93]">
+                        {Math.round(Number(goTo.calories))} kcal
+                      </span>
+                    ) : null}
+                    {(Number(goTo.protein) || 0) > 0 ? (
+                      <span className="px-2.5 py-1 rounded-full border border-[#2A2D35] bg-[#0B0C10] text-xs font-semibold text-[#8E8E93]">
+                        {Math.round(Number(goTo.protein))}g protein
+                      </span>
+                    ) : null}
+                    {(Number(goTo.carbs) || 0) > 0 ? (
+                      <span className="px-2.5 py-1 rounded-full border border-[#2A2D35] bg-[#0B0C10] text-xs font-semibold text-[#8E8E93]">
+                        {Math.round(Number(goTo.carbs))}g carbs
+                      </span>
+                    ) : null}
+                    {(Number(goTo.fats) || 0) > 0 ? (
+                      <span className="px-2.5 py-1 rounded-full border border-[#2A2D35] bg-[#0B0C10] text-xs font-semibold text-[#8E8E93]">
+                        {Math.round(Number(goTo.fats))}g fat
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {goTo.notes ? (
+                  <p className="text-xs text-[#636366] mt-1.5 leading-snug">{goTo.notes}</p>
+                ) : null}
+              </div>
+              <MdChevronRight size={20} className="text-[#636366] mt-1 shrink-0" />
             </button>
-          </div>
+          );
+        })}
+
+        {!plan.go_to_items?.length ? (
+          <p className="text-[13px] text-[#636366] py-2">
+            No go-to items yet. Add protein shakes, snacks, or other staples you log often.
+          </p>
         ) : null}
       </div>
 
@@ -529,6 +856,8 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
             </div>
           ) : null}
         </>
+      ) : null}
+      </>
       ) : null}
 
       {onAskCoach ? (
@@ -606,6 +935,52 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           editingAnchorIndex != null
             ? () => removeAnchor(editingAnchor?.id, editingAnchorIndex)
             : undefined
+        }
+      />
+
+      <EditFlexibleMealModal
+        visible={flexEditorOpen}
+        meal={editingFlex}
+        onClose={() => {
+          setFlexEditorOpen(false);
+          setEditingFlex(null);
+          setEditingFlexIndex(null);
+        }}
+        onSave={saveFlex}
+        onDelete={
+          editingFlexIndex != null
+            ? () => removeFlex(editingFlex?.id, editingFlexIndex)
+            : undefined
+        }
+      />
+
+      <EditGoToItemModal
+        visible={goToEditorOpen}
+        item={editingGoTo}
+        onClose={() => {
+          setGoToEditorOpen(false);
+          setEditingGoTo(null);
+          setEditingGoToIndex(null);
+        }}
+        onSave={saveGoTo}
+        onDelete={
+          editingGoToIndex != null
+            ? () => removeGoTo(editingGoTo?.id, editingGoToIndex)
+            : undefined
+        }
+      />
+
+      <AddBlueprintModal
+        visible={!!addBand}
+        band={addBand}
+        editing={editingExtra}
+        onClose={() => {
+          setAddBand(null);
+          setEditingExtra(null);
+        }}
+        onSave={handleBlueprintAdd}
+        onDelete={
+          editingExtra?.id ? () => void removeBlueprintExtra(editingExtra.id) : undefined
         }
       />
     </div>

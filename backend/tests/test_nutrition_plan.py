@@ -73,6 +73,23 @@ def test_validate_plan_clamps_and_fills_ids():
     assert plan["flexible_meals"][0]["calorie_min"] <= plan["flexible_meals"][0]["calorie_max"]
 
 
+def test_normalize_go_to_items():
+    plan = NutritionPlanBuilder.validate_plan({
+        "goal": "muscle",
+        "go_to_items": [
+            {"name": "Premier Protein Shake", "slot": "shake", "calories": 160, "protein": 30},
+            "Greek yogurt",
+        ],
+    })
+    assert len(plan["go_to_items"]) == 2
+    assert plan["go_to_items"][0]["id"]
+    assert plan["go_to_items"][0]["slot"] == "shake"
+    assert plan["go_to_items"][0]["name"] == "Premier Protein Shake"
+    assert plan["go_to_items"][0]["protein"] == 30
+    assert plan["go_to_items"][1]["name"] == "Greek yogurt"
+    assert plan["go_to_items"][1]["slot"] == "other"
+
+
 def test_today_guidance_dinner_budget_after_anchors():
     plan = {
         "status": "active",

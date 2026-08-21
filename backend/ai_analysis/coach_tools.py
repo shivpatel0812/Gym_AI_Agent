@@ -312,6 +312,16 @@ class CoachToolbox:
                 }
                 for m in (plan.get("flexible_meals") or [])
             ],
+            "go_to_items": [
+                {
+                    "name": g.get("name"),
+                    "slot": g.get("slot"),
+                    "amount": g.get("amount"),
+                    "calories": g.get("calories"),
+                    "protein": g.get("protein"),
+                }
+                for g in (plan.get("go_to_items") or [])
+            ],
             "food_priorities": plan.get("food_priorities") or [],
             "preferences": plan.get("preferences") or {},
         }
@@ -366,6 +376,25 @@ class CoachToolbox:
         ranked = sorted(records.values(), key=lambda r: r["estimated_1rm"], reverse=True)
         return {"days": days, "records": ranked[:MAX_RECORDS]}
 
+    def get_latest_body_scan(self) -> Dict[str, Any]:
+        """Latest body-scan observations + synthesis (no photos)."""
+        try:
+            from body_scan.store import BodyScanStore
+            scan = BodyScanStore(self.db, self.user_id).latest()
+        except Exception as e:
+            return {"error": f"Could not load body scan: {e}"}
+        if not scan:
+            return {"status": "no_scan", "message": "No body scan yet."}
+        return {
+            "status": "ok",
+            "created_at": scan.get("created_at"),
+            "next_scan_at": scan.get("next_scan_at"),
+            "goal": scan.get("goal"),
+            "observations": scan.get("observations"),
+            "synthesis": scan.get("synthesis"),
+            "photos_retained": False,
+        }
+
     # --- dispatch ---------------------------------------------------------
 
     def dispatch(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -380,6 +409,7 @@ class CoachToolbox:
             "get_training_plan": self.get_training_plan,
             "get_wellness_log": self.get_wellness_log,
             "get_personal_records": self.get_personal_records,
+            "get_latest_body_scan": self.get_latest_body_scan,
         }.get(name)
 
         if handler is None:
@@ -526,6 +556,18 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {"days": _days_param("How many days back to look", 365)},
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_latest_body_scan",
+            "description": (
+                "Get the user's latest AI body scan: qualitative physique observations, "
+                "parsed goal, and recommended training emphasis. Photos are never stored. "
+                "Use when coaching about physique balance, asymmetries, or scan-based focus."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
 ]

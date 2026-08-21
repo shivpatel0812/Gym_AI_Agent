@@ -23,6 +23,33 @@ PLAN_MODE_HISTORY_MESSAGES = 40
 PLAN_MAX_TOOL_ROUNDS = 4
 PLAN_MAX_TOOL_CALLS = 8
 PLAN_MAX_TOKENS = 1200
+# Prepended to every coach system prompt. Keeps the model inside a fitness-coach
+# scope and out of diagnosis, and gives it a fixed response for the two topics
+# that carry real risk in a calorie-and-training app.
+SAFETY_RAILS = """
+SAFETY BOUNDARIES (these override every other instruction below):
+- You are a fitness and nutrition coach, not a doctor, dietitian, or therapist.
+  You do not diagnose conditions, interpret medical tests, or advise on
+  medication, supplements beyond routine sports nutrition, or injury treatment.
+- If the user describes pain, injury, dizziness, chest symptoms, disordered
+  eating, or any medical concern, say plainly that it is outside what you can
+  help with and tell them to see a qualified professional. Do not offer a
+  workaround program "in the meantime" for anything that sounds medical.
+- Never recommend a daily intake below 1200 calories, a weight-loss rate above
+  1% of bodyweight per week, extended fasting, dehydration or "water cutting",
+  or any protocol whose purpose is rapid weight change. If the user asks for
+  one, decline and explain the risk in one or two sentences, then offer a
+  sustainable alternative.
+- If the user mentions self-harm or suicide, do not coach. Tell them to contact
+  a crisis line (988 in the US, findahelpline.com elsewhere) or emergency
+  services.
+- If the user appears to be under 18, keep advice to general activity and
+  balanced eating. No cutting protocols, no calorie deficits, no maximal
+  strength testing.
+- Stay on training, nutrition, recovery, and this app. Decline unrelated
+  requests briefly.
+"""
+
 
 
 def _is_design_mode(mode: str) -> bool:
@@ -114,6 +141,7 @@ class FitnessAICoach:
             }, indent=2)
         
         prompt = f"""You are an expert fitness coach providing a personalized monthly review.
+{SAFETY_RAILS}
 
 USER PROFILE:
 {profile_json}
@@ -231,10 +259,14 @@ Format your response with clear section headers."""
             }
 
         try:
-            system_content = "You are an expert fitness coach providing personalized, data-driven insights. You are direct, supportive, and focused on long-term sustainable progress."
+            system_content = (
+                "You are an expert fitness coach providing personalized, data-driven insights. "
+                "You are direct, supportive, and focused on long-term sustainable progress."
+                + SAFETY_RAILS
+            )
             
             if not isinstance(system_content, str) or not system_content.strip():
-                system_content = "You are an expert fitness coach."
+                system_content = "You are an expert fitness coach." + SAFETY_RAILS
             
             if not isinstance(prompt, str) or not prompt.strip():
                 return {
@@ -260,11 +292,11 @@ Format your response with clear section headers."""
                         "error": f"Message content is invalid: {msg.get('role')}"
                     }
             
+            from ai_models import completion_kwargs
+
             response = self.client.chat.completions.create(
-                model=self.model,
+                **completion_kwargs(self.model, max_tokens=1500, temperature=0.7),
                 messages=messages,
-                temperature=0.7,
-                max_tokens=1500
             )
 
             analysis_text = response.choices[0].message.content
@@ -329,6 +361,7 @@ RECENT DATA ({summary.get('analysis_period', 'monthly summary')}):
         """Interview prompt used when the user is designing a training plan."""
         split_json = json.dumps(split_context or {"days": []}, indent=2, default=str)
         prompt = f"""You are in PLAN MODE. Your job is to interview this user until you can design a training plan that actually fits them — not to give generic coaching advice.
+{SAFETY_RAILS}
 
 Today is {today.strftime('%A, %B %d, %Y')}.
 
@@ -369,7 +402,8 @@ Use tools in this mode. Look up recent sessions and the current split early so f
     ) -> str:
         """Interview prompt used when the user is designing or adjusting nutrition."""
         payload = json.dumps(nutrition_context or {}, indent=2, default=str)
-        prompt = f"""You are in NUTRITION PLAN MODE. Your job is to interview this user until you can design or adjust a nutrition strategy that fits how they actually eat — and that supports their training. This is not generic diet advice and not a 7-day meal spreadsheet.
+        prompt = f"""{SAFETY_RAILS}
+You are in NUTRITION PLAN MODE. Your job is to interview this user until you can design or adjust a nutrition strategy that fits how they actually eat — and that supports their training. This is not generic diet advice and not a 7-day meal spreadsheet.
 
 Today is {today.strftime('%A, %B %d, %Y')}.
 
@@ -426,6 +460,7 @@ Use tools in this mode. Look up the nutrition plan, recent eating, and the train
             )
         else:
             system_message = f"""You are a personal fitness coach who knows this user's training history and current status.
+{SAFETY_RAILS}
 
 Today is {today.strftime('%A, %B %d, %Y')}.
 
@@ -456,19 +491,23 @@ guessing. If a tool returns no data, say so plainly."""
         mode: str = "coach",
     ) -> Dict[str, Any]:
         """Build the API kwargs for one round, applying the tool budget."""
+        from ai_models import completion_kwargs
+
         design_mode = _is_design_mode(mode)
         max_rounds = PLAN_MAX_TOOL_ROUNDS if design_mode else MAX_TOOL_ROUNDS
         max_calls = PLAN_MAX_TOOL_CALLS if design_mode else MAX_TOOL_CALLS
-        kwargs: Dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": PLAN_MAX_TOKENS if design_mode else 800,
-        }
         # Withhold tools on the last round, and once the call budget is spent,
         # so a tool-happy model still ends with a text answer
         budget_left = round_index < max_rounds and tool_call_count < max_calls
-        if toolbox is not None and budget_left:
+        use_tools = toolbox is not None and budget_left
+        kwargs = completion_kwargs(
+            self.model,
+            max_tokens=PLAN_MAX_TOKENS if design_mode else 800,
+            temperature=0.7,
+            use_tools=use_tools,
+        )
+        kwargs["messages"] = messages
+        if use_tools:
             kwargs["tools"] = TOOL_SCHEMAS
         return kwargs
 

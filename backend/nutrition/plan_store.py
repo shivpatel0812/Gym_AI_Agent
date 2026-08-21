@@ -96,7 +96,9 @@ class NutritionPlanStore:
             return None
         patch = {k: v for k, v in patch.items() if v is not None or k in (
             "strategy", "goal_detail", "typical_day_notes", "food_priorities",
-            "meal_anchors", "flexible_meals", "preferences", "targets",
+            "meal_anchors", "flexible_meals", "go_to_items", "blueprint_extras",
+            "slot_profiles", "fast_food_places",
+            "preferences", "targets",
         )}
         patch["updated_at"] = datetime.now().isoformat()
         patch["version"] = int(plan.get("version") or 1) + 1

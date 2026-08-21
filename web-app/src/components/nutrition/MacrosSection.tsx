@@ -7,6 +7,7 @@ import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { MdAdd, MdRestaurant, MdDelete, MdClose, MdEdit, MdCameraAlt, MdImage } from 'react-icons/md';
+import { loadStoredAiModel } from '@/lib/aiModels';
 
 interface MacrosSectionProps {
   editEntryId?: string | null;
@@ -215,9 +216,12 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
     try {
       const formData = new FormData();
       formData.append('file', imageFile);
+      formData.append('model', loadStoredAiModel());
 
       // Don't set Content-Type header - axios will set it automatically with boundary for FormData
-      const response = await apiClient.post('/api/macros/analyze-image', formData);
+      const response = await apiClient.post('/api/macros/analyze-image', formData, {
+        timeout: 120000,
+      });
 
       console.log('Image analysis response:', response.data);
       const { food_items, message } = response.data;

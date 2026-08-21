@@ -1,14 +1,10 @@
 import axios from "axios";
 import { auth } from "../firebase";
-import { expoConfig } from "../config";
+import { API_BASE_URL } from "../config";
 
-// Get API base URL from config, with localhost as fallback
-const configApiUrl = expoConfig?.extra?.apiBaseUrl;
-const API_BASE_URL = configApiUrl || "http://localhost:8000";
-
-// Log the API URL being used for debugging
-console.log('API Base URL configured:', API_BASE_URL);
-console.log('Config API URL:', configApiUrl);
+if (__DEV__) {
+  console.log("API Base URL configured:", API_BASE_URL);
+}
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,

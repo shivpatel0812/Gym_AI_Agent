@@ -13,6 +13,12 @@ import {
   MdFitnessCenter,
   MdAutoAwesome,
 } from "react-icons/md";
+import {
+  AI_MODEL_OPTIONS,
+  AiModelId,
+  loadStoredAiModel,
+  persistAiModel,
+} from "../lib/aiModels";
 
 interface Message {
   role: "user" | "assistant";
@@ -29,9 +35,15 @@ export default function ChatbotPage() {
   const [conversationHistory, setConversationHistory] = useState<any[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [chatMode, setChatMode] = useState<ChatMode>("coach");
+  const [aiModel, setAiModel] = useState<AiModelId>(() => loadStoredAiModel());
   const [createPlanOpen, setCreatePlanOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const seededPrompt = useRef(false);
+
+  const selectAiModel = (model: AiModelId) => {
+    setAiModel(model);
+    persistAiModel(model);
+  };
 
   useEffect(() => {
     scrollToBottom();
@@ -87,8 +99,14 @@ export default function ChatbotPage() {
           conversation_history: conversationHistory,
           conversation_id: conversationId,
           mode: chatMode,
+          model: aiModel,
         },
-        { timeout: chatMode === "plan" || chatMode === "nutrition" ? 120000 : 60000 }
+        {
+          timeout:
+            chatMode === "plan" || chatMode === "nutrition" || aiModel === "gpt-5.6-sol"
+              ? 120000
+              : 60000,
+        }
       );
 
       if (res.data.status === "success") {
@@ -205,6 +223,26 @@ export default function ChatbotPage() {
             )}
           </div>
         </div>
+        <div className="mt-3 flex items-center gap-2">
+          <span className="text-xs font-semibold text-[#8E8E93]">Model</span>
+          <div className="inline-flex rounded-full border border-[#2A2D35] bg-[#161A22] p-0.5">
+            {AI_MODEL_OPTIONS.map((opt) => {
+              const active = aiModel === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => selectAiModel(opt.id)}
+                  className={`px-3 py-1 rounded-full text-xs font-bold transition-colors ${
+                    active ? "bg-[#FF6B35] text-white" : "text-[#8E8E93] hover:text-white"
+                  }`}
+                >
+                  {opt.short}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       <Card className="flex-1 flex flex-col overflow-hidden mb-4">
@@ -298,6 +336,7 @@ export default function ChatbotPage() {
       <CreateNutritionPlanModal
         visible={createPlanOpen}
         conversationId={conversationId}
+        model={aiModel}
         onClose={() => setCreatePlanOpen(false)}
         onCreated={() => {
           setCreatePlanOpen(false);

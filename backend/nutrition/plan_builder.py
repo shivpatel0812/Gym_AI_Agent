@@ -27,9 +27,13 @@ GOAL_DEFAULTS = {
     "health": {"calories": 2200, "protein": 160, "carbs": 230, "fats": 75, "fiber": 30},
 }
 
-VALID_SLOTS = {"breakfast", "lunch", "snack", "shake", "dinner", "late_night", "other"}
+VALID_SLOTS = {"breakfast", "lunch", "snack", "shake", "dinner", "late_night", "pre_workout", "other"}
+PRIMARY_SLOTS = ("breakfast", "lunch", "pre_workout", "dinner", "snack")
+VALID_BANDS = {"Morning", "Midday", "Evening", "Late"}
 VALID_FREQ = {"daily", "most_days", "weekdays", "weekends", "few_times_week", "occasionally"}
 VALID_STYLE = {"strict", "flexible"}
+VALID_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+VALID_STANCES = {"anchors", "uncertain", "eat_out", "flexible"}
 
 
 def _new_id() -> str:
@@ -257,8 +261,10 @@ Rules:
 - 3-6 food_priorities, practical, not medical.
 - Calories must be between 1200 and 4500. Protein 60-300.
 """
+        from ai_models import completion_kwargs
+
         response = client.chat.completions.create(
-            model=self.model,
+            **completion_kwargs(self.model, max_tokens=2200, temperature=0.4),
             messages=[
                 {
                     "role": "system",
@@ -269,8 +275,6 @@ Rules:
                 },
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.4,
-            max_tokens=2200,
             response_format={"type": "json_object"},
         )
         return json.loads(response.choices[0].message.content)
@@ -391,6 +395,18 @@ Rules:
         plan["flexible_meals"] = NutritionPlanBuilder._normalize_flexible(
             plan.get("flexible_meals") or answers.get("flexible_meals")
         )
+        plan["go_to_items"] = NutritionPlanBuilder._normalize_go_to_items(
+            plan.get("go_to_items") or answers.get("go_to_items")
+        )
+        plan["blueprint_extras"] = NutritionPlanBuilder._normalize_blueprint_extras(
+            plan.get("blueprint_extras") or answers.get("blueprint_extras")
+        )
+        plan["slot_profiles"] = NutritionPlanBuilder._normalize_slot_profiles(
+            plan.get("slot_profiles") or answers.get("slot_profiles")
+        )
+        plan["fast_food_places"] = NutritionPlanBuilder._normalize_fast_food_places(
+            plan.get("fast_food_places") or answers.get("fast_food_places")
+        )
         merged_prefs = {}
         if isinstance(answers.get("preferences"), dict):
             merged_prefs.update(answers["preferences"])
@@ -437,12 +453,25 @@ Rules:
             freq = str(item.get("frequency") or "most_days").strip().lower()
             if freq not in VALID_FREQ:
                 freq = "most_days"
+            days_in = item.get("days") if isinstance(item.get("days"), list) else []
+            days = []
+            for d in days_in:
+                key = str(d or "").strip().lower()[:3]
+                # accept "monday" / "mon" / "Mon"
+                if len(key) >= 3:
+                    key = key[:3]
+                if key in VALID_DAYS and key not in days:
+                    days.append(key)
+            # Empty days = use frequency. Full week if frequency is daily.
+            if not days and freq == "daily":
+                days = list(VALID_DAYS)
             out.append({
                 "id": str(item.get("id") or _new_id()),
                 "slot": slot,
                 "label": label,
                 "foods": foods,
                 "frequency": freq,
+                "days": days,
                 "notes": str(item.get("notes") or "").strip()[:240] or None,
             })
         return out
@@ -479,6 +508,165 @@ Rules:
                 "protein_min": int(round(pmin)) if pmin is not None else None,
                 "protein_max": int(round(pmax)) if pmax is not None else None,
                 "user_controls_food": bool(item.get("user_controls_food", False)),
+                "notes": str(item.get("notes") or "").strip()[:240] or None,
+            })
+        return out
+
+    @staticmethod
+    def _normalize_go_to_items(raw) -> List[Dict]:
+        items = raw if isinstance(raw, list) else []
+        out = []
+        for item in items[:20]:
+            if isinstance(item, str) and item.strip():
+                item = {"name": item.strip()}
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()[:80]
+            if not name:
+                continue
+            slot = str(item.get("slot") or "other").strip().lower()
+            if slot not in VALID_SLOTS:
+                slot = "other"
+            out.append({
+                "id": str(item.get("id") or _new_id()),
+                "slot": slot,
+                "name": name,
+                **{
+                    k: v
+                    for k, v in {
+                        "amount": str(item.get("amount") or "").strip()[:40] or None,
+                        "calories": _clamp(_num(item.get("calories")), 0, 2000),
+                        "protein": _clamp(_num(item.get("protein")), 0, 150),
+                        "carbs": _clamp(_num(item.get("carbs")), 0, 200),
+                        "fats": _clamp(_num(item.get("fats")), 0, 100),
+                        "fiber": _clamp(_num(item.get("fiber")), 0, 40),
+                        "notes": str(item.get("notes") or "").strip()[:240] or None,
+                    }.items()
+                    if v is not None
+                },
+            })
+        return out
+
+    @staticmethod
+    def _normalize_blueprint_extras(raw) -> List[Dict]:
+        """One-time / band extras on the day blueprint (not forever anchors)."""
+        items = raw if isinstance(raw, list) else []
+        out = []
+        for item in items[:16]:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or item.get("name") or "").strip()[:60]
+            if not label:
+                continue
+            band = str(item.get("band") or "").strip()
+            if band not in VALID_BANDS:
+                band = "Midday"
+            slot = str(item.get("slot") or "snack").strip().lower()
+            if slot not in VALID_SLOTS:
+                slot = "snack"
+            foods_in = item.get("foods") if isinstance(item.get("foods"), list) else []
+            foods = []
+            for food in foods_in[:6]:
+                if isinstance(food, str) and food.strip():
+                    foods.append({"name": food.strip()[:80]})
+                    continue
+                if not isinstance(food, dict):
+                    continue
+                name = str(food.get("name") or "").strip()
+                if not name:
+                    continue
+                foods.append({
+                    "name": name[:80],
+                    "amount": str(food.get("amount") or "").strip()[:40] or None,
+                    "calories": _clamp(_num(food.get("calories")), 0, 2000),
+                    "protein": _clamp(_num(food.get("protein")), 0, 150),
+                    "carbs": _clamp(_num(food.get("carbs")), 0, 200),
+                    "fats": _clamp(_num(food.get("fats")), 0, 100),
+                    "fiber": _clamp(_num(food.get("fiber")), 0, 40),
+                })
+            cmin = _clamp(_num(item.get("calorie_min")), 0, 2500)
+            cmax = _clamp(_num(item.get("calorie_max")), 0, 3000)
+            if cmin and cmax and cmin > cmax:
+                cmin, cmax = cmax, cmin
+            pmin = _clamp(_num(item.get("protein_min")), 0, 150)
+            pmax = _clamp(_num(item.get("protein_max")), 0, 180)
+            if pmin and pmax and pmin > pmax:
+                pmin, pmax = pmax, pmin
+            out.append({
+                "id": str(item.get("id") or _new_id()),
+                "band": band,
+                "slot": slot,
+                "label": label,
+                "foods": foods,
+                "calories": _clamp(_num(item.get("calories")), 0, 2000),
+                "protein": _clamp(_num(item.get("protein")), 0, 150),
+                "calorie_min": int(round(cmin)) if cmin is not None else None,
+                "calorie_max": int(round(cmax)) if cmax is not None else None,
+                "protein_min": int(round(pmin)) if pmin is not None else None,
+                "protein_max": int(round(pmax)) if pmax is not None else None,
+                "notes": str(item.get("notes") or "").strip()[:240] or None,
+            })
+        return out
+
+    @staticmethod
+    def _normalize_slot_profiles(raw) -> List[Dict]:
+        """Stance per primary meal slot: anchors / uncertain / eat_out / flexible."""
+        items = raw if isinstance(raw, list) else []
+        by_slot: Dict[str, Dict] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            slot = str(item.get("slot") or "").strip().lower()
+            if slot not in PRIMARY_SLOTS:
+                continue
+            stance = str(item.get("stance") or "anchors").strip().lower()
+            if stance not in VALID_STANCES:
+                stance = "anchors"
+            by_slot[slot] = {
+                "slot": slot,
+                "stance": stance,
+                "notes": str(item.get("notes") or "").strip()[:240] or None,
+            }
+        # Always return all primary slots so the UI has a complete day.
+        out = []
+        for slot in PRIMARY_SLOTS:
+            if slot in by_slot:
+                out.append(by_slot[slot])
+            else:
+                out.append({"slot": slot, "stance": "anchors", "notes": None})
+        return out
+
+    @staticmethod
+    def _normalize_fast_food_places(raw) -> List[Dict]:
+        items = raw if isinstance(raw, list) else []
+        out = []
+        for item in items[:12]:
+            if isinstance(item, str) and item.strip():
+                item = {"name": item.strip()}
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()[:60]
+            if not name:
+                continue
+            slots_in = item.get("slots") if isinstance(item.get("slots"), list) else ["lunch", "dinner"]
+            slots = []
+            for s in slots_in:
+                key = str(s or "").strip().lower()
+                if key in ("lunch", "dinner") and key not in slots:
+                    slots.append(key)
+            if not slots:
+                slots = ["lunch", "dinner"]
+            days_in = item.get("days") if isinstance(item.get("days"), list) else []
+            days = []
+            for d in days_in:
+                key = str(d or "").strip().lower()[:3]
+                if key in VALID_DAYS and key not in days:
+                    days.append(key)
+            out.append({
+                "id": str(item.get("id") or _new_id()),
+                "name": name,
+                "slots": slots,
+                "days": days,
                 "notes": str(item.get("notes") or "").strip()[:240] or None,
             })
         return out

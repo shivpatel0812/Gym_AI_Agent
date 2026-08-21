@@ -3,31 +3,11 @@ import { initializeApp, getApps } from "firebase/app";
 import { initializeAuth, getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
-import { expoConfig } from "./config";
-
-const firebaseConfig = {
-  apiKey:
-    process.env.EXPO_PUBLIC_FIREBASE_API_KEY ||
-    expoConfig?.extra?.firebaseApiKey,
-  authDomain:
-    process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ||
-    expoConfig?.extra?.firebaseAuthDomain,
-  projectId:
-    process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ||
-    expoConfig?.extra?.firebaseProjectId,
-  storageBucket:
-    process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET ||
-    expoConfig?.extra?.firebaseStorageBucket,
-  messagingSenderId:
-    process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ||
-    expoConfig?.extra?.firebaseMessagingSenderId,
-  appId:
-    process.env.EXPO_PUBLIC_FIREBASE_APP_ID || expoConfig?.extra?.firebaseAppId,
-};
+import { firebaseConfig } from "./config";
 
 if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
-  console.error(
-    "Error: Firebase configuration is missing. Please set EXPO_PUBLIC_FIREBASE_* environment variables."
+  throw new Error(
+    "Firebase configuration is missing. Set the EXPO_PUBLIC_FIREBASE_* environment variables."
   );
 }
 
@@ -40,10 +20,16 @@ function createAuth() {
   }
 
   try {
-    // RN-only export. Do not import this from "firebase/auth" at the top level —
-    // Metro/web bundles omit it and crash with "is not a function".
+    // Metro resolves the package's "react-native" export condition, and that is
+    // the only build shipping getReactNativePersistence. It must stay a runtime
+    // require: a top-level import would resolve to the browser build on
+    // react-native-web, where the export doesn't exist.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { getReactNativePersistence } = require("@firebase/auth/dist/rn/index.js");
+    const { getReactNativePersistence } = require("firebase/auth");
+    if (typeof getReactNativePersistence !== "function") {
+      // Newer SDKs may persist via AsyncStorage on their own.
+      return getAuth(app);
+    }
     return initializeAuth(app, {
       persistence: getReactNativePersistence(ReactNativeAsyncStorage),
     });
@@ -51,6 +37,7 @@ function createAuth() {
     if (error?.code === "auth/already-initialized") {
       return getAuth(app);
     }
+    console.warn("Falling back to default auth persistence:", error?.message);
     return getAuth(app);
   }
 }

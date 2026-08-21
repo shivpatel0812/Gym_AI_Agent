@@ -14,6 +14,14 @@ import apiClient from "../../api/client";
 import foodDatabase, { FoodDbItem } from "../../data/foodDatabase";
 import { colors } from "../../theme";
 import { FoodItem } from "./types";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  AI_MODEL_OPTIONS,
+  AI_MODEL_STORAGE_KEY,
+  AiModelId,
+  DEFAULT_AI_MODEL,
+  normalizeAiModel,
+} from "../../lib/aiModels";
 
 interface LogFoodFormProps {
   meal: string;
@@ -81,11 +89,25 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
   const [analyzing, setAnalyzing] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [fromPhoto, setFromPhoto] = useState(false);
+  const [aiModel, setAiModel] = useState<AiModelId>(DEFAULT_AI_MODEL);
   const [savedFoods, setSavedFoods] = useState<FoodDbItem[]>([]);
   const [estimating, setEstimating] = useState(false);
   const [estimateError, setEstimateError] = useState<string | null>(null);
   const estimateQueryRef = useRef("");
   const lastEstimatedRef = useRef("");
+
+  useEffect(() => {
+    AsyncStorage.getItem(AI_MODEL_STORAGE_KEY)
+      .then((raw) => {
+        if (raw) setAiModel(normalizeAiModel(raw));
+      })
+      .catch(() => {});
+  }, []);
+
+  const selectAiModel = (model: AiModelId) => {
+    setAiModel(model);
+    AsyncStorage.setItem(AI_MODEL_STORAGE_KEY, model).catch(() => {});
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -342,8 +364,9 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         } as any);
         if (note) payload.append("description", note);
         if (title) payload.append("title", title);
+        payload.append("model", aiModel);
         const response = await apiClient.post("/api/macros/analyze-image", payload, {
-          timeout: 60000,
+          timeout: aiModel === "gpt-5.6-sol" ? 120000 : 60000,
           headers: { "Content-Type": "multipart/form-data" },
         });
         const item = response.data?.food || response.data?.food_items?.[0];
@@ -641,6 +664,23 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
               </TouchableOpacity>
             </View>
           )}
+          <Text style={styles.label}>AI model</Text>
+          <View style={styles.modelRow}>
+            {AI_MODEL_OPTIONS.map((opt) => {
+              const active = aiModel === opt.id;
+              return (
+                <TouchableOpacity
+                  key={opt.id}
+                  style={[styles.modelChip, active && styles.modelChipOn]}
+                  onPress={() => selectAiModel(opt.id)}
+                >
+                  <Text style={[styles.modelChipText, active && styles.modelChipTextOn]}>
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
           <Text style={styles.label}>Food title</Text>
           <TextInput
             value={photoTitle}
@@ -869,6 +909,21 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   photoBoxText: { color: "#8E8E93", fontSize: 14, fontWeight: "600" },
+  modelRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  modelChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#0A0A0B",
+  },
+  modelChipOn: {
+    borderColor: "#FF6B35",
+    backgroundColor: "rgba(255,107,53,0.18)",
+  },
+  modelChipText: { color: "#8E8E93", fontWeight: "700", fontSize: 13 },
+  modelChipTextOn: { color: "#FF6B35" },
   preview: {
     width: "100%",
     height: 176,

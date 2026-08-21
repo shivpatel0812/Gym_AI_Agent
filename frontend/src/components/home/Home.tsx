@@ -24,6 +24,8 @@ import { LevelSlider } from "../wellness/ui";
 import LogFoodForm from "../nutrition/LogFoodForm";
 import { FoodItem } from "../nutrition/types";
 import { TodaysWorkout } from "../workouts/types";
+import { EMPTY_USUALS, getUsuals, toggleUsual } from "../../api/nutritionPlan";
+import type { Usual, UsualsPayload } from "../../api/nutritionPlan";
 
 type SheetKind = "sleep" | "stress" | "wellness" | "food" | "routine" | null;
 
@@ -54,6 +56,42 @@ const ROUTINE_ICONS: { name: keyof typeof MaterialCommunityIcons.glyphMap; label
   { name: "music", label: "Music" },
   { name: "sleep", label: "Rest" },
 ];
+
+const SLOT_ICONS: Record<string, keyof typeof MaterialCommunityIcons.glyphMap> = {
+  breakfast: "coffee-outline",
+  shake: "cup",
+  pre_workout: "dumbbell",
+  lunch: "food-fork-drink",
+  snack: "food-apple-outline",
+  dinner: "silverware-fork-knife",
+  late_night: "weather-night",
+  other: "food",
+};
+
+/** Flip a usual locally so the tap lands before the round trip does. */
+function flipUsual(payload: UsualsPayload, id: string): UsualsPayload {
+  const apply = (u: Usual) => (u.id === id ? { ...u, logged: !u.logged, can_undo: !u.logged } : u);
+  const usuals = payload.usuals.map(apply);
+  return {
+    ...payload,
+    usuals,
+    slots: payload.slots.map((slot) => ({ ...slot, usuals: slot.usuals.map(apply) })),
+    logged_count: usuals.filter((u) => u.expected && u.logged).length,
+  };
+}
+
+function remainingLine(remaining?: { calories: number | null; protein: number | null } | null) {
+  if (!remaining) return null;
+  const parts: string[] = [];
+  if (remaining.calories != null) {
+    const cal = Math.round(remaining.calories);
+    parts.push(cal < 0 ? `${Math.abs(cal).toLocaleString()} cal over` : `${cal.toLocaleString()} cal left`);
+  }
+  if (remaining.protein != null && remaining.protein > 0) {
+    parts.push(`${Math.round(remaining.protein)}g protein to go`);
+  }
+  return parts.length ? parts.join(" · ") : null;
+}
 
 function todayEntry<T extends { date?: string }>(rows: T[]): T | undefined {
   const key = todayKey();
@@ -109,6 +147,7 @@ export default function Home() {
   const [activeCal, setActiveCal] = useState(0);
   const [todayWorkout, setTodayWorkout] = useState<TodaysWorkout | null>(null);
   const [routines, setRoutines] = useState<Routine[]>([]);
+  const [usuals, setUsuals] = useState<UsualsPayload>(EMPTY_USUALS);
   const [sheet, setSheet] = useState<SheetKind>(null);
   const [saving, setSaving] = useState(false);
 
@@ -128,7 +167,7 @@ export default function Home() {
 
   const load = useCallback(async () => {
     try {
-      const [sleepRes, stressRes, surveyRes, bodyRes, activityRes, routineRes, planRes, macroRes] =
+      const [sleepRes, stressRes, surveyRes, bodyRes, activityRes, routineRes, planRes, usualsRes] =
         await Promise.all([
           apiClient.get("/api/sleep"),
           apiClient.get("/api/stress"),
@@ -137,7 +176,7 @@ export default function Home() {
           apiClient.get("/api/physical-activities"),
           apiClient.get("/api/daily-routines"),
           apiClient.get("/api/workout-plan/today").catch(() => ({ data: null })),
-          apiClient.get("/api/macros").catch(() => ({ data: [] })),
+          getUsuals(date).catch(() => EMPTY_USUALS),
         ]);
       const sleep = todayEntry(Array.isArray(sleepRes.data) ? sleepRes.data : []);
       const stress = todayEntry(Array.isArray(stressRes.data) ? stressRes.data : []);
@@ -168,7 +207,7 @@ export default function Home() {
       setActiveCal(minutes > 0 ? Math.round(minutes * 5) : Math.round(stepTotal * 0.04));
       setRoutines(Array.isArray(routineRes.data) ? routineRes.data : []);
       setTodayWorkout(planRes.data || null);
-      void macroRes;
+      setUsuals(usualsRes);
     } catch (error) {
       console.error("Error loading home:", error);
     }
@@ -292,8 +331,22 @@ export default function Home() {
         await apiClient.post("/api/macros", { date, food_items: [food] });
       }
       setSheet(null);
+      await load();
     } catch (error) {
       console.error("Error logging food:", error);
+    }
+  };
+
+  const onToggleUsual = async (usual: Usual) => {
+    // Logged by hand rather than tapped: it is already on the day, and this
+    // feature has nothing of its own to remove.
+    if (usual.logged && !usual.can_undo) return;
+    setUsuals((prev) => flipUsual(prev, usual.id));
+    try {
+      setUsuals(await toggleUsual(usual.id, date));
+    } catch (error) {
+      console.error("Error toggling usual:", error);
+      setUsuals((prev) => flipUsual(prev, usual.id));
     }
   };
 
@@ -355,6 +408,7 @@ export default function Home() {
   const now = new Date();
   const dateLabel = now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   const showWorkout = todayWorkout?.status === "workout_day" && !todayWorkout.already_logged;
+  const budgetLine = remainingLine(usuals.remaining);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -405,6 +459,65 @@ export default function Home() {
         </View>
         <Text style={styles.tap}>{wellnessCount}/3 logged</Text>
       </TouchableOpacity>
+
+      <View style={styles.routinesHead}>
+        <Text style={styles.sectionLabel}>Your usuals</Text>
+        {usuals.expected_count > 0 ? (
+          <Text style={styles.frac}>
+            {usuals.logged_count}/{usuals.expected_count}
+          </Text>
+        ) : null}
+      </View>
+
+      {usuals.has_usuals ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.usualScroll}>
+          {usuals.slots.map((slot) => (
+            <View key={slot.slot} style={styles.usualGroup}>
+              <View style={styles.usualGroupHead}>
+                {slot.is_current ? <View style={styles.nowDot} /> : null}
+                <Text style={[styles.usualTime, slot.is_current && styles.usualTimeNow]}>
+                  {/* slot.label covers a backend that predates time labels. */}
+                  {slot.time_label || slot.label}
+                </Text>
+              </View>
+              <View style={styles.usualGroupRow}>
+                {slot.usuals.map((usual) => (
+                  <TouchableOpacity
+                    key={usual.id}
+                    activeOpacity={0.85}
+                    style={[styles.usualChip, usual.logged && styles.usualChipOn]}
+                    onPress={() => onToggleUsual(usual)}
+                  >
+                    <View style={[styles.usualIcon, usual.logged && styles.usualIconOn]}>
+                      <MaterialCommunityIcons
+                        name={SLOT_ICONS[usual.slot] || "food"}
+                        size={16}
+                        color={usual.logged ? "#0B0C10" : "#8E8E93"}
+                      />
+                    </View>
+                    {usual.logged ? (
+                      <View style={styles.usualCheck}>
+                        <MaterialCommunityIcons name="check" size={10} color="#0B0C10" />
+                      </View>
+                    ) : null}
+                    <Text style={[styles.usualName, usual.logged && styles.usualNameOn]} numberOfLines={2}>
+                      {usual.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      ) : (
+        <TouchableOpacity style={styles.emptyRoutines} onPress={() => navigation.navigate("Nutrition")}>
+          <Text style={styles.emptyText}>
+            Foods you log often show up here to tap — add your usual meals in your nutrition plan.
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {budgetLine ? <Text style={styles.remainingLine}>{budgetLine}</Text> : null}
 
       <TouchableOpacity style={styles.foodBtn} onPress={openFood}>
         <MaterialCommunityIcons name="food-apple" size={20} color="#4ADE80" />
@@ -687,8 +800,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 16,
-    paddingVertical: 14,
-    marginBottom: 24,
+    paddingVertical: 12,
+    marginBottom: 18,
   },
   foodBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   routinesHead: {
@@ -729,6 +842,53 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   routineChipOn: { borderColor: "#FF6B35" },
+  usualScroll: { gap: 14, paddingRight: 8, marginBottom: 10 },
+  usualGroup: { gap: 6 },
+  usualGroupHead: { flexDirection: "row", alignItems: "center", gap: 5, paddingLeft: 2 },
+  nowDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: "#4ADE80" },
+  usualTime: {
+    color: "#636366",
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.9,
+    textTransform: "uppercase",
+  },
+  usualTimeNow: { color: "#4ADE80" },
+  usualGroupRow: { flexDirection: "row", gap: 8 },
+  usualChip: {
+    width: 84,
+    height: 76,
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    paddingHorizontal: 9,
+    paddingVertical: 9,
+  },
+  usualChipOn: { backgroundColor: "#10231A", borderColor: "#4ADE80" },
+  usualIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 9,
+    backgroundColor: "#1C1C1F",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  usualIconOn: { backgroundColor: "#4ADE80" },
+  usualCheck: {
+    position: "absolute",
+    top: 7,
+    right: 7,
+    width: 15,
+    height: 15,
+    borderRadius: 8,
+    backgroundColor: "#4ADE80",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  usualName: { color: "#fff", fontSize: 11, fontWeight: "700", lineHeight: 14, marginTop: 6 },
+  usualNameOn: { color: "#DCFCE7" },
+  remainingLine: { color: "#8E8E93", fontSize: 12, fontWeight: "600", marginBottom: 10 },
   editDot: { position: "absolute", top: 6, right: 6 },
   routineName: { color: "#fff", fontSize: 12, fontWeight: "600", marginTop: 8, textAlign: "center" },
   routineDesc: { color: "#8E8E93", fontSize: 10, marginTop: 2, textAlign: "center" },
@@ -784,7 +944,7 @@ const styles = StyleSheet.create({
   },
   startBtnText: { color: "#0B0C10", fontWeight: "700", fontSize: 16 },
   modalRoot: { flex: 1, justifyContent: "flex-end" },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(0,0,0,0.55)" },
   sheet: {
     backgroundColor: "#111113",
     borderTopLeftRadius: 24,

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { NavigationContainer } from "@react-navigation/native";
+import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { onAuthStateChanged, signOut } from "firebase/auth";
@@ -13,6 +13,8 @@ import PhysicalActivity from "./src/components/PhysicalActivity";
 import Nutrition from "./src/components/Nutrition";
 import Wellness from "./src/components/wellness";
 import MoreHome from "./src/components/MoreHome";
+import Settings from "./src/components/Settings";
+import BodyScanScreen from "./src/components/bodyScan/BodyScanScreen";
 import AIChat from "./src/components/AIChat";
 import AIAnalysis from "./src/components/AIAnalysis";
 import UserProfile from "./src/components/UserProfile";
@@ -32,6 +34,21 @@ import LinearGradient from "./src/components/shared/LinearGradient";
 import { colors, spacing } from "./src/theme";
 
 SplashScreen.preventAutoHideAsync();
+
+// React Navigation 7 themes carry a `fonts` block as well as colors, so start
+// from their DarkTheme and override only the palette.
+const navigationTheme = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    primary: colors.accentPrimary,
+    background: colors.background,
+    card: colors.cardBackground,
+    text: colors.textPrimary,
+    border: colors.border,
+    notification: colors.danger,
+  },
+};
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -80,6 +97,16 @@ function MoreStackScreen() {
         name="Calendar"
         component={Calendar}
         options={{ title: "Calendar" }}
+      />
+      <MoreStack.Screen
+        name="Settings"
+        component={Settings}
+        options={{ title: "Settings" }}
+      />
+      <MoreStack.Screen
+        name="BodyScan"
+        component={BodyScanScreen}
+        options={{ title: "Body Scan" }}
       />
       <MoreStack.Screen
         name="Activity"
@@ -216,19 +243,7 @@ export default function App() {
   return (
     <>
     <StatusBar barStyle="light-content" backgroundColor={colors.background} />
-    <NavigationContainer
-      theme={{
-        dark: true,
-        colors: {
-          primary: colors.accentPrimary,
-          background: colors.background,
-          card: colors.cardBackground,
-          text: colors.textPrimary,
-          border: colors.border,
-          notification: colors.danger,
-        },
-      }}
-    >
+    <NavigationContainer theme={navigationTheme}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!user ? (
           <Stack.Screen name="Login" component={Login} />

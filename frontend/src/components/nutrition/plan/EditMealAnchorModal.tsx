@@ -17,7 +17,9 @@ import {
   MealAnchor,
   MealAnchorFood,
   MealSlot,
-  SLOT_OPTIONS,
+  PRIMARY_SLOT_OPTIONS,
+  WEEKDAY_OPTIONS,
+  WeekdayKey,
   frequencyLabel,
 } from "../../../api/nutritionPlan";
 import { colors, spacing, borderRadius } from "../../../theme";
@@ -79,6 +81,8 @@ export function slotIcon(slot?: string): keyof typeof MaterialCommunityIcons.gly
       return "white-balance-sunny";
     case "shake":
       return "cup";
+    case "pre_workout":
+      return "dumbbell";
     case "snack":
       return "cookie";
     case "dinner":
@@ -100,6 +104,7 @@ export default function EditMealAnchorModal({
   const [label, setLabel] = useState("");
   const [slot, setSlot] = useState<MealSlot | string>("breakfast");
   const [frequency, setFrequency] = useState("daily");
+  const [days, setDays] = useState<WeekdayKey[]>([]);
   const [notes, setNotes] = useState("");
   const [foods, setFoods] = useState<MealAnchorFood[]>([]);
   const [query, setQuery] = useState("");
@@ -113,6 +118,11 @@ export default function EditMealAnchorModal({
     setLabel(anchor?.label || "");
     setSlot(anchor?.slot || "breakfast");
     setFrequency(anchor?.frequency || "daily");
+    setDays(
+      (anchor?.days || []).map((d) => String(d).slice(0, 3).toLowerCase() as WeekdayKey).filter(
+        (d) => WEEKDAY_OPTIONS.some((w) => w.id === d)
+      )
+    );
     setNotes(anchor?.notes || "");
     setFoods(anchor?.foods?.length ? anchor.foods.map((f) => ({ ...f })) : []);
     setQuery("");
@@ -202,7 +212,8 @@ export default function EditMealAnchorModal({
       id: anchor?.id,
       slot,
       label: nextLabel,
-      frequency,
+      frequency: days.length === 7 ? "daily" : days.length ? "most_days" : frequency,
+      days,
       notes: notes.trim() || null,
       foods: foods.length ? foods : [{ name: nextLabel }],
     });
@@ -230,9 +241,9 @@ export default function EditMealAnchorModal({
               placeholderTextColor={colors.textMuted}
             />
 
-            <Text style={styles.label}>Meal type</Text>
+            <Text style={styles.label}>Meal</Text>
             <View style={styles.chipRow}>
-              {SLOT_OPTIONS.map((s) => (
+              {PRIMARY_SLOT_OPTIONS.map((s) => (
                 <TouchableOpacity
                   key={s.id}
                   style={[styles.chip, slot === s.id && styles.chipOn]}
@@ -248,7 +259,44 @@ export default function EditMealAnchorModal({
               ))}
             </View>
 
-            <Text style={styles.label}>How often</Text>
+            <Text style={styles.label}>Days you usually eat this</Text>
+            <View style={styles.chipRow}>
+              {WEEKDAY_OPTIONS.map((d) => {
+                const on = days.includes(d.id);
+                return (
+                  <TouchableOpacity
+                    key={d.id}
+                    style={[styles.dayChip, on && styles.chipOn]}
+                    onPress={() =>
+                      setDays((prev) =>
+                        prev.includes(d.id) ? prev.filter((x) => x !== d.id) : [...prev, d.id]
+                      )
+                    }
+                  >
+                    <Text style={[styles.chipText, on && styles.chipTextOn]}>{d.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <View style={styles.chipRow}>
+              <TouchableOpacity
+                style={styles.chip}
+                onPress={() => setDays(WEEKDAY_OPTIONS.map((d) => d.id))}
+              >
+                <Text style={styles.chipText}>Every day</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.chip}
+                onPress={() => setDays(["mon", "tue", "wed", "thu", "fri"])}
+              >
+                <Text style={styles.chipText}>Weekdays</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.chip} onPress={() => setDays([])}>
+                <Text style={styles.chipText}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>How often (if no days picked)</Text>
             <View style={styles.chipRow}>
               {FREQUENCY_OPTIONS.map((f) => (
                 <TouchableOpacity
@@ -501,6 +549,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     backgroundColor: colors.background,
+  },
+  dayChip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: colors.background,
+    minWidth: 44,
+    alignItems: "center",
   },
   chipOn: { borderColor: colors.accentPrimary },
   chipText: { fontSize: 12, color: colors.textSecondary, fontWeight: "600" },
