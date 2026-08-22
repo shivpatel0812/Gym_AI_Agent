@@ -83,3 +83,27 @@ def test_nutrition_mode_prompt_aligns_with_training():
     assert "Generate Nutrition Plan" in system
     assert "You are in PLAN MODE" not in system
     assert messages[-1]["content"] == "I want food to support my incline bench"
+
+
+def test_only_nutrition_mode_can_propose_plan_edits():
+    """Ordinary coach chat must not be able to stage writes to the plan."""
+    from ai_analysis.coach_tools import tools_for_mode
+
+    names = lambda mode: {t["function"]["name"] for t in tools_for_mode(mode)}
+
+    assert "propose_nutrition_edits" in names("nutrition")
+    assert "propose_nutrition_edits" not in names("coach")
+    assert "propose_nutrition_edits" not in names("plan")
+    # Read tools stay available everywhere
+    assert "get_nutrition_plan" in names("coach")
+
+
+def test_dispatch_refuses_a_write_tool_outside_nutrition_mode():
+    """A replayed tool call must not slip past the mode gate."""
+    from ai_analysis.coach_tools import CoachToolbox
+
+    toolbox = CoachToolbox(db=None, user_id="u1", mode="coach")
+    result = toolbox.dispatch("propose_nutrition_edits", {"summary": "x", "edits": []})
+
+    assert "error" in result
+    assert toolbox.artifacts == []

@@ -154,7 +154,7 @@ export default function WellnessSurveySection() {
             <View style={logStyles.cardTop}>
               <Text style={logStyles.cardDate}>{entry.date}</Text>
               <TouchableOpacity onPress={() => entry.id && remove(entry.id)} hitSlop={10}>
-                <MaterialCommunityIcons name="delete-outline" size={18} color="#636366" />
+                <MaterialCommunityIcons name="delete-outline" size={18} color="#55647A" />
               </TouchableOpacity>
             </View>
             <View style={{ marginTop: 10 }}>

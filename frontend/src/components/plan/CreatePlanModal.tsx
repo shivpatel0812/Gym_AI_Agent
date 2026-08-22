@@ -522,5 +522,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  primaryButtonText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  primaryButtonText: { color: colors.onAccent, fontWeight: "700", fontSize: 14 },
 });

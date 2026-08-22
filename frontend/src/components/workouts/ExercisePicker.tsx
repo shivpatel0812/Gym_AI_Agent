@@ -284,7 +284,7 @@ const styles = StyleSheet.create({
   },
   tabActive: { backgroundColor: colors.accentPrimary },
   tabText: { color: colors.textSecondary, fontSize: 14, fontWeight: "600" },
-  tabTextActive: { color: "#fff" },
+  tabTextActive: { color: colors.onAccent },
   body: { padding: spacing.lg },
   sectionLabel: {
     fontSize: 10,
@@ -312,7 +312,7 @@ const styles = StyleSheet.create({
   },
   eqPillActive: {
     borderColor: colors.accentPrimary,
-    backgroundColor: "rgba(255,107,53,0.1)",
+    backgroundColor: "rgba(156, 192, 232,0.1)",
   },
   eqPillText: { color: colors.textSecondary, fontSize: 12, fontWeight: "600" },
   eqPillTextActive: { color: colors.accentPrimary },

@@ -6,11 +6,16 @@ import mimetypes
 from typing import Dict, Optional
 from .gpt_fallback import get_openai_client
 from .gpt_food_lookup import ESTIMATE_RULES, _parse_json, finalize_estimated_macros
+from ai_models import resolve_model, completion_kwargs
 
 
-def gpt_vision_estimate(image_path: str, description: Optional[str] = None) -> Optional[Dict]:
+def gpt_vision_estimate(
+    image_path: str,
+    description: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Optional[Dict]:
     """
-    Estimate macros for the visible portion using GPT-4o vision.
+    Estimate macros for the visible portion using GPT vision.
 
     Returns a dict with name, amount, calories, protein, carbs, fats.
     """
@@ -18,6 +23,8 @@ def gpt_vision_estimate(image_path: str, description: Optional[str] = None) -> O
     if not client:
         print("Warning: OPENAI_API_KEY not set. Skipping GPT vision estimate.")
         return None
+
+    resolved = resolve_model(model)
 
     try:
         with open(image_path, "rb") as f:
@@ -51,7 +58,7 @@ Round calories to a whole number. Round protein, carbs, fats, and fiber to 1 dec
 If several items are on the plate, estimate the whole plate as one entry unless the user named a single item."""
 
         response = client.chat.completions.create(
-            model="gpt-4o",
+            **completion_kwargs(resolved, max_tokens=700, temperature=0.1),
             messages=[
                 {
                     "role": "user",
@@ -68,8 +75,6 @@ If several items are on the plate, estimate the whole plate as one entry unless 
                 }
             ],
             response_format={"type": "json_object"},
-            max_tokens=700,
-            temperature=0.1,
         )
 
         content = response.choices[0].message.content or ""
@@ -79,14 +84,16 @@ If several items are on the plate, estimate the whole plate as one entry unless 
 
         name = str(parsed.get("name") or hint or "Meal").strip() or "Meal"
         calories, protein, carbs, fats, fiber = finalize_estimated_macros(parsed)
+        amount = str(parsed.get("amount") or "").strip() or None
         return {
-            "name": name[:120],
-            "amount": str(parsed.get("amount") or parsed.get("serving") or "").strip()[:80] or None,
+            "name": name,
+            "amount": amount,
             "calories": calories,
             "protein": protein,
             "carbs": carbs,
             "fats": fats,
             "fiber": fiber,
+            "model": resolved,
         }
     except Exception as e:
         print(f"Error calling GPT vision API: {e}")

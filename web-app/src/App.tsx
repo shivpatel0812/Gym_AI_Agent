@@ -11,6 +11,7 @@ import AboutMyselfPage from './pages/AboutMyselfPage'
 import GeneralAnalysisPage from './pages/GeneralAnalysisPage'
 import ChatbotPage from './pages/ChatbotPage'
 import PlanGeneratorPage from './pages/PlanGeneratorPage'
+import BodyScanPage from './pages/BodyScanPage'
 import AuthenticatedLayout from './layouts/AuthenticatedLayout'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -51,6 +52,7 @@ function App() {
                 <Route path="/about-myself" element={<AboutMyselfPage />} />
                 <Route path="/general-analysis" element={<GeneralAnalysisPage />} />
                 <Route path="/chatbot" element={<ChatbotPage />} />
+                <Route path="/body-scan" element={<BodyScanPage />} />
               </Routes>
             </AuthenticatedLayout>
           </ProtectedRoute>

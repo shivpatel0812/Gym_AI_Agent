@@ -80,6 +80,10 @@ class FoodItem(BaseModel):
     # Set when the item came from a one-tap "usual" so the same tap can undo it.
     # Kept on the model so re-saving a day's food_items does not strip the tag.
     usual_id: Optional[str] = None
+    # Plan meal anchor this log fulfills (import or explicit tag).
+    anchor_id: Optional[str] = None
+    # Logged when the user wasn't sure what they'd eat (esp. lunch/dinner).
+    uncertain: Optional[bool] = None
 
 class SavedFood(BaseModel):
     id: Optional[str] = None
@@ -310,6 +314,12 @@ class MealAnchorFood(BaseModel):
     carbs: Optional[float] = None
     fats: Optional[float] = None
     fiber: Optional[float] = None
+    # Foods sharing group_key are OR-alternatives for one meal component
+    # (e.g. Premier Protein + Fairlife both count as the "shake" slot).
+    group_key: Optional[str] = None
+    # When true, Previous matching also accepts same-category foods
+    # (e.g. any yogurt for an Oikos Yogurt slot).
+    match_similar: Optional[bool] = None
 
 
 class MealAnchor(BaseModel):
@@ -319,7 +329,13 @@ class MealAnchor(BaseModel):
     label: str
     foods: List[MealAnchorFood] = []
     frequency: str = "most_days"
+    days: Optional[List[str]] = None
     notes: Optional[str] = None
+    # individual | potential | uncertain — potential ≈ rotates options; uncertain = TBD
+    kind: Optional[str] = None
+    varies: Optional[bool] = None
+    uncertain: Optional[bool] = None
+    place: Optional[str] = None
 
 
 class FlexibleMeal(BaseModel):
@@ -327,11 +343,27 @@ class FlexibleMeal(BaseModel):
     id: Optional[str] = None
     name: str
     frequency: str = "most_days"
+    days: Optional[List[str]] = None
     calorie_min: Optional[float] = None
     calorie_max: Optional[float] = None
     protein_min: Optional[float] = None
     protein_max: Optional[float] = None
     user_controls_food: bool = False
+    notes: Optional[str] = None
+
+
+class GoToItem(BaseModel):
+    """A staple food the user reaches for often — logged individually, not as a full meal."""
+    id: Optional[str] = None
+    slot: str = "other"  # breakfast, lunch, snack, shake, dinner, late_night, other (anytime)
+    name: str
+    amount: Optional[str] = None
+    calories: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fats: Optional[float] = None
+    fiber: Optional[float] = None
+    days: Optional[List[str]] = None
     notes: Optional[str] = None
 
 
@@ -369,9 +401,12 @@ class NutritionPlan(BaseModel):
     strategy: Optional[str] = None
     meal_anchors: List[MealAnchor] = []
     flexible_meals: List[FlexibleMeal] = []
+    go_to_items: List[GoToItem] = []
     preferences: NutritionPlanPreferences = NutritionPlanPreferences()
     food_priorities: List[str] = []
     typical_day_notes: Optional[str] = None
+    # "Your current anchors stay — added on top: ..." after an AI regenerate.
+    carryover_note: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     ended_at: Optional[str] = None

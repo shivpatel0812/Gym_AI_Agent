@@ -127,7 +127,7 @@ export default function BodyFeelingsSection() {
             <View style={logStyles.cardTop}>
               <Text style={logStyles.cardDate}>{entry.date}</Text>
               <TouchableOpacity onPress={() => entry.id && remove(entry.id)} hitSlop={10}>
-                <MaterialCommunityIcons name="delete-outline" size={18} color="#636366" />
+                <MaterialCommunityIcons name="delete-outline" size={18} color="#55647A" />
               </TouchableOpacity>
             </View>
             <Text style={[logStyles.cardSub, { marginTop: 8, lineHeight: 20 }]}>

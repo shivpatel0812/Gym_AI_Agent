@@ -246,6 +246,29 @@ class PlanContextResolver:
             context.source = "training_focus"
             context.notes = focus.get("note") or context.notes
 
+        # Soft cue from latest body scan (JSON only; photos never stored).
+        # Does not invent loads — only annotates why this emphasis exists.
+        #
+        # This runs regardless of context.source: a training_focus created by
+        # applying a scan is exactly when the scan's reasoning matters most, so
+        # gating on source used to suppress the explanation at the worst moment.
+        try:
+            from body_scan.store import BodyScanStore
+            latest = BodyScanStore(self.db, self.user_id).latest()
+            syn = (latest or {}).get("synthesis") or {}
+            explanation = syn.get("explanation")
+            # A low-confidence scan withheld its emphasis; don't narrate it as
+            # though it were steering anything.
+            confident = str(
+                (latest or {}).get("observations", {}).get("confidence") or "low"
+            ).lower() != "low"
+            if explanation and confident:
+                context.notes = (context.notes + " | " if context.notes else "") + (
+                    f"Body scan: {str(explanation)[:180]}"
+                )
+        except Exception:
+            pass
+
         plan = self.get_active_plan()
         if not plan:
             return context

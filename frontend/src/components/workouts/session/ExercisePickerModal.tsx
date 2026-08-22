@@ -408,7 +408,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   categoryChipTextActive: {
-    color: colors.textPrimary,
+    color: colors.onAccent,
   },
   pickerContainer: {
     paddingHorizontal: spacing.lg,

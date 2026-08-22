@@ -80,7 +80,7 @@ const styles = StyleSheet.create({
   danger: {
     backgroundColor: colors.danger,
   },
-  primaryText: { color: "#fff", fontSize: 15, fontWeight: "600" },
+  primaryText: { color: colors.onAccent, fontSize: 15, fontWeight: "600" },
   secondaryText: { color: colors.textPrimary, fontSize: 15, fontWeight: "600" },
   dangerText: { color: "#fff", fontSize: 15, fontWeight: "600" },
   disabled: { opacity: 0.4 },

@@ -117,10 +117,10 @@ export function splitBadgeColors(label: string): { bg: string; text: string } | 
   if (!l) return null;
   if (l.includes("push")) return { bg: "#3D2B56", text: "#C084FC" };
   if (l.includes("pull")) return { bg: "#064E3B", text: "#34D399" };
-  if (l.includes("leg") || l.includes("lower")) return { bg: "#3D2A14", text: "#FF6B35" };
+  if (l.includes("leg") || l.includes("lower")) return { bg: "#3D2A14", text: "#9CC0E8" };
   if (l.includes("upper")) return { bg: "#2A1A14", text: "#FF8F66" };
-  if (l.includes("full")) return { bg: "#2A2D35", text: "#E4B896" };
-  return { bg: "#2A2D35", text: "#A1A1AA" };
+  if (l.includes("full")) return { bg: "#1E2A38", text: "#E4B896" };
+  return { bg: "#1E2A38", text: "#A1A1AA" };
 }
 
 export function sessionDurationMinutes(session: WorkoutSession): number | null {

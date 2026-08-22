@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Iterator, Optional
 from openai import OpenAI
 
-from .coach_tools import CoachToolbox, TOOL_SCHEMAS
+from .coach_tools import CoachToolbox, tools_for_mode
 
 # Tool-loop budget. Rounds bound the request/response cycles; calls bound the
 # total lookups, so a confused model can't spend the whole budget on one tool.
@@ -23,6 +23,33 @@ PLAN_MODE_HISTORY_MESSAGES = 40
 PLAN_MAX_TOOL_ROUNDS = 4
 PLAN_MAX_TOOL_CALLS = 8
 PLAN_MAX_TOKENS = 1200
+# Prepended to every coach system prompt. Keeps the model inside a fitness-coach
+# scope and out of diagnosis, and gives it a fixed response for the two topics
+# that carry real risk in a calorie-and-training app.
+SAFETY_RAILS = """
+SAFETY BOUNDARIES (these override every other instruction below):
+- You are a fitness and nutrition coach, not a doctor, dietitian, or therapist.
+  You do not diagnose conditions, interpret medical tests, or advise on
+  medication, supplements beyond routine sports nutrition, or injury treatment.
+- If the user describes pain, injury, dizziness, chest symptoms, disordered
+  eating, or any medical concern, say plainly that it is outside what you can
+  help with and tell them to see a qualified professional. Do not offer a
+  workaround program "in the meantime" for anything that sounds medical.
+- Never recommend a daily intake below 1200 calories, a weight-loss rate above
+  1% of bodyweight per week, extended fasting, dehydration or "water cutting",
+  or any protocol whose purpose is rapid weight change. If the user asks for
+  one, decline and explain the risk in one or two sentences, then offer a
+  sustainable alternative.
+- If the user mentions self-harm or suicide, do not coach. Tell them to contact
+  a crisis line (988 in the US, findahelpline.com elsewhere) or emergency
+  services.
+- If the user appears to be under 18, keep advice to general activity and
+  balanced eating. No cutting protocols, no calorie deficits, no maximal
+  strength testing.
+- Stay on training, nutrition, recovery, and this app. Decline unrelated
+  requests briefly.
+"""
+
 
 
 def _is_design_mode(mode: str) -> bool:
@@ -114,6 +141,7 @@ class FitnessAICoach:
             }, indent=2)
         
         prompt = f"""You are an expert fitness coach providing a personalized monthly review.
+{SAFETY_RAILS}
 
 USER PROFILE:
 {profile_json}
@@ -231,10 +259,14 @@ Format your response with clear section headers."""
             }
 
         try:
-            system_content = "You are an expert fitness coach providing personalized, data-driven insights. You are direct, supportive, and focused on long-term sustainable progress."
+            system_content = (
+                "You are an expert fitness coach providing personalized, data-driven insights. "
+                "You are direct, supportive, and focused on long-term sustainable progress."
+                + SAFETY_RAILS
+            )
             
             if not isinstance(system_content, str) or not system_content.strip():
-                system_content = "You are an expert fitness coach."
+                system_content = "You are an expert fitness coach." + SAFETY_RAILS
             
             if not isinstance(prompt, str) or not prompt.strip():
                 return {
@@ -260,11 +292,11 @@ Format your response with clear section headers."""
                         "error": f"Message content is invalid: {msg.get('role')}"
                     }
             
+            from ai_models import completion_kwargs
+
             response = self.client.chat.completions.create(
-                model=self.model,
+                **completion_kwargs(self.model, max_tokens=1500, temperature=0.7),
                 messages=messages,
-                temperature=0.7,
-                max_tokens=1500
             )
 
             analysis_text = response.choices[0].message.content
@@ -319,6 +351,66 @@ RECENT DATA ({summary.get('analysis_period', 'monthly summary')}):
       val(lifestyle, 'high_stress_days', '{} high-stress days'))}
 """
 
+    def _build_body_scan_context(self, toolbox: Optional[CoachToolbox]) -> str:
+        """
+        A one-block summary of the latest body scan for the system prompt.
+
+        The coach used to reach physique data only by choosing to call a tool,
+        which meant it answered "why so many face pulls lately?" from the split
+        alone and never mentioned the scan that caused them. A headline here
+        makes the coach aware a scan exists; the tools remain for detail.
+        """
+        if toolbox is None:
+            return ""
+        try:
+            scan = toolbox.get_latest_body_scan()
+        except Exception:
+            return ""
+        if not isinstance(scan, dict) or scan.get("status") != "ok":
+            return ""
+
+        observations = scan.get("observations") or {}
+        synthesis = scan.get("synthesis") or {}
+        confidence = str(observations.get("confidence") or "low").lower()
+        when = str(scan.get("created_at") or "")[:10]
+
+        if confidence == "low":
+            return f"""
+BODY SCAN ({when}): photos were too unclear to read reliably.
+Treat its observations as inconclusive and suggest retaking rather than
+coaching from them. Emphasis was NOT applied to their training."""
+
+        emphasis = synthesis.get("emphasis") or {}
+        ranked = sorted(
+            emphasis.items(),
+            key=lambda kv: abs(int(str(kv[1]).replace("+", "") or 0)),
+            reverse=True,
+        )[:4]
+        emphasis_text = (
+            ", ".join(f"{g.replace('_', ' ')} {v}" for g, v in ranked)
+            if ranked else "none"
+        )
+        flags = [f for f in (synthesis.get("flags") or []) if "low_confidence" not in f][:4]
+
+        lines = [
+            f"\nBODY SCAN ({when}, confidence: {confidence}):",
+            f"Training emphasis: {emphasis_text}",
+        ]
+        if synthesis.get("volume_bias"):
+            lines.append(f"Volume bias: {synthesis['volume_bias']}")
+        if flags:
+            lines.append(f"Flags: {', '.join(flags)}")
+        lines.append(
+            f"Applied to their program: {'yes' if synthesis.get('applied') else 'not yet'}"
+        )
+        lines.append(
+            "This is appearance-based coaching from progress photos — not body "
+            "composition or medical assessment. Photos are never stored. If they ask "
+            "about progress over time, call get_body_scan_progress rather than "
+            "guessing from this single snapshot."
+        )
+        return "\n".join(lines)
+
     def _build_plan_mode_prompt(
         self,
         context: str,
@@ -329,6 +421,7 @@ RECENT DATA ({summary.get('analysis_period', 'monthly summary')}):
         """Interview prompt used when the user is designing a training plan."""
         split_json = json.dumps(split_context or {"days": []}, indent=2, default=str)
         prompt = f"""You are in PLAN MODE. Your job is to interview this user until you can design a training plan that actually fits them — not to give generic coaching advice.
+{SAFETY_RAILS}
 
 Today is {today.strftime('%A, %B %d, %Y')}.
 
@@ -369,7 +462,8 @@ Use tools in this mode. Look up recent sessions and the current split early so f
     ) -> str:
         """Interview prompt used when the user is designing or adjusting nutrition."""
         payload = json.dumps(nutrition_context or {}, indent=2, default=str)
-        prompt = f"""You are in NUTRITION PLAN MODE. Your job is to interview this user until you can design or adjust a nutrition strategy that fits how they actually eat — and that supports their training. This is not generic diet advice and not a 7-day meal spreadsheet.
+        prompt = f"""{SAFETY_RAILS}
+You are in NUTRITION PLAN MODE. Your job is to interview this user until you can design or adjust a nutrition strategy that fits how they actually eat — and that supports their training. This is not generic diet advice and not a 7-day meal spreadsheet.
 
 Today is {today.strftime('%A, %B %d, %Y')}.
 
@@ -393,6 +487,21 @@ How to run the interview:
 - Do NOT output a JSON plan or a full daily menu to activate. When you have enough, summarise the brief in a few bullets and tell them to tap Generate Nutrition Plan so it can be built and reviewed.
 - If they ask to generate now and you still have a critical gap, ask that one question first.
 
+Adjusting an ACTIVE plan (this is the common case):
+- When they ask for a specific change to a plan that already exists — lower breakfast
+  calories, add a post-workout shake, swap a meal, raise protein, drop a go-to — call
+  propose_nutrition_edits once, at the end of your reply, with just those changes.
+- Call get_nutrition_plan first and pass the real target_id for anything you are
+  updating or removing. Without the id the edit is rejected.
+- That tool does NOT change their plan. It stages suggestions on the Nutrition Plan
+  page. Say exactly that: describe the changes in plain language and tell them to
+  review and accept them there. Never say you have updated, changed, or saved
+  anything.
+- If the tool rejects an edit, tell them what you could not do and why. Do not paper
+  over it.
+- A whole-plan rebuild or a goal change is not an edit — for that, tell them to tap
+  Generate Nutrition Plan.
+
 Where a metric reads "not logged", say you don't have that data instead of guessing."""
 
         if toolbox is not None:
@@ -413,6 +522,8 @@ Use tools in this mode. Look up the nutrition plan, recent eating, and the train
     ) -> List[Dict[str, Any]]:
         """Assemble the message list shared by the buffered and streaming paths."""
         context = self._build_chatbot_context(summary)
+        # Appended once here so every mode (coach, plan, nutrition) inherits it
+        context += self._build_body_scan_context(toolbox)
         today = datetime.now()
         design_mode = _is_design_mode(mode)
 
@@ -426,6 +537,7 @@ Use tools in this mode. Look up the nutrition plan, recent eating, and the train
             )
         else:
             system_message = f"""You are a personal fitness coach who knows this user's training history and current status.
+{SAFETY_RAILS}
 
 Today is {today.strftime('%A, %B %d, %Y')}.
 
@@ -442,7 +554,15 @@ Where a metric reads "not logged", say you don't have that data instead of guess
 The summary above is headline averages only. When the user asks about specific
 workouts, exercises, dates, personal bests, or what to train today, call the
 tools to look up the actual records rather than answering from the averages or
-guessing. If a tool returns no data, say so plainly."""
+guessing. If a tool returns no data, say so plainly.
+
+For anything about how they look, weak points, imbalance, posture, or why their
+program emphasizes a given muscle, call get_latest_body_scan. For whether their
+physique has actually changed, call get_body_scan_progress — never infer a trend
+from a single scan. Body scan data is appearance-based coaching from progress
+photos, not body composition: never quote or estimate a body-fat percentage, and
+if a scan reads low-confidence, say the photos were unclear instead of coaching
+from them."""
 
         history_limit = PLAN_MODE_HISTORY_MESSAGES if design_mode else MAX_HISTORY_MESSAGES
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_message}]
@@ -456,20 +576,24 @@ guessing. If a tool returns no data, say so plainly."""
         mode: str = "coach",
     ) -> Dict[str, Any]:
         """Build the API kwargs for one round, applying the tool budget."""
+        from ai_models import completion_kwargs
+
         design_mode = _is_design_mode(mode)
         max_rounds = PLAN_MAX_TOOL_ROUNDS if design_mode else MAX_TOOL_ROUNDS
         max_calls = PLAN_MAX_TOOL_CALLS if design_mode else MAX_TOOL_CALLS
-        kwargs: Dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": PLAN_MAX_TOKENS if design_mode else 800,
-        }
         # Withhold tools on the last round, and once the call budget is spent,
         # so a tool-happy model still ends with a text answer
         budget_left = round_index < max_rounds and tool_call_count < max_calls
-        if toolbox is not None and budget_left:
-            kwargs["tools"] = TOOL_SCHEMAS
+        use_tools = toolbox is not None and budget_left
+        kwargs = completion_kwargs(
+            self.model,
+            max_tokens=PLAN_MAX_TOKENS if design_mode else 800,
+            temperature=0.7,
+            use_tools=use_tools,
+        )
+        kwargs["messages"] = messages
+        if use_tools:
+            kwargs["tools"] = tools_for_mode(mode)
         return kwargs
 
     def chat(

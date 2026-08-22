@@ -17,12 +17,20 @@ import {
   goalLabel,
   proposeNutritionPlan,
 } from "../../../api/nutritionPlan";
+import {
+  AI_MODEL_OPTIONS,
+  AiModelId,
+  loadStoredAiModel,
+  normalizeAiModel,
+  persistAiModel,
+} from "../../../lib/aiModels";
 
 interface Props {
   visible: boolean;
   onClose: () => void;
   onCreated: () => void;
   conversationId?: string | null;
+  model?: string | null;
 }
 
 type Step = "goal" | "habits" | "flexible" | "prefs" | "generating" | "review";
@@ -53,6 +61,7 @@ export default function CreateNutritionPlanModal({
   onClose,
   onCreated,
   conversationId,
+  model: modelProp,
 }: Props) {
   const [step, setStep] = useState<Step>("goal");
   const [goal, setGoal] = useState<NutritionGoal>("maintain");
@@ -75,6 +84,7 @@ export default function CreateNutritionPlanModal({
   const [error, setError] = useState<string | null>(null);
   const [suggestion, setSuggestion] = useState<SuggestedGoal | null>(null);
   const [goalTouched, setGoalTouched] = useState(false);
+  const [aiModel, setAiModel] = useState<AiModelId>(() => loadStoredAiModel());
   // Ref mirror so the in-flight suggestion fetch can tell whether the user
   // already picked a goal before it resolved.
   const goalTouchedRef = useRef(false);
@@ -84,6 +94,20 @@ export default function CreateNutritionPlanModal({
     setGoalTouched(true);
     setGoal(id);
   };
+
+  const selectAiModel = (model: AiModelId) => {
+    setAiModel(model);
+    persistAiModel(model);
+  };
+
+  useEffect(() => {
+    if (!visible) return;
+    if (modelProp) {
+      setAiModel(normalizeAiModel(modelProp));
+      return;
+    }
+    setAiModel(loadStoredAiModel());
+  }, [visible, modelProp]);
 
   useEffect(() => {
     if (!visible) return;
@@ -127,8 +151,14 @@ export default function CreateNutritionPlanModal({
     }
 
     (async () => {
+      const model = modelProp
+        ? normalizeAiModel(modelProp)
+        : loadStoredAiModel();
       try {
-        const plan = await proposeNutritionPlan({ conversation_id: conversationId });
+        const plan = await proposeNutritionPlan({
+          conversation_id: conversationId,
+          model,
+        });
         if (cancelled) return;
         setDraft(plan);
         setStep("review");
@@ -141,7 +171,7 @@ export default function CreateNutritionPlanModal({
     return () => {
       cancelled = true;
     };
-  }, [visible, conversationId]);
+  }, [visible, conversationId, modelProp]);
 
   useEffect(() => {
     if (!visible) return;
@@ -192,6 +222,7 @@ export default function CreateNutritionPlanModal({
         meal_anchors: anchors,
         flexible_meals: flexible,
         conversation_id: conversationId || undefined,
+        model: aiModel,
         preferences: {
           likes: splitList(likes),
           dislikes: splitList(dislikes),
@@ -410,6 +441,28 @@ export default function CreateNutritionPlanModal({
                     onChange={(e) => setGoalNotes(e.target.value)}
                     placeholder="e.g. Build muscle while limiting extra fat gain"
                   />
+                  <p className="text-[13px] font-bold text-[#636366] uppercase tracking-wide pt-2">
+                    AI model
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {AI_MODEL_OPTIONS.map((opt) => {
+                      const active = aiModel === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => selectAiModel(opt.id)}
+                          className={`px-3 py-2 rounded-xl border text-sm font-bold ${
+                            active
+                              ? "border-[#FF6B35] bg-[rgba(255,107,53,0.18)] text-[#FF6B35]"
+                              : "border-[#2A2D35] bg-[#161A22] text-[#8E8E93]"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </>
               ) : null}
 

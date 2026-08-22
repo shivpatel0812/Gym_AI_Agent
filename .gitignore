@@ -23,3 +23,9 @@ build/
 *.cert
 credentials.json
 service-account*.json
+# Service account keys — never inside an app bundle directory
+secrets/
+
+# Expo local state (machine-specific)
+.expo/
+**/.expo/

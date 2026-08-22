@@ -52,7 +52,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.md,
   },
   title: { fontSize: 32, fontWeight: "700", color: "#fff" },
-  sub: { color: "#8E8E93", fontSize: 14, marginTop: 4 },
+  sub: { color: "#7C8CA0", fontSize: 14, marginTop: 4 },
   tabBar: {
     flexDirection: "row",
     gap: 24,
@@ -62,7 +62,7 @@ const styles = StyleSheet.create({
   },
   tab: { paddingVertical: 12, position: "relative" },
   tabText: { fontSize: 14, fontWeight: "600", color: colors.textSecondary },
-  tabTextActive: { color: "#fff" },
+  tabTextActive: { color: colors.textPrimary },
   tabIndicator: {
     position: "absolute",
     bottom: 0,

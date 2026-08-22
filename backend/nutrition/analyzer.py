@@ -8,23 +8,17 @@ from .gpt_fallback import gpt_estimate
 from .gpt_vision import gpt_vision_estimate
 
 
-def analyze_food_image(image_path: str, description: Optional[str] = None) -> Dict:
+def analyze_food_image(
+    image_path: str,
+    description: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Dict:
     """
     Complete food analysis pipeline:
-    1. Detect foods using YOLO
-    2. Look up macros from USDA API
-    3. Use GPT fallback for missing foods
-    
-    Args:
-        image_path: Path to the image file
-    
-    Returns:
-        Dict with:
-            - foods: List of detected food names
-            - food_items: List of food items with macro information
-            - message: Status message
+    1. GPT vision estimate (preferred)
+    2. Fallback: YOLO detection + USDA / GPT text estimate
     """
-    vision = gpt_vision_estimate(image_path, description)
+    vision = gpt_vision_estimate(image_path, description, model=model)
     if vision:
         item = {
             "name": vision["name"],

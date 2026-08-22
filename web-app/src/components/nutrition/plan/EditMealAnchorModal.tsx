@@ -10,6 +10,7 @@ import {
   MdCookie,
   MdNightsStay,
   MdLunchDining,
+  MdFitnessCenter,
 } from "react-icons/md";
 import apiClient from "../../../lib/api-client";
 import foodDatabase, { FoodDbItem } from "../../../data/foodDatabase";
@@ -18,7 +19,10 @@ import {
   MealAnchor,
   MealAnchorFood,
   MealSlot,
+  PRIMARY_SLOT_OPTIONS,
   SLOT_OPTIONS,
+  WEEKDAY_OPTIONS,
+  WeekdayKey,
 } from "../../../api/nutritionPlan";
 
 interface Props {
@@ -82,6 +86,8 @@ export function SlotIcon({ slot, size = 20, className }: { slot?: string; size?:
       return <MdWbSunny {...props} />;
     case "shake":
       return <MdLocalCafe {...props} />;
+    case "pre_workout":
+      return <MdFitnessCenter {...props} />;
     case "snack":
       return <MdCookie {...props} />;
     case "dinner":
@@ -103,10 +109,15 @@ export default function EditMealAnchorModal({
   const [label, setLabel] = useState("");
   const [slot, setSlot] = useState<MealSlot | string>("breakfast");
   const [frequency, setFrequency] = useState("daily");
+  const [days, setDays] = useState<WeekdayKey[]>([]);
   const [notes, setNotes] = useState("");
+  const [varies, setVaries] = useState(false);
+  const [place, setPlace] = useState("");
   const [foods, setFoods] = useState<MealAnchorFood[]>([]);
   const [query, setQuery] = useState("");
   const [savedFoods, setSavedFoods] = useState<FoodDbItem[]>([]);
+  const [recentLogs, setRecentLogs] = useState<FoodDbItem[]>([]);
+  const [attachOpen, setAttachOpen] = useState(false);
   const [custom, setCustom] = useState(emptyFood());
   const [showCustom, setShowCustom] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -116,11 +127,19 @@ export default function EditMealAnchorModal({
     setLabel(anchor?.label || "");
     setSlot(anchor?.slot || "breakfast");
     setFrequency(anchor?.frequency || "daily");
+    setDays(
+      (anchor?.days || [])
+        .map((d) => String(d).slice(0, 3).toLowerCase() as WeekdayKey)
+        .filter((d) => WEEKDAY_OPTIONS.some((w) => w.id === d))
+    );
     setNotes(anchor?.notes || "");
+    setVaries(Boolean(anchor?.varies));
+    setPlace(anchor?.place || "");
     setFoods(anchor?.foods?.length ? anchor.foods.map((f) => ({ ...f })) : []);
     setQuery("");
     setCustom(emptyFood());
     setShowCustom(false);
+    setAttachOpen(Boolean(anchor?.varies));
   }, [visible, anchor]);
 
   useEffect(() => {
@@ -142,6 +161,36 @@ export default function EditMealAnchorModal({
         setSavedFoods(items.filter((f) => f.name));
       })
       .catch(() => {});
+    apiClient
+      .get("/api/macros")
+      .then((res) => {
+        if (cancelled) return;
+        const rows = Array.isArray(res.data) ? res.data : [];
+        const seen = new Set();
+        const out = [];
+        for (const row of rows.slice(0, 80)) {
+          const name = String((row && row.name) || "").trim();
+          if (!name) continue;
+          const key = name.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push(
+            toFoodDbItem({
+              id: row.id,
+              name,
+              serving: row.serving || row.amount || "1 serving",
+              calories: row.calories,
+              protein: row.protein,
+              carbs: row.carbs,
+              fats: row.fats,
+              fiber: row.fiber,
+            })
+          );
+          if (out.length >= 24) break;
+        }
+        setRecentLogs(out);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -154,11 +203,25 @@ export default function EditMealAnchorModal({
     return Array.from(byName.values());
   }, [savedFoods]);
 
+  const previousMeals = useMemo(() => {
+    const byName = new Map<string, FoodDbItem>();
+    for (const food of recentLogs) byName.set(food.name.toLowerCase(), food);
+    for (const food of savedFoods) byName.set(food.name.toLowerCase(), food);
+    return Array.from(byName.values()).slice(0, 30);
+  }, [recentLogs, savedFoods]);
+
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
     return catalog.filter((f) => foodMatchesQuery(f, q)).slice(0, 8);
   }, [query, catalog]);
+
+  const attachResults = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const pool = previousMeals.length ? previousMeals : catalog;
+    if (!q) return pool.slice(0, 12);
+    return pool.filter((f) => foodMatchesQuery(f, q)).slice(0, 12);
+  }, [query, previousMeals, catalog]);
 
   const totals = sumAnchorMacros(foods);
 
@@ -176,7 +239,7 @@ export default function EditMealAnchorModal({
       },
     ]);
     setQuery("");
-    if (!label.trim()) setLabel(item.name);
+    if (!label.trim() && !varies) setLabel(item.name);
   };
 
   const addCustom = () => {
@@ -206,19 +269,28 @@ export default function EditMealAnchorModal({
   };
 
   const handleSave = () => {
-    const nextLabel = label.trim() || foods[0]?.name || "Regular meal";
-    if (!foods.length && !label.trim()) return;
+    const nextLabel =
+      label.trim() ||
+      (varies ? place.trim() || "Varies each time" : "") ||
+      foods[0]?.name ||
+      "Regular meal";
+    if (!varies && !foods.length && !label.trim()) return;
+    if (varies && !label.trim() && !place.trim() && !foods.length) return;
     setSaving(true);
     onSave({
       id: anchor?.id,
       slot,
       label: nextLabel,
-      frequency,
+      frequency: days.length === 7 ? "daily" : days.length ? "most_days" : frequency,
+      days,
       notes: notes.trim() || null,
-      foods: foods.length ? foods : [{ name: nextLabel }],
+      varies,
+      place: place.trim() || null,
+      foods: foods.length ? foods : varies ? [] : [{ name: nextLabel }],
     });
     setSaving(false);
   };
+
 
   if (!visible) return null;
 
@@ -253,9 +325,9 @@ export default function EditMealAnchorModal({
             placeholder="Breakfast"
           />
 
-          <p className="text-xs font-bold uppercase text-[#636366] pt-1">Meal type</p>
+          <p className="text-xs font-bold uppercase text-[#636366] pt-1">Meal</p>
           <div className="flex flex-wrap gap-2">
-            {SLOT_OPTIONS.map((s) => (
+            {(PRIMARY_SLOT_OPTIONS.length ? PRIMARY_SLOT_OPTIONS : SLOT_OPTIONS).map((s) => (
               <button
                 key={s.id}
                 type="button"
@@ -276,7 +348,106 @@ export default function EditMealAnchorModal({
             ))}
           </div>
 
-          <p className="text-xs font-bold uppercase text-[#636366] pt-1">How often</p>
+          <p className="text-xs font-bold uppercase text-[#636366] pt-1">Meal style</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setVaries(false)}
+              className={`px-3 py-1.5 rounded-full border text-xs font-semibold ${
+                !varies ? "border-[#FF6B35] text-[#FF6B35]" : "border-[#2A2D35] text-[#8E8E93] bg-[#0B0C10]"
+              }`}
+            >
+              Fixed foods
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setVaries(true);
+                setAttachOpen(true);
+              }}
+              className={`px-3 py-1.5 rounded-full border text-xs font-semibold ${
+                varies ? "border-[#FF6B35] text-[#FF6B35]" : "border-[#2A2D35] text-[#8E8E93] bg-[#0B0C10]"
+              }`}
+            >
+              Varies / random
+            </button>
+          </div>
+          {varies ? (
+            <div className="rounded-xl border border-[rgba(94,234,212,0.25)] bg-[rgba(94,234,212,0.06)] p-3 space-y-2">
+              <p className="text-xs text-[#636366]">
+                e.g. lunch at Fannie Mae — you go often but pick something different each day.
+              </p>
+              <p className="text-xs font-bold uppercase text-[#636366]">Place / spot</p>
+              <input
+                className={fieldClass}
+                value={place}
+                onChange={(e) => setPlace(e.target.value)}
+                placeholder="e.g. Fannie Mae, Chipotle"
+              />
+            </div>
+          ) : null}
+
+          <p className="text-xs font-bold uppercase text-[#636366] pt-1">Days you're certain</p>
+          <p className="text-xs text-[#636366]">
+            Turn on days you know this meal. Leave other days off if those are uncertain — keep the meal
+            slot on Uncertain and add places there.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {WEEKDAY_OPTIONS.map((d) => {
+              const on = days.includes(d.id);
+              return (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() =>
+                    setDays((prev) =>
+                      prev.includes(d.id) ? prev.filter((x) => x !== d.id) : [...prev, d.id]
+                    )
+                  }
+                  className={`px-3 py-1.5 rounded-full border text-xs font-semibold ${
+                    on
+                      ? "border-[#FF6B35] text-[#FF6B35]"
+                      : "border-[#2A2D35] text-[#8E8E93] bg-[#0B0C10]"
+                  }`}
+                >
+                  {d.label}
+                </button>
+              );
+            })}
+          </div>
+          {days.length > 0 && days.length < 7 ? (
+            <p className="text-xs text-[#636366]">
+              Open / uncertain:{" "}
+              {WEEKDAY_OPTIONS.filter((d) => !days.includes(d.id))
+                .map((d) => d.label)
+                .join(", ")}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setDays(WEEKDAY_OPTIONS.map((d) => d.id))}
+              className="px-3 py-1.5 rounded-full border border-[#2A2D35] text-[#8E8E93] text-xs font-semibold bg-[#0B0C10]"
+            >
+              Every day
+            </button>
+            <button
+              type="button"
+              onClick={() => setDays(["mon", "tue", "wed", "thu", "fri"])}
+              className="px-3 py-1.5 rounded-full border border-[#2A2D35] text-[#8E8E93] text-xs font-semibold bg-[#0B0C10]"
+            >
+              Weekdays
+            </button>
+            <button
+              type="button"
+              onClick={() => setDays([])}
+              className="px-3 py-1.5 rounded-full border border-[#2A2D35] text-[#8E8E93] text-xs font-semibold bg-[#0B0C10]"
+            >
+              Clear
+            </button>
+          </div>
+
+          <p className="text-xs font-bold uppercase text-[#636366] pt-1">How often (if no days picked)</p>
           <div className="flex flex-wrap gap-2">
             {FREQUENCY_OPTIONS.map((f) => (
               <button
@@ -294,10 +465,23 @@ export default function EditMealAnchorModal({
             ))}
           </div>
 
-          <p className="text-xs font-bold uppercase text-[#636366] pt-1">Foods & macros</p>
-          <p className="text-xs text-[#636366]">
-            Search your food database or saved foods, then tweak amounts.
+          <p className="text-xs font-bold uppercase text-[#636366] pt-1">
+            {varies ? "Example meals (options)" : "Foods & macros"}
           </p>
+          <p className="text-xs text-[#636366]">
+            {varies
+              ? "Attach previous meals from your log/saved foods — pick one when you eat."
+              : "Search your food database or saved foods, then tweak amounts."}
+          </p>
+          {varies ? (
+            <button
+              type="button"
+              onClick={() => setAttachOpen((v) => !v)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-[#5EEAD4]/35 text-[#5EEAD4] text-xs font-bold"
+            >
+              {attachOpen ? "Hide previous meals" : "Attach previous meals"}
+            </button>
+          ) : null}
 
           {foods.map((food, i) => (
             <div
@@ -353,20 +537,20 @@ export default function EditMealAnchorModal({
               placeholder="Search foods..."
             />
           </div>
-          {results.map((item) => (
+          {(varies && attachOpen ? attachResults : results).map((item) => (
             <button
-              key={item.name}
+              key={item.id || item.name}
               type="button"
               onClick={() => addFromDb(item)}
-              className="w-full flex items-center gap-2 py-2.5 border-b border-[#2A2D35] text-left"
+              className="w-full text-left rounded-xl border border-[#2A2D35] bg-[#0B0C10] px-3 py-2.5 flex items-center justify-between gap-2"
             >
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-white">{item.name}</p>
-                <p className="text-xs text-[#636366] mt-0.5">
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-white truncate">{item.name}</p>
+                <p className="text-xs text-[#636366]">
                   {item.serving} · {Math.round(item.calories)} kcal · {Math.round(item.protein)}g P
                 </p>
               </div>
-              <MdAddCircle size={22} className="text-[#FF6B35]" />
+              <MdAddCircle size={22} className="text-[#FF6B35] shrink-0" />
             </button>
           ))}
 

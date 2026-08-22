@@ -8,7 +8,7 @@ Today: GET /today-guidance from logged intake + plan, no extra questionnaire.
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from pydantic import BaseModel
 import os
 
@@ -22,7 +22,18 @@ from nutrition.plan_store import (
     STATUS_COMPLETED,
 )
 from nutrition.today_guidance import build_today_guidance
+from nutrition.blueprint_ai import suggest_fast_food_orders, suggest_slot_fills
+from nutrition.usuals import build_usuals, entry_totals, find_usual, foods_to_log
 from nutrition.training_context import conversation_notes, load_training_context
+from nutrition.plan_edits import (
+    EDIT_STATUS_APPLIED,
+    EDIT_STATUS_DISMISSED,
+    EDIT_STATUS_PENDING,
+    EDIT_STATUS_STALE,
+    apply_edits,
+    pending_count,
+)
+from nutrition.suggestion_store import SuggestionStore
 from ai_analysis.profile_transformer import get_user_profile_for_ai
 from ai_analysis.data_analyzer import FitnessDataAnalyzer
 from ai_analysis.conversation_store import ConversationStore
@@ -36,18 +47,51 @@ class ProposeNutritionPlanRequest(BaseModel):
     typical_day: Optional[str] = None
     meal_anchors: Optional[List[dict]] = None
     flexible_meals: Optional[List[dict]] = None
+    go_to_items: Optional[List[dict]] = None
     preferences: Optional[dict] = None
     conversation_id: Optional[str] = None
+    # "gpt-4o" (default) or "gpt-5.6-sol"
+    model: Optional[str] = None
+
+
+class ToggleUsualRequest(BaseModel):
+    date: Optional[str] = None
+    hour: Optional[int] = None
+
+
+class SuggestSlotRequest(BaseModel):
+    slot: str
+    stance: Optional[str] = None
+    model: Optional[str] = None
+    count: Optional[int] = 1
+    exclude_labels: Optional[list] = None
+
+
+class SuggestFastFoodRequest(BaseModel):
+    place_name: str
+    slot: Optional[str] = "dinner"
+    remaining: Optional[dict] = None
+    model: Optional[str] = None
+
+
+class SuggestionActionRequest(BaseModel):
+    """Which staged edits to act on. Empty means all of them."""
+    edit_ids: Optional[List[str]] = None
 
 
 class UpdateNutritionPlanRequest(BaseModel):
     goal: Optional[str] = None
     goal_detail: Optional[str] = None
     strategy: Optional[str] = None
+    carryover_note: Optional[str] = None
     typical_day_notes: Optional[str] = None
     targets: Optional[dict] = None
     meal_anchors: Optional[List[dict]] = None
     flexible_meals: Optional[List[dict]] = None
+    go_to_items: Optional[List[dict]] = None
+    blueprint_extras: Optional[List[dict]] = None
+    slot_profiles: Optional[List[dict]] = None
+    fast_food_places: Optional[List[dict]] = None
     preferences: Optional[dict] = None
     food_priorities: Optional[List[str]] = None
 
@@ -56,8 +100,13 @@ def _store(user_id: str) -> NutritionPlanStore:
     return NutritionPlanStore(db, user_id)
 
 
-def _builder() -> NutritionPlanBuilder:
-    return NutritionPlanBuilder(api_key=os.getenv("OPENAI_API_KEY"))
+def _builder(model: Optional[str] = None) -> NutritionPlanBuilder:
+    from ai_models import resolve_model
+
+    return NutritionPlanBuilder(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        model=resolve_model(model),
+    )
 
 
 def _recent_nutrition(user_id: str) -> dict:
@@ -96,21 +145,99 @@ def _sync_targets(user_id: str, plan: dict) -> None:
     )
 
 
+def _macros_ref(user_id: str):
+    return db.collection("users").document(user_id).collection("macros")
+
+
+def _macro_docs(user_id: str, date: str) -> List[Any]:
+    return list(_macros_ref(user_id).where("date", "==", date).stream())
+
+
 def _logged_foods(user_id: str, date: str) -> List[dict]:
-    docs = (
-        db.collection("users")
-        .document(user_id)
-        .collection("macros")
-        .where("date", "==", date)
-        .stream()
-    )
     foods = []
-    for doc in docs:
+    for doc in _macro_docs(user_id, date):
         data = doc.to_dict() or {}
         items = data.get("food_items") or []
         if items:
             foods.extend(items)
     return foods
+
+
+def _recent_macro_entries(user_id: str, days: int = 21) -> List[dict]:
+    """Recent days of logged food, for learning someone's repeat meals."""
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    col = _macros_ref(user_id)
+    try:
+        docs = list(col.where("date", ">=", cutoff).stream())
+    except Exception as e:
+        print(f"Warning: macro history query failed, scanning instead: {e}")
+        docs = list(col.stream())
+
+    rows = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        date = str(data.get("date") or "")[:10]
+        if date >= cutoff:
+            rows.append({"date": date, "food_items": data.get("food_items") or []})
+    return rows
+
+
+def _weekday(date: str) -> int:
+    try:
+        return datetime.strptime(date[:10], "%Y-%m-%d").weekday()
+    except (TypeError, ValueError):
+        return datetime.now().weekday()
+
+
+def _usuals_payload(user_id: str, date: str, hour: Optional[int]) -> dict:
+    plan = _store(user_id).get_active()
+    active = plan if plan and plan.get("status") == STATUS_ACTIVE else None
+    foods = _logged_foods(user_id, date)
+    payload = build_usuals(
+        active,
+        foods,
+        history=_recent_macro_entries(user_id),
+        hour=hour if hour is not None else datetime.now().hour,
+        weekday=_weekday(date),
+    )
+    # Home shows what a tap did to the day's budget, so it rides along here
+    # rather than costing the phone a second request.
+    guidance = build_today_guidance(active, foods)
+    payload["remaining"] = guidance.get("remaining") if guidance.get("has_plan") else None
+    return payload
+
+
+def _append_food_items(user_id: str, date: str, items: List[dict]) -> None:
+    now = datetime.now().isoformat()
+    docs = _macro_docs(user_id, date)
+    if docs:
+        doc = docs[0]
+        food_items = list((doc.to_dict() or {}).get("food_items") or []) + items
+        doc.reference.update({
+            "food_items": food_items,
+            **entry_totals(food_items),
+            "updated_at": now,
+        })
+        return
+    _macros_ref(user_id).document().set({
+        "date": date,
+        "food_items": items,
+        **entry_totals(items),
+        "created_at": now,
+    })
+
+
+def _remove_usual_items(user_id: str, date: str, usual_id: str) -> None:
+    now = datetime.now().isoformat()
+    for doc in _macro_docs(user_id, date):
+        items = (doc.to_dict() or {}).get("food_items") or []
+        kept = [item for item in items if item.get("usual_id") != usual_id]
+        if len(kept) != len(items):
+            doc.reference.update({
+                "food_items": kept,
+                **entry_totals(kept),
+                "updated_at": now,
+            })
 
 
 @router.get("/goals")
@@ -161,14 +288,20 @@ async def propose_nutrition_plan(
         "typical_day": request.typical_day,
         "meal_anchors": request.meal_anchors or [],
         "flexible_meals": request.flexible_meals or [],
+        "go_to_items": request.go_to_items or [],
         "preferences": request.preferences or {},
         "conversation_notes": notes,
     }
-    result = _builder().build_plan(
+    # Whatever the user is already running is carried into the new plan
+    # untouched. A regenerate — even one the user calls a redesign — adds
+    # options on top of their anchors instead of replacing them.
+    existing = _store(user_id).get_active()
+    result = _builder(request.model).build_plan(
         answers=answers,
         profile=get_user_profile_for_ai(db, user_id),
         recent_nutrition=_recent_nutrition(user_id),
         training_context=load_training_context(db, user_id),
+        existing_plan=existing,
     )
     if result.get("status") != "success":
         raise HTTPException(status_code=500, detail=result.get("error") or "Could not create plan.")
@@ -197,6 +330,101 @@ async def get_active_nutrition_plan(user_id: str = Depends(get_user_id)):
     return {"status": "success", "plan": plan}
 
 
+@router.get("/suggestions")
+async def get_nutrition_suggestions(user_id: str = Depends(get_user_id)):
+    """
+    Coach-proposed edits waiting for review on the Plan page.
+
+    Only ever returns a set that targets the plan that is currently live, so a
+    proposal left over from a retired plan cannot be applied to a new one.
+    """
+    plan = _store(user_id).get_active()
+    if not plan:
+        return {"status": "success", "suggestion": None}
+    record = SuggestionStore(db, user_id).get_pending(plan_id=plan["id"])
+    if not record:
+        return {"status": "success", "suggestion": None}
+    return {
+        "status": "success",
+        "suggestion": record,
+        "pending_count": pending_count(record),
+        "plan_changed_since": int(plan.get("version") or 1) != int(record.get("plan_version") or 1),
+    }
+
+
+@router.post("/suggestions/{set_id}/apply")
+async def apply_nutrition_suggestions(
+    set_id: str,
+    request: SuggestionActionRequest = SuggestionActionRequest(),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Accept some or all staged edits. Omit edit_ids to accept every pending one.
+
+    Edits go through the same validated merge as a hand edit. An edit whose
+    target has since been changed away or deleted comes back "stale" rather
+    than resurrecting something the user already removed.
+    """
+    suggestions = SuggestionStore(db, user_id)
+    record = suggestions.get(set_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Those suggestions are no longer available.")
+
+    plan = _store(user_id).get(record.get("plan_id") or "")
+    if not plan:
+        raise HTTPException(status_code=404, detail="The plan these suggestions target is gone.")
+
+    wanted = set(request.edit_ids or [])
+    selected = [
+        edit for edit in (record.get("edits") or [])
+        if edit.get("status") == EDIT_STATUS_PENDING
+        and (not wanted or str(edit.get("id")) in wanted)
+    ]
+    if not selected:
+        raise HTTPException(status_code=400, detail="Nothing left to accept.")
+
+    patch, outcomes = apply_edits(plan, selected)
+    updated = _apply_patch(user_id, plan["id"], patch) if patch else plan
+    record = suggestions.mark_edits(set_id, outcomes)
+
+    applied = [eid for eid, outcome in outcomes.items() if outcome == EDIT_STATUS_APPLIED]
+    stale = [eid for eid, outcome in outcomes.items() if outcome == EDIT_STATUS_STALE]
+    return {
+        "status": "success",
+        "plan": updated,
+        "suggestion": record,
+        "applied_edit_ids": applied,
+        "stale_edit_ids": stale,
+        "pending_count": pending_count(record),
+    }
+
+
+@router.post("/suggestions/{set_id}/dismiss")
+async def dismiss_nutrition_suggestions(
+    set_id: str,
+    request: SuggestionActionRequest = SuggestionActionRequest(),
+    user_id: str = Depends(get_user_id),
+):
+    """Reject some or all staged edits. Omit edit_ids to clear the whole set."""
+    suggestions = SuggestionStore(db, user_id)
+    record = suggestions.get(set_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Those suggestions are no longer available.")
+
+    wanted = set(request.edit_ids or [])
+    outcomes = {
+        str(edit.get("id")): EDIT_STATUS_DISMISSED
+        for edit in (record.get("edits") or [])
+        if edit.get("status") == EDIT_STATUS_PENDING
+        and (not wanted or str(edit.get("id")) in wanted)
+    }
+    if not outcomes:
+        raise HTTPException(status_code=400, detail="Nothing left to dismiss.")
+
+    record = suggestions.mark_edits(set_id, outcomes)
+    return {"status": "success", "suggestion": record, "pending_count": pending_count(record)}
+
+
 @router.get("/today-guidance")
 async def get_today_guidance(
     date: Optional[str] = Query(None),
@@ -214,32 +442,145 @@ async def get_today_guidance(
     }
 
 
+@router.get("/usuals")
+async def get_usuals(
+    date: Optional[str] = Query(None),
+    hour: Optional[int] = Query(None, ge=0, le=23),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    One-tap foods for Home: plan anchors plus repeats learned from the log.
+
+    hour comes from the client so the "current" meal slot follows the user's
+    clock rather than the server's timezone.
+    """
+    day = date or datetime.now().strftime("%Y-%m-%d")
+    return {"status": "success", "date": day, "usuals": _usuals_payload(user_id, day, hour)}
+
+
+@router.post("/usuals/{usual_id}/toggle")
+async def toggle_usual(
+    usual_id: str,
+    request: ToggleUsualRequest = ToggleUsualRequest(),
+    user_id: str = Depends(get_user_id),
+):
+    """Log a usual into today's macros, or undo a previous tap."""
+    day = request.date or datetime.now().strftime("%Y-%m-%d")
+    payload = _usuals_payload(user_id, day, request.hour)
+    usual = find_usual(payload, usual_id)
+    if not usual:
+        raise HTTPException(status_code=404, detail="That usual is no longer in your plan.")
+
+    if usual["logged"]:
+        if not usual["can_undo"]:
+            # Logged by hand, not by tap. Removing it would delete food this
+            # feature never wrote, so leave the day alone.
+            return {
+                "status": "success",
+                "logged": True,
+                "changed": False,
+                "date": day,
+                "usuals": payload,
+            }
+        _remove_usual_items(user_id, day, usual_id)
+        logged = False
+    else:
+        _append_food_items(user_id, day, foods_to_log(usual))
+        logged = True
+
+    return {
+        "status": "success",
+        "logged": logged,
+        "changed": True,
+        "date": day,
+        "usuals": _usuals_payload(user_id, day, request.hour),
+    }
+
+
+PATCHABLE_FIELDS = (
+    "goal", "goal_detail", "targets", "strategy", "typical_day_notes", "carryover_note",
+    "meal_anchors", "flexible_meals", "go_to_items", "blueprint_extras",
+    "slot_profiles", "fast_food_places",
+    "preferences", "food_priorities",
+)
+
+
+def _apply_patch(user_id: str, plan_id: str, patch: dict) -> Optional[dict]:
+    """
+    Merge a patch into a plan through the same validation every edit uses.
+
+    Shared by PATCH and by accepting an AI suggestion, so a coach-proposed
+    edit cannot take a looser path into the plan than a hand edit does.
+    """
+    store = _store(user_id)
+    existing = store.get(plan_id)
+    if not existing:
+        return None
+
+    validated = NutritionPlanBuilder.validate_plan({**existing, **patch})
+    to_write = {k: validated[k] for k in PATCHABLE_FIELDS if k in validated}
+    updated = store.update(plan_id, to_write)
+    if updated and updated.get("status") == STATUS_ACTIVE:
+        _sync_targets(user_id, updated)
+    return updated
+
+
 @router.patch("/{plan_id}")
 async def update_nutrition_plan(
     plan_id: str,
     request: UpdateNutritionPlanRequest,
     user_id: str = Depends(get_user_id),
 ):
-    store = _store(user_id)
-    existing = store.get(plan_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Nutrition plan not found")
-
     patch = {k: v for k, v in request.dict(exclude_unset=True).items() if v is not None}
-    merged = {**existing, **patch}
-    validated = NutritionPlanBuilder.validate_plan(merged)
-    to_write = {
-        k: validated[k]
-        for k in (
-            "goal", "goal_detail", "targets", "strategy", "typical_day_notes",
-            "meal_anchors", "flexible_meals", "preferences", "food_priorities",
-        )
-        if k in validated
-    }
-    updated = store.update(plan_id, to_write)
-    if updated and updated.get("status") == STATUS_ACTIVE:
-        _sync_targets(user_id, updated)
+    updated = _apply_patch(user_id, plan_id, patch)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
     return {"status": "success", "plan": updated}
+
+
+@router.post("/{plan_id}/suggest-slot")
+async def suggest_slot(
+    plan_id: str,
+    request: SuggestSlotRequest,
+    user_id: str = Depends(get_user_id),
+):
+    plan = _store(user_id).get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
+    slot = (request.slot or "").strip().lower()
+    if slot not in ("breakfast", "lunch", "pre_workout", "dinner", "snack", "shake", "late_night", "other"):
+        raise HTTPException(status_code=400, detail="Invalid slot")
+    result = suggest_slot_fills(
+        plan,
+        slot,
+        request.stance,
+        request.model,
+        count=request.count or 1,
+        exclude_labels=request.exclude_labels,
+    )
+    return {"status": "success", "suggestion": result}
+
+
+@router.post("/{plan_id}/suggest-fast-food")
+async def suggest_fast_food(
+    plan_id: str,
+    request: SuggestFastFoodRequest,
+    user_id: str = Depends(get_user_id),
+):
+    plan = _store(user_id).get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
+    place = (request.place_name or "").strip()
+    if not place:
+        raise HTTPException(status_code=400, detail="place_name required")
+    result = suggest_fast_food_orders(
+        plan,
+        place,
+        request.slot or "dinner",
+        request.remaining,
+        request.model,
+    )
+    return {"status": "success", "suggestion": result}
 
 
 @router.post("/{plan_id}/pause")

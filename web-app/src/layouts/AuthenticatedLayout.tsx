@@ -15,6 +15,7 @@ import {
   MdMenu,
   MdClose,
   MdAutoAwesome,
+  MdAccessibilityNew,
 } from "react-icons/md";
 
 interface AuthenticatedLayoutProps {
@@ -43,6 +44,7 @@ export default function AuthenticatedLayout({
     { label: "Wellness", href: "/wellness", icon: MdFavorite },
     { label: "Calendar", href: "/calendar", icon: MdCalendarMonth },
     { label: "About Myself", href: "/about-myself", icon: MdPerson },
+    { label: "Body Scan", href: "/body-scan", icon: MdAccessibilityNew },
     { label: "General Analysis", href: "/general-analysis", icon: MdAnalytics },
     { label: "Coach Chat", href: "/chatbot", icon: MdChatBubble },
   ];

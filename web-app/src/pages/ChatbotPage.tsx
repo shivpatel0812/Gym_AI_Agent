@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import apiClient from "../lib/api-client";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
 import Input from "../components/ui/Input";
 import CreateNutritionPlanModal from "../components/nutrition/plan/CreateNutritionPlanModal";
+import { NutritionSuggestionArtifact } from "../api/nutritionPlan";
 import {
   MdSend,
   MdChatBubble,
@@ -13,15 +14,24 @@ import {
   MdFitnessCenter,
   MdAutoAwesome,
 } from "react-icons/md";
+import {
+  AI_MODEL_OPTIONS,
+  AiModelId,
+  loadStoredAiModel,
+  persistAiModel,
+} from "../lib/aiModels";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
+  /** Plan edits this turn staged for review. Chat never writes the plan. */
+  suggestions?: NutritionSuggestionArtifact;
 }
 
 type ChatMode = "coach" | "plan" | "nutrition";
 
 export default function ChatbotPage() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
@@ -29,9 +39,15 @@ export default function ChatbotPage() {
   const [conversationHistory, setConversationHistory] = useState<any[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [chatMode, setChatMode] = useState<ChatMode>("coach");
+  const [aiModel, setAiModel] = useState<AiModelId>(() => loadStoredAiModel());
   const [createPlanOpen, setCreatePlanOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const seededPrompt = useRef(false);
+
+  const selectAiModel = (model: AiModelId) => {
+    setAiModel(model);
+    persistAiModel(model);
+  };
 
   useEffect(() => {
     scrollToBottom();
@@ -87,14 +103,24 @@ export default function ChatbotPage() {
           conversation_history: conversationHistory,
           conversation_id: conversationId,
           mode: chatMode,
+          model: aiModel,
         },
-        { timeout: chatMode === "plan" || chatMode === "nutrition" ? 120000 : 60000 }
+        {
+          timeout:
+            chatMode === "plan" || chatMode === "nutrition" || aiModel === "gpt-5.6-sol"
+              ? 120000
+              : 60000,
+        }
       );
 
       if (res.data.status === "success") {
+        const staged = (res.data.artifacts || []).find(
+          (a: any) => a?.type === "nutrition_suggestions"
+        ) as NutritionSuggestionArtifact | undefined;
         const assistantMessage: Message = {
           role: "assistant",
           content: res.data.response,
+          suggestions: staged,
         };
         setMessages([...updatedMessages, assistantMessage]);
         setConversationHistory(res.data.conversation_history || []);
@@ -205,6 +231,26 @@ export default function ChatbotPage() {
             )}
           </div>
         </div>
+        <div className="mt-3 flex items-center gap-2">
+          <span className="text-xs font-semibold text-[#8E8E93]">Model</span>
+          <div className="inline-flex rounded-full border border-[#2A2D35] bg-[#161A22] p-0.5">
+            {AI_MODEL_OPTIONS.map((opt) => {
+              const active = aiModel === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => selectAiModel(opt.id)}
+                  className={`px-3 py-1 rounded-full text-xs font-bold transition-colors ${
+                    active ? "bg-[#FF6B35] text-white" : "text-[#8E8E93] hover:text-white"
+                  }`}
+                >
+                  {opt.short}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       <Card className="flex-1 flex flex-col overflow-hidden mb-4">
@@ -235,6 +281,32 @@ export default function ChatbotPage() {
                   }`}
                 >
                   <div className="whitespace-pre-wrap">{message.content}</div>
+                  {message.suggestions ? (
+                    <button
+                      type="button"
+                      data-testid="suggestion-card"
+                      onClick={() => navigate("/nutrition?tab=plan&suggestions=1")}
+                      className="mt-3 w-full text-left rounded-xl bg-[rgba(94,234,212,0.08)] border border-[#5EEAD4]/40 p-3 hover:bg-[rgba(94,234,212,0.14)]"
+                    >
+                      <div className="flex items-center gap-2">
+                        <MdAutoAwesome className="text-[#5EEAD4] shrink-0" />
+                        <span className="text-sm font-bold text-white">
+                          {message.suggestions.count}{" "}
+                          {message.suggestions.count === 1 ? "plan update" : "plan updates"} ready
+                        </span>
+                      </div>
+                      <ul className="mt-2 space-y-0.5">
+                        {message.suggestions.titles.slice(0, 3).map((title) => (
+                          <li key={title} className="text-xs text-[#8E8E93]">
+                            · {title}
+                          </li>
+                        ))}
+                      </ul>
+                      <span className="mt-2 inline-block text-xs font-bold text-[#5EEAD4]">
+                        Review on Plan →
+                      </span>
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ))
@@ -298,6 +370,7 @@ export default function ChatbotPage() {
       <CreateNutritionPlanModal
         visible={createPlanOpen}
         conversationId={conversationId}
+        model={aiModel}
         onClose={() => setCreatePlanOpen(false)}
         onCreated={() => {
           setCreatePlanOpen(false);

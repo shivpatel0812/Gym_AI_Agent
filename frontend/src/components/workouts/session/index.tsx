@@ -756,7 +756,7 @@ export default function SessionForm({
                         { backgroundColor: aiRecommendations[ex.exercise_id].progression_type === 'increase_weight'
                           ? 'rgba(34, 197, 94, 0.2)'
                           : aiRecommendations[ex.exercise_id].progression_type === 'increase_reps'
-                          ? 'rgba(255, 107, 53, 0.2)'
+                          ? 'rgba(156, 192, 232, 0.2)'
                           : aiRecommendations[ex.exercise_id].progression_type === 'deload'
                           ? 'rgba(245, 158, 11, 0.2)'
                           : 'rgba(107, 114, 128, 0.2)'
@@ -767,7 +767,7 @@ export default function SessionForm({
                           { color: aiRecommendations[ex.exercise_id].progression_type === 'increase_weight'
                             ? '#22C55E'
                             : aiRecommendations[ex.exercise_id].progression_type === 'increase_reps'
-                            ? '#FF6B35'
+                            ? '#9CC0E8'
                             : aiRecommendations[ex.exercise_id].progression_type === 'deload'
                             ? '#F59E0B'
                             : '#6B7280'
@@ -1161,7 +1161,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   tabActive: {
-    backgroundColor: colors.textPrimary,
+    backgroundColor: colors.accentPrimary,
   },
   tabText: {
     fontSize: 16,
@@ -1242,7 +1242,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   equipmentFilterTextActive: {
-    color: colors.textPrimary,
+    color: colors.onAccent,
   },
   exerciseButton: {
     flexDirection: "row",
@@ -1521,7 +1521,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.textPrimary,
+    backgroundColor: colors.accentPrimary,
     borderRadius: borderRadius.lg,
     padding: spacing.md,
     gap: spacing.sm,
@@ -1565,7 +1565,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentPrimary,
   },
   cancelButton: {
-    backgroundColor: colors.textPrimary,
+    backgroundColor: "transparent",
+    borderWidth: 1.5,
+    borderColor: colors.border,
   },
   buttonDisabled: {
     opacity: 0.5,
@@ -1573,9 +1575,9 @@ const styles = StyleSheet.create({
   actionButtonText: {
     fontSize: 18,
     fontWeight: "700",
-    color: colors.textPrimary,
+    color: colors.onAccent,
   },
   cancelButtonText: {
-    color: colors.background,
+    color: colors.textPrimary,
   },
 });

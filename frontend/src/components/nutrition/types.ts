@@ -8,6 +8,11 @@ export interface FoodItem {
   sodium?: number;
   meal?: string;
   amount?: string;
+  uncertain?: boolean;
+  /** One-tap usual undo id. */
+  usual_id?: string;
+  /** Nutrition-plan meal anchor this log fulfills. */
+  anchor_id?: string;
 }
 
 export interface MacroEntry {

@@ -24,8 +24,16 @@ import { LevelSlider } from "../wellness/ui";
 import LogFoodForm from "../nutrition/LogFoodForm";
 import { FoodItem } from "../nutrition/types";
 import { TodaysWorkout } from "../workouts/types";
+import { EMPTY_USUALS, getUsuals, toggleUsual, getActiveNutritionPlan } from "../../api/nutritionPlan";
+import type { Usual, UsualsPayload } from "../../api/nutritionPlan";
+import {
+  displayMealLabel,
+  extractRecentMeals,
+  uncertainSlotsFromPlan,
+  RecentMealPick,
+} from "../../lib/recentMeals";
 
-type SheetKind = "sleep" | "stress" | "wellness" | "food" | "routine" | null;
+type SheetKind = "sleep" | "stress" | "wellness" | "food" | "routine" | "weekMeals" | null;
 
 type Routine = {
   id?: string;
@@ -54,6 +62,42 @@ const ROUTINE_ICONS: { name: keyof typeof MaterialCommunityIcons.glyphMap; label
   { name: "music", label: "Music" },
   { name: "sleep", label: "Rest" },
 ];
+
+const SLOT_ICONS: Record<string, keyof typeof MaterialCommunityIcons.glyphMap> = {
+  breakfast: "coffee-outline",
+  shake: "cup",
+  pre_workout: "dumbbell",
+  lunch: "food-fork-drink",
+  snack: "food-apple-outline",
+  dinner: "silverware-fork-knife",
+  late_night: "weather-night",
+  other: "food",
+};
+
+/** Flip a usual locally so the tap lands before the round trip does. */
+function flipUsual(payload: UsualsPayload, id: string): UsualsPayload {
+  const apply = (u: Usual) => (u.id === id ? { ...u, logged: !u.logged, can_undo: !u.logged } : u);
+  const usuals = payload.usuals.map(apply);
+  return {
+    ...payload,
+    usuals,
+    slots: payload.slots.map((slot) => ({ ...slot, usuals: slot.usuals.map(apply) })),
+    logged_count: usuals.filter((u) => u.expected && u.logged).length,
+  };
+}
+
+function remainingLine(remaining?: { calories: number | null; protein: number | null } | null) {
+  if (!remaining) return null;
+  const parts: string[] = [];
+  if (remaining.calories != null) {
+    const cal = Math.round(remaining.calories);
+    parts.push(cal < 0 ? `${Math.abs(cal).toLocaleString()} cal over` : `${cal.toLocaleString()} cal left`);
+  }
+  if (remaining.protein != null && remaining.protein > 0) {
+    parts.push(`${Math.round(remaining.protein)}g protein to go`);
+  }
+  return parts.length ? parts.join(" · ") : null;
+}
 
 function todayEntry<T extends { date?: string }>(rows: T[]): T | undefined {
   const key = todayKey();
@@ -109,6 +153,12 @@ export default function Home() {
   const [activeCal, setActiveCal] = useState(0);
   const [todayWorkout, setTodayWorkout] = useState<TodaysWorkout | null>(null);
   const [routines, setRoutines] = useState<Routine[]>([]);
+  const [usuals, setUsuals] = useState<UsualsPayload>(EMPTY_USUALS);
+  const [uncertainSlots, setUncertainSlots] = useState<string[]>([]);
+  const [weekMeals, setWeekMeals] = useState<RecentMealPick[]>([]);
+  const [weekMealSlot, setWeekMealSlot] = useState<string>("lunch");
+  const [logMeal, setLogMeal] = useState("Lunch");
+  const [logUncertain, setLogUncertain] = useState(false);
   const [sheet, setSheet] = useState<SheetKind>(null);
   const [saving, setSaving] = useState(false);
 
@@ -128,7 +178,7 @@ export default function Home() {
 
   const load = useCallback(async () => {
     try {
-      const [sleepRes, stressRes, surveyRes, bodyRes, activityRes, routineRes, planRes, macroRes] =
+      const [sleepRes, stressRes, surveyRes, bodyRes, activityRes, routineRes, planRes, usualsRes, macrosRes, nutritionPlan] =
         await Promise.all([
           apiClient.get("/api/sleep"),
           apiClient.get("/api/stress"),
@@ -137,7 +187,9 @@ export default function Home() {
           apiClient.get("/api/physical-activities"),
           apiClient.get("/api/daily-routines"),
           apiClient.get("/api/workout-plan/today").catch(() => ({ data: null })),
+          getUsuals(date).catch(() => EMPTY_USUALS),
           apiClient.get("/api/macros").catch(() => ({ data: [] })),
+          getActiveNutritionPlan().catch(() => null),
         ]);
       const sleep = todayEntry(Array.isArray(sleepRes.data) ? sleepRes.data : []);
       const stress = todayEntry(Array.isArray(stressRes.data) ? stressRes.data : []);
@@ -168,7 +220,22 @@ export default function Home() {
       setActiveCal(minutes > 0 ? Math.round(minutes * 5) : Math.round(stepTotal * 0.04));
       setRoutines(Array.isArray(routineRes.data) ? routineRes.data : []);
       setTodayWorkout(planRes.data || null);
-      void macroRes;
+      setUsuals(usualsRes);
+      const slots = uncertainSlotsFromPlan(nutritionPlan);
+      setUncertainSlots(slots);
+      const prefer =
+        (usualsRes.current_slot && (usualsRes.current_slot === "lunch" || usualsRes.current_slot === "dinner")
+          ? usualsRes.current_slot
+          : slots[0]) || "lunch";
+      setWeekMealSlot(prefer);
+      setWeekMeals(
+        extractRecentMeals(Array.isArray(macrosRes.data) ? macrosRes.data : [], {
+          meal: prefer,
+          days: 7,
+          excludeToday: true,
+          limit: 12,
+        })
+      );
     } catch (error) {
       console.error("Error loading home:", error);
     }
@@ -190,7 +257,44 @@ export default function Home() {
     setSheet("stress");
   };
   const openWellness = () => setSheet("wellness");
-  const openFood = () => setSheet("food");
+  const openFood = (mealLabel?: string, uncertain = false) => {
+    const label = mealLabel || displayMealLabel(usuals.current_slot || "lunch");
+    setLogMeal(label);
+    setLogUncertain(uncertain);
+    setSheet("food");
+  };
+
+  const openWeekMeals = async (slot: string) => {
+    setWeekMealSlot(slot);
+    try {
+      const res = await apiClient.get("/api/macros");
+      setWeekMeals(
+        extractRecentMeals(Array.isArray(res.data) ? res.data : [], {
+          meal: slot,
+          days: 7,
+          excludeToday: true,
+          limit: 16,
+        })
+      );
+    } catch {
+      setWeekMeals([]);
+    }
+    setSheet("weekMeals");
+  };
+
+  const logRecentPick = async (item: RecentMealPick) => {
+    await addFood({
+      name: item.name,
+      calories: item.calories,
+      protein: item.protein,
+      carbs: item.carbs,
+      fats: item.fats,
+      fiber: item.fiber,
+      amount: item.amount,
+      meal: displayMealLabel(weekMealSlot),
+      uncertain: true,
+    });
+  };
   const openNewRoutine = () => {
     setEditingRoutine(null);
     setRoutineName("");
@@ -292,8 +396,22 @@ export default function Home() {
         await apiClient.post("/api/macros", { date, food_items: [food] });
       }
       setSheet(null);
+      await load();
     } catch (error) {
       console.error("Error logging food:", error);
+    }
+  };
+
+  const onToggleUsual = async (usual: Usual) => {
+    // Logged by hand rather than tapped: it is already on the day, and this
+    // feature has nothing of its own to remove.
+    if (usual.logged && !usual.can_undo) return;
+    setUsuals((prev) => flipUsual(prev, usual.id));
+    try {
+      setUsuals(await toggleUsual(usual.id, date));
+    } catch (error) {
+      console.error("Error toggling usual:", error);
+      setUsuals((prev) => flipUsual(prev, usual.id));
     }
   };
 
@@ -355,6 +473,7 @@ export default function Home() {
   const now = new Date();
   const dateLabel = now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   const showWorkout = todayWorkout?.status === "workout_day" && !todayWorkout.already_logged;
+  const budgetLine = remainingLine(usuals.remaining);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -406,7 +525,119 @@ export default function Home() {
         <Text style={styles.tap}>{wellnessCount}/3 logged</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.foodBtn} onPress={openFood}>
+      <View style={styles.routinesHead}>
+        <Text style={styles.sectionLabel}>Your usuals</Text>
+        {usuals.expected_count > 0 ? (
+          <Text style={styles.frac}>
+            {usuals.logged_count}/{usuals.expected_count}
+          </Text>
+        ) : null}
+      </View>
+
+      {usuals.has_usuals ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.usualScroll}>
+          {usuals.slots.map((slot) => (
+            <View key={slot.slot} style={styles.usualGroup}>
+              <View style={styles.usualGroupHead}>
+                {slot.is_current ? <View style={styles.nowDot} /> : null}
+                <Text style={[styles.usualTime, slot.is_current && styles.usualTimeNow]}>
+                  {/* slot.label covers a backend that predates time labels. */}
+                  {slot.time_label || slot.label}
+                </Text>
+              </View>
+              <View style={styles.usualGroupRow}>
+                {slot.usuals.map((usual) => (
+                  <TouchableOpacity
+                    key={usual.id}
+                    activeOpacity={0.85}
+                    style={[styles.usualChip, usual.logged && styles.usualChipOn]}
+                    onPress={() => onToggleUsual(usual)}
+                  >
+                    <View style={[styles.usualIcon, usual.logged && styles.usualIconOn]}>
+                      <MaterialCommunityIcons
+                        name={SLOT_ICONS[usual.slot] || "food"}
+                        size={16}
+                        color={usual.logged ? "#05080F" : "#7C8CA0"}
+                      />
+                    </View>
+                    {usual.logged ? (
+                      <View style={styles.usualCheck}>
+                        <MaterialCommunityIcons name="check" size={10} color="#05080F" />
+                      </View>
+                    ) : null}
+                    <Text style={[styles.usualName, usual.logged && styles.usualNameOn]} numberOfLines={2}>
+                      {usual.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      ) : (
+        <TouchableOpacity style={styles.emptyRoutines} onPress={() => navigation.navigate("Nutrition")}>
+          <Text style={styles.emptyText}>
+            Foods you log often show up here to tap — add your usual meals in your nutrition plan.
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {budgetLine ? <Text style={styles.remainingLine}>{budgetLine}</Text> : null}
+
+      {(uncertainSlots.length > 0 || weekMeals.length > 0) &&
+      (uncertainSlots.includes("lunch") ||
+        uncertainSlots.includes("dinner") ||
+        usuals.current_slot === "lunch" ||
+        usuals.current_slot === "dinner") ? (
+        <View style={styles.uncertainHomeBox}>
+          <View style={styles.routinesHead}>
+            <Text style={[styles.sectionLabel, { color: "#F5C542" }]}>
+              Uncertain · past week
+            </Text>
+            <TouchableOpacity
+              onPress={() =>
+                openWeekMeals(
+                  uncertainSlots[0] ||
+                    (usuals.current_slot === "dinner" ? "dinner" : "lunch")
+                )
+              }
+            >
+              <Text style={styles.seeAll}>See all</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.uncertainHomeHint}>
+            Tap a meal you had this week for{" "}
+            {displayMealLabel(weekMealSlot).toLowerCase()}, or log something new.
+          </Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.weekChipRow}>
+            {weekMeals.slice(0, 8).map((item) => (
+              <TouchableOpacity
+                key={item.key}
+                style={styles.weekChip}
+                onPress={() => logRecentPick(item)}
+              >
+                <Text style={styles.weekChipName} numberOfLines={2}>
+                  {item.name}
+                </Text>
+                <Text style={styles.weekChipMeta}>
+                  {[item.calories ? `${item.calories} kcal` : null, item.protein ? `${item.protein}g P` : null]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              style={[styles.weekChip, styles.weekChipAdd]}
+              onPress={() => openFood(displayMealLabel(weekMealSlot), true)}
+            >
+              <MaterialCommunityIcons name="plus" size={18} color="#F5C542" />
+              <Text style={styles.weekChipName}>Log uncertain</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      ) : null}
+
+      <TouchableOpacity style={styles.foodBtn} onPress={() => openFood()}>
         <MaterialCommunityIcons name="food-apple" size={20} color="#4ADE80" />
         <Text style={styles.foodBtnText}>Log food</Text>
       </TouchableOpacity>
@@ -440,9 +671,9 @@ export default function Home() {
                 onLongPress={() => openEditRoutine(routine)}
               >
                 <TouchableOpacity style={styles.editDot} onPress={() => openEditRoutine(routine)} hitSlop={8}>
-                  <MaterialCommunityIcons name="pencil-outline" size={12} color="#8E8E93" />
+                  <MaterialCommunityIcons name="pencil-outline" size={12} color="#7C8CA0" />
                 </TouchableOpacity>
-                <MaterialCommunityIcons name={icon} size={26} color={done ? "#FF6B35" : "#8E8E93"} />
+                <MaterialCommunityIcons name={icon} size={26} color={done ? "#9CC0E8" : "#7C8CA0"} />
                 <Text style={styles.routineName} numberOfLines={1}>
                   {routine.name}
                 </Text>
@@ -476,7 +707,7 @@ export default function Home() {
           <Text style={styles.todayLabel}>Today's workout</Text>
           <View style={styles.workoutRow}>
             <View style={styles.workoutIcon}>
-              <MaterialCommunityIcons name="dumbbell" size={20} color="#FF6B35" />
+              <MaterialCommunityIcons name="dumbbell" size={20} color="#9CC0E8" />
             </View>
             <View>
               <Text style={styles.workoutTitle}>{todayWorkout?.day_name || "Workout"}</Text>
@@ -506,7 +737,7 @@ export default function Home() {
           value={draftSleep}
           onValueChange={setDraftSleep}
           minimumTrackTintColor="#A78BFA"
-          maximumTrackTintColor="#1C1C1F"
+          maximumTrackTintColor="#1E2A38"
           thumbTintColor="#A78BFA"
         />
         <LevelSlider
@@ -535,7 +766,7 @@ export default function Home() {
           value={draftStressNote}
           onChangeText={setDraftStressNote}
           placeholder="What's causing the stress?"
-          placeholderTextColor="#636366"
+          placeholderTextColor="#55647A"
           style={[styles.input, { height: 88, textAlignVertical: "top" }]}
           multiline
         />
@@ -561,7 +792,7 @@ export default function Home() {
             value={draftBody}
             onChangeText={setDraftBody}
             placeholder="How does your body feel today?"
-            placeholderTextColor="#636366"
+            placeholderTextColor="#55647A"
             style={[styles.input, { height: 88, textAlignVertical: "top" }]}
             multiline
           />
@@ -573,7 +804,69 @@ export default function Home() {
 
       <Sheet visible={sheet === "food"} title="Log food" onClose={() => setSheet(null)}>
         <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
-          <LogFoodForm meal="Lunch" onAdd={addFood} onCancel={() => setSheet(null)} />
+          <LogFoodForm
+            meal={logMeal}
+            defaultUncertain={logUncertain}
+            onAdd={addFood}
+            onCancel={() => setSheet(null)}
+          />
+        </ScrollView>
+      </Sheet>
+
+      <Sheet
+        visible={sheet === "weekMeals"}
+        title={`Past week · ${displayMealLabel(weekMealSlot)}`}
+        onClose={() => setSheet(null)}
+      >
+        <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+          <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+            {(["lunch", "dinner"] as const).map((slot) => (
+              <TouchableOpacity
+                key={slot}
+                style={[
+                  styles.slotPick,
+                  weekMealSlot === slot && styles.slotPickOn,
+                ]}
+                onPress={() => openWeekMeals(slot)}
+              >
+                <Text
+                  style={[
+                    styles.slotPickText,
+                    weekMealSlot === slot && styles.slotPickTextOn,
+                  ]}
+                >
+                  {displayMealLabel(slot)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {weekMeals.length === 0 ? (
+            <Text style={styles.emptyText}>
+              No {displayMealLabel(weekMealSlot).toLowerCase()} logs in the past week yet.
+            </Text>
+          ) : (
+            weekMeals.map((item) => (
+              <TouchableOpacity
+                key={item.key}
+                style={styles.weekListRow}
+                onPress={() => logRecentPick(item)}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.weekChipName}>{item.name}</Text>
+                  <Text style={styles.weekChipMeta}>
+                    {[
+                      item.calories ? `${item.calories} kcal` : null,
+                      item.protein ? `${item.protein}g P` : null,
+                      item.date,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </Text>
+                </View>
+                <MaterialCommunityIcons name="plus-circle" size={22} color="#F5C542" />
+              </TouchableOpacity>
+            ))
+          )}
         </ScrollView>
       </Sheet>
 
@@ -583,7 +876,7 @@ export default function Home() {
           value={routineName}
           onChangeText={setRoutineName}
           placeholder="Commute"
-          placeholderTextColor="#636366"
+          placeholderTextColor="#55647A"
           style={styles.input}
         />
         <Text style={styles.fieldLabel}>What is it?</Text>
@@ -591,7 +884,7 @@ export default function Home() {
           value={routineDesc}
           onChangeText={setRoutineDesc}
           placeholder="Commute time, morning walk, study block…"
-          placeholderTextColor="#636366"
+          placeholderTextColor="#55647A"
           style={[styles.input, { height: 80, textAlignVertical: "top" }]}
           multiline
         />
@@ -605,7 +898,7 @@ export default function Home() {
                 onPress={() => setRoutineIcon(item.name)}
                 style={[styles.iconPick, on && styles.iconPickOn]}
               >
-                <MaterialCommunityIcons name={item.name} size={20} color={on ? "#FF6B35" : "#fff"} />
+                <MaterialCommunityIcons name={item.name} size={20} color={on ? "#9CC0E8" : "#fff"} />
               </TouchableOpacity>
             );
           })}
@@ -636,9 +929,9 @@ const styles = StyleSheet.create({
   },
   header: { marginBottom: 22 },
   greeting: { color: "#fff", fontSize: 32, fontWeight: "800" },
-  dateLine: { color: "#8E8E93", fontSize: 16, marginTop: 4 },
+  dateLine: { color: "#7C8CA0", fontSize: 16, marginTop: 4 },
   sectionLabel: {
-    color: "#8E8E93",
+    color: "#7C8CA0",
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.4,
@@ -655,10 +948,10 @@ const styles = StyleSheet.create({
     padding: 14,
     minHeight: 108,
   },
-  cardLabel: { color: "#8E8E93", fontSize: 13, marginTop: 8 },
+  cardLabel: { color: "#7C8CA0", fontSize: 13, marginTop: 8 },
   cardValue: { color: "#fff", fontSize: 18, fontWeight: "700", marginTop: 4 },
-  bodyPreview: { color: "#8E8E93", fontSize: 12, marginTop: 4 },
-  tap: { color: "#FF6B35", fontSize: 13, fontWeight: "600", marginTop: 8 },
+  bodyPreview: { color: "#7C8CA0", fontSize: 12, marginTop: 4 },
+  tap: { color: "#9CC0E8", fontSize: 13, fontWeight: "600", marginTop: 8 },
   wellnessCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -678,6 +971,57 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  remainingLine: {
+    color: "#7C8CA0",
+    fontSize: 12,
+    fontWeight: "600",
+    marginBottom: 10,
+  },
+  seeAll: { color: "#F5C542", fontSize: 12, fontWeight: "700" },
+  uncertainHomeBox: {
+    marginBottom: 14,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(245,197,66,0.3)",
+    backgroundColor: "rgba(245,197,66,0.06)",
+    gap: 8,
+  },
+  uncertainHomeHint: { color: "#7C8CA0", fontSize: 12, lineHeight: 16 },
+  weekChipRow: { gap: 8, paddingRight: 4 },
+  weekChip: {
+    width: 120,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(245,197,66,0.28)",
+    backgroundColor: "#12151C",
+    gap: 4,
+  },
+  weekChipAdd: { alignItems: "center", justifyContent: "center", minHeight: 72 },
+  weekChipName: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  weekChipMeta: { color: "#7C8CA0", fontSize: 10 },
+  weekListRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#1E2A38",
+  },
+  slotPick: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#1E2A38",
+  },
+  slotPickOn: {
+    borderColor: "#F5C542",
+    backgroundColor: "rgba(245,197,66,0.14)",
+  },
+  slotPickText: { color: "#7C8CA0", fontSize: 12, fontWeight: "700" },
+  slotPickTextOn: { color: "#F5C542" },
   foodBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -687,8 +1031,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 16,
-    paddingVertical: 14,
-    marginBottom: 24,
+    paddingVertical: 12,
+    marginBottom: 18,
   },
   foodBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   routinesHead: {
@@ -698,12 +1042,12 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   routinesHeadRight: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
-  frac: { color: "#8E8E93", fontSize: 13, fontWeight: "600" },
+  frac: { color: "#7C8CA0", fontSize: 13, fontWeight: "600" },
   plusBtn: {
     width: 28,
     height: 28,
     borderRadius: 8,
-    backgroundColor: "#1C1C1F",
+    backgroundColor: "#1E2A38",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -715,7 +1059,7 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 10,
   },
-  emptyText: { color: "#8E8E93", fontSize: 13 },
+  emptyText: { color: "#7C8CA0", fontSize: 13 },
   routineRow: { gap: 10, paddingRight: 8, marginBottom: 12 },
   routineChip: {
     width: 92,
@@ -728,14 +1072,60 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  routineChipOn: { borderColor: "#FF6B35" },
+  routineChipOn: { borderColor: "#9CC0E8" },
+  usualScroll: { gap: 14, paddingRight: 8, marginBottom: 10 },
+  usualGroup: { gap: 6 },
+  usualGroupHead: { flexDirection: "row", alignItems: "center", gap: 5, paddingLeft: 2 },
+  nowDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: "#4ADE80" },
+  usualTime: {
+    color: "#55647A",
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.9,
+    textTransform: "uppercase",
+  },
+  usualTimeNow: { color: "#4ADE80" },
+  usualGroupRow: { flexDirection: "row", gap: 8 },
+  usualChip: {
+    width: 84,
+    height: 76,
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    paddingHorizontal: 9,
+    paddingVertical: 9,
+  },
+  usualChipOn: { backgroundColor: "#10231A", borderColor: "#4ADE80" },
+  usualIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 9,
+    backgroundColor: "#1E2A38",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  usualIconOn: { backgroundColor: "#4ADE80" },
+  usualCheck: {
+    position: "absolute",
+    top: 7,
+    right: 7,
+    width: 15,
+    height: 15,
+    borderRadius: 8,
+    backgroundColor: "#4ADE80",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  usualName: { color: "#fff", fontSize: 11, fontWeight: "700", lineHeight: 14, marginTop: 6 },
+  usualNameOn: { color: "#DCFCE7" },
   editDot: { position: "absolute", top: 6, right: 6 },
   routineName: { color: "#fff", fontSize: 12, fontWeight: "600", marginTop: 8, textAlign: "center" },
-  routineDesc: { color: "#8E8E93", fontSize: 10, marginTop: 2, textAlign: "center" },
+  routineDesc: { color: "#7C8CA0", fontSize: 10, marginTop: 2, textAlign: "center" },
   progressTrack: {
     height: 4,
     borderRadius: 999,
-    backgroundColor: "#1C1C1F",
+    backgroundColor: "#1E2A38",
     marginBottom: 18,
     overflow: "hidden",
   },
@@ -754,12 +1144,12 @@ const styles = StyleSheet.create({
   workoutCard: {
     backgroundColor: colors.cardBackground,
     borderWidth: 1,
-    borderColor: "#FF6B35",
+    borderColor: "#9CC0E8",
     borderRadius: 16,
     padding: 16,
   },
   todayLabel: {
-    color: "#FF6B35",
+    color: "#9CC0E8",
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.2,
@@ -777,16 +1167,16 @@ const styles = StyleSheet.create({
   },
   workoutTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
   startBtn: {
-    backgroundColor: "#FF6B35",
+    backgroundColor: "#9CC0E8",
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: "center",
   },
-  startBtnText: { color: "#0B0C10", fontWeight: "700", fontSize: 16 },
+  startBtnText: { color: colors.onAccent, fontWeight: "700", fontSize: 16 },
   modalRoot: { flex: 1, justifyContent: "flex-end" },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(0,0,0,0.55)" },
   sheet: {
-    backgroundColor: "#111113",
+    backgroundColor: "#0E1621",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
@@ -804,31 +1194,31 @@ const styles = StyleSheet.create({
   },
   sheetTitle: { color: "#fff", fontSize: 20, fontWeight: "700", marginBottom: 16 },
   blockHead: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
-  muted: { color: "#8E8E93" },
+  muted: { color: "#7C8CA0" },
   purpleVal: { color: "#A78BFA", fontWeight: "700" },
   saveBtn: {
-    backgroundColor: "#FF6B35",
+    backgroundColor: "#9CC0E8",
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: "center",
     marginTop: 16,
   },
-  saveText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  saveText: { color: colors.onAccent, fontWeight: "700", fontSize: 16 },
   segRow: { flexDirection: "row", gap: 8 },
   seg: {
     flex: 1,
     paddingVertical: 12,
     borderRadius: 12,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: "center",
   },
   segText: { color: "#fff", fontSize: 13, fontWeight: "600" },
-  fieldLabel: { color: "#8E8E93", fontSize: 12, fontWeight: "600", marginBottom: 6, marginTop: 8 },
+  fieldLabel: { color: "#7C8CA0", fontSize: 12, fontWeight: "600", marginBottom: 6, marginTop: 8 },
   input: {
     borderRadius: 12,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
     borderWidth: 1,
     borderColor: colors.border,
     color: "#fff",
@@ -845,9 +1235,9 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
   },
-  iconPickOn: { borderColor: "#FF6B35" },
+  iconPickOn: { borderColor: "#9CC0E8" },
   deleteBtn: { alignItems: "center", paddingVertical: 14 },
   deleteText: { color: "#EF4444", fontWeight: "600" },
 });

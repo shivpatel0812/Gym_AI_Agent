@@ -1,5 +1,5 @@
 import { auth } from "../firebase";
-import { expoConfig } from "../config";
+import { API_BASE_URL } from "../config";
 
 /**
  * SSE client for the coach chat endpoint.
@@ -9,7 +9,6 @@ import { expoConfig } from "../config";
  * on iOS, Android, and react-native-web alike.
  */
 
-const API_BASE_URL = expoConfig?.extra?.apiBaseUrl || "http://localhost:8000";
 const STREAM_TIMEOUT_MS = 90000;
 
 export interface StreamHandlers {
@@ -23,9 +22,29 @@ export interface StreamHandlers {
     conversation_history: any[];
     conversation_id?: string;
     tools_used?: string[];
+    ai_access?: any;
+    /** Structured side effects of the turn, e.g. staged plan suggestions. */
+    artifacts?: any[];
   }) => void;
   /** Stream failed. Fired at most once, and never after onDone. */
-  onError: (error: Error) => void;
+  onError: (error: StreamError) => void;
+}
+
+/**
+ * A stream failure. `kind` lets the UI branch without string-matching:
+ * `quota` means the daily AI limit is spent, `blocked` means moderation
+ * rejected the message.
+ */
+export class StreamError extends Error {
+  kind: "quota" | "blocked" | "auth" | "network";
+  detail?: any;
+
+  constructor(message: string, kind: StreamError["kind"] = "network", detail?: any) {
+    super(message);
+    this.name = "StreamError";
+    this.kind = kind;
+    this.detail = detail;
+  }
 }
 
 export interface StreamRequest {
@@ -33,11 +52,50 @@ export interface StreamRequest {
   conversationId?: string | null;
   conversationHistory?: any[];
   mode?: "coach" | "plan" | "nutrition";
+  model?: string;
+}
+
+/**
+ * Turn a non-2xx response into a typed error.
+ *
+ * The quota and moderation checks run before the stream opens, so these come
+ * back as an ordinary JSON error body rather than an SSE frame.
+ */
+function errorForStatus(xhr: XMLHttpRequest): StreamError {
+  let detail: any;
+  try {
+    detail = JSON.parse(xhr.responseText)?.detail;
+  } catch {
+    detail = undefined;
+  }
+  const message =
+    (typeof detail === "object" && detail?.message) ||
+    (typeof detail === "string" && detail) ||
+    undefined;
+
+  if (xhr.status === 429) {
+    return new StreamError(
+      message || "You've used all of today's AI requests.",
+      "quota",
+      detail
+    );
+  }
+  if (xhr.status === 400 && detail?.error === "content_blocked") {
+    return new StreamError(message, "blocked", detail);
+  }
+  if (xhr.status === 401 || xhr.status === 403) {
+    return new StreamError(message || "Please sign in again.", "auth", detail);
+  }
+  return new StreamError(
+    message || `Coach request failed (${xhr.status})`,
+    "network",
+    detail
+  );
 }
 
 /** Starts a streaming chat request. Returns a cancel function. */
 export function streamChat(
-  { message, conversationId, conversationHistory, mode }: StreamRequest,
+  { message, conversationId, conversationHistory, mode, model }: StreamRequest,
   handlers: StreamHandlers
 ): () => void {
   const xhr = new XMLHttpRequest();
@@ -64,7 +122,7 @@ export function streamChat(
         finish(() => handlers.onDone(payload));
         break;
       case "error":
-        finish(() => handlers.onError(new Error(payload.error || "Coach failed")));
+        finish(() => handlers.onError(new StreamError(payload.error || "Coach failed")));
         break;
     }
   };
@@ -108,24 +166,29 @@ export function streamChat(
     xhr.open("POST", `${API_BASE_URL}/api/ai-analysis/chat/stream`);
     xhr.setRequestHeader("Content-Type", "application/json");
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-    xhr.timeout = mode === "plan" || mode === "nutrition" ? 120000 : STREAM_TIMEOUT_MS;
+    xhr.timeout =
+      mode === "plan" || mode === "nutrition" || model === "gpt-5.6-sol"
+        ? 120000
+        : STREAM_TIMEOUT_MS;
 
     xhr.onprogress = consume;
     xhr.onload = () => {
       consume();
       if (xhr.status >= 400) {
-        finish(() =>
-          handlers.onError(new Error(`Coach request failed (${xhr.status})`))
-        );
+        finish(() => handlers.onError(errorForStatus(xhr)));
         return;
       }
       // Server closed without a done event
-      finish(() => handlers.onError(new Error("Coach response ended unexpectedly")));
+      finish(() =>
+        handlers.onError(new StreamError("Coach response ended unexpectedly"))
+      );
     };
     xhr.onerror = () =>
-      finish(() => handlers.onError(new Error("Network error reaching the coach")));
+      finish(() =>
+        handlers.onError(new StreamError("Network error reaching the coach"))
+      );
     xhr.ontimeout = () =>
-      finish(() => handlers.onError(new Error("Coach request timed out")));
+      finish(() => handlers.onError(new StreamError("Coach request timed out")));
 
     xhr.send(
       JSON.stringify({
@@ -133,6 +196,7 @@ export function streamChat(
         conversation_id: conversationId || null,
         conversation_history: conversationHistory || [],
         mode: mode || "coach",
+        model: model || undefined,
       })
     );
   };
