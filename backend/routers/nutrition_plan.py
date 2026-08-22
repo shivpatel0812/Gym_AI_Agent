@@ -20,12 +20,14 @@ from nutrition.plan_builder import (
     GOAL_KEYS,
     suggest_nutrition_goal,
 )
+from nutrition import idea_cache
 from nutrition.plan_store import (
     NutritionPlanStore,
     STATUS_ACTIVE,
     STATUS_PAUSED,
     STATUS_COMPLETED,
 )
+from nutrition.plan_review import build_plan_review
 from nutrition.today_guidance import build_today_guidance
 from nutrition.blueprint_ai import suggest_fast_food_orders, suggest_slot_fills
 from nutrition.usuals import build_usuals, entry_totals, find_usual, foods_to_log
@@ -73,6 +75,13 @@ class SuggestSlotRequest(BaseModel):
     model: Optional[str] = None
     count: Optional[int] = 1
     exclude_labels: Optional[list] = None
+    # "Give me another idea" — skip the cache and generate fresh.
+    refresh: Optional[bool] = False
+
+
+class PlanReviewRequest(BaseModel):
+    model: Optional[str] = None
+    refresh: Optional[bool] = False
 
 
 class SuggestFastFoodRequest(BaseModel):
@@ -212,7 +221,7 @@ def _usuals_payload(user_id: str, date: str, hour: Optional[int]) -> dict:
     )
     # Home shows what a tap did to the day's budget, so it rides along here
     # rather than costing the phone a second request.
-    guidance = build_today_guidance(active, foods)
+    guidance = build_today_guidance(active, foods, weekday=_weekday(date))
     payload["remaining"] = guidance.get("remaining") if guidance.get("has_plan") else None
     return payload
 
@@ -453,7 +462,7 @@ async def get_today_guidance(
     foods = _logged_foods(user_id, day)
     return {
         "status": "success",
-        "guidance": build_today_guidance(plan, foods),
+        "guidance": build_today_guidance(plan, foods, weekday=_weekday(day)),
         "date": day,
     }
 
@@ -567,15 +576,56 @@ async def suggest_slot(
     slot = (request.slot or "").strip().lower()
     if slot not in ("breakfast", "lunch", "pre_workout", "dinner", "snack", "shake", "late_night", "other"):
         raise HTTPException(status_code=400, detail="Invalid slot")
+    count = request.count or 1
+    version = int(plan.get("version") or 1)
+    # Ideas only go stale when the plan changes, so preloading a meal tab twice
+    # should not bill two model calls. Asking for another idea (exclude_labels)
+    # or an explicit refresh always generates.
+    cacheable = not request.exclude_labels and not request.refresh
+    if cacheable:
+        cached = idea_cache.get(db, user_id, plan_id, version, slot, request.stance, count)
+        if cached:
+            return {"status": "success", "suggestion": cached, "cached": True}
+
     result = suggest_slot_fills(
         plan,
         slot,
         request.stance,
         request.model,
-        count=request.count or 1,
+        count=count,
         exclude_labels=request.exclude_labels,
     )
-    return {"status": "success", "suggestion": result}
+    if cacheable and result.get("ideas"):
+        idea_cache.put(db, user_id, plan_id, version, slot, request.stance, count, result)
+    return {"status": "success", "suggestion": result, "cached": False}
+
+
+@router.post("/{plan_id}/review")
+async def review_nutrition_plan(
+    plan_id: str,
+    request: PlanReviewRequest = PlanReviewRequest(),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Coach-style read on the plan the user built: what works, what to change.
+
+    Separate from slot ideas on purpose — ideas fill a meal, this reviews the
+    shape of the whole day. Cached against the plan version so opening the page
+    does not re-bill a model call.
+    """
+    plan = _store(user_id).get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
+
+    version = int(plan.get("version") or 1)
+    if not request.refresh:
+        cached = idea_cache.get(db, user_id, plan_id, version, "__review__", None, 1)
+        if cached:
+            return {"status": "success", "review": cached, "cached": True}
+
+    review = build_plan_review(plan, _recent_nutrition(user_id), request.model)
+    idea_cache.put(db, user_id, plan_id, version, "__review__", None, 1, review)
+    return {"status": "success", "review": review, "cached": False}
 
 
 @router.post("/{plan_id}/suggest-fast-food")
@@ -629,4 +679,6 @@ async def end_nutrition_plan(plan_id: str, user_id: str = Depends(get_user_id)):
 async def delete_nutrition_plan(plan_id: str, user_id: str = Depends(get_user_id)):
     if not _store(user_id).delete(plan_id):
         raise HTTPException(status_code=404, detail="Nutrition plan not found")
+    # Cached ideas and reviews belong to a plan that no longer exists.
+    idea_cache.clear(db, user_id)
     return {"status": "success"}

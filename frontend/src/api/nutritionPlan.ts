@@ -514,7 +514,7 @@ export async function suggestSlotFills(
   slot: string,
   stance?: string,
   model?: string,
-  opts?: { count?: number; excludeLabels?: string[] }
+  opts?: { count?: number; excludeLabels?: string[]; refresh?: boolean }
 ): Promise<{
   ideas: Array<{
     label: string;
@@ -533,10 +533,39 @@ export async function suggestSlotFills(
       model,
       count: opts?.count ?? 1,
       exclude_labels: opts?.excludeLabels,
+      refresh: !!opts?.refresh,
     },
     { timeout: 60000 }
   );
   return res.data?.suggestion ?? { ideas: [] };
+}
+
+/** The coach's read on the plan the user built: agree first, then what to change. */
+export interface PlanReviewImprovement {
+  title: string;
+  why?: string;
+  how?: string;
+}
+
+export interface PlanReview {
+  verdict: string;
+  working: string[];
+  improvements: PlanReviewImprovement[];
+  /** "ai" when a model wrote it, "rules" when it came from the checks alone. */
+  source?: "ai" | "rules" | string;
+  generated_at?: string;
+}
+
+export async function getPlanReview(
+  planId: string,
+  opts?: { refresh?: boolean; model?: string }
+): Promise<PlanReview | null> {
+  const res = await apiClient.post(
+    `/api/nutrition-plan/${planId}/review`,
+    { refresh: !!opts?.refresh, model: opts?.model },
+    { timeout: 60000 }
+  );
+  return res.data?.review ?? null;
 }
 
 export async function suggestFastFoodOrders(

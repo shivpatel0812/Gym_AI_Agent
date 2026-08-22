@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import CreateNutritionPlanModal from "./CreateNutritionPlanModal";
+import PlanReviewCard from "./PlanReviewCard";
 import EditMealAnchorModal, { slotIcon } from "./EditMealAnchorModal";
 import EditGoToItemModal from "./EditGoToItemModal";
 import EditFlexibleMealModal from "./EditFlexibleMealModal";
@@ -28,12 +29,14 @@ import {
   NutritionPlan,
   NutritionPlanEdit,
   NutritionSuggestionSet,
+  PlanReview,
   PrimaryMealSlot,
   applySuggestions,
   dismissSuggestions,
   endNutritionPlan,
   getPendingSuggestions,
   getActiveNutritionPlan,
+  getPlanReview,
   goalLabel,
   HEALTH_FOCUS_DISCLAIMER,
   healthFocusLabels,
@@ -94,6 +97,8 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
   const [suggestions, setSuggestions] = useState<NutritionSuggestionSet | null>(null);
   const [planChangedSince, setPlanChangedSince] = useState(false);
   const [suggestionsBusy, setSuggestionsBusy] = useState(false);
+  const [review, setReview] = useState<PlanReview | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
 
   const loadSuggestions = useCallback(async () => {
     try {
@@ -106,6 +111,18 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     }
   }, []);
 
+  const loadReview = useCallback(async (planId: string, refresh = false) => {
+    setReviewLoading(true);
+    try {
+      setReview(await getPlanReview(planId, { refresh }));
+    } catch {
+      // The review is commentary — never block the plan page on it.
+      setReview(null);
+    } finally {
+      setReviewLoading(false);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     try {
       const [active, macrosRes] = await Promise.all([
@@ -114,7 +131,10 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       ]);
       setPlan(active);
       setMacroLogs(Array.isArray(macrosRes.data) ? macrosRes.data : []);
-      if (active) loadSuggestions();
+      if (active) {
+        loadSuggestions();
+        loadReview(active.id);
+      }
     } catch (error) {
       console.error("Error loading nutrition plan:", error);
     } finally {
@@ -1012,6 +1032,13 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
             onEdit={editSuggestion}
           />
         ) : null}
+
+        <PlanReviewCard
+          review={review}
+          loading={reviewLoading}
+          onRefresh={() => loadReview(plan.id, true)}
+          onAskCoach={onAskCoach}
+        />
 
         {dayMap ? (
           <DayMap

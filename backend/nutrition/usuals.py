@@ -13,6 +13,8 @@ this just decides what to show now and whether it has been eaten yet.
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from nutrition.meal_math import DAY_KEYS, applies_on_weekday, day_keys
+
 SLOT_LABELS = {
     "breakfast": "Breakfast",
     "lunch": "Lunch",
@@ -112,33 +114,8 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", _norm(value)).strip("-")
 
 
-DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-
-
-def applies_on_weekday(
-    frequency: Optional[str],
-    weekday: int,
-    days: Optional[List[str]] = None,
-) -> bool:
-    """weekday is Monday=0, matching datetime.weekday().
-
-    Explicit `days` (mon..sun) wins when present. Otherwise fall back to frequency.
-    """
-    if days:
-        keys = []
-        for d in days:
-            key = str(d or "").strip().lower()[:3]
-            if key in DAY_KEYS:
-                keys.append(key)
-        if keys:
-            return DAY_KEYS[weekday] in keys
-
-    freq = _norm(frequency) or "daily"
-    if freq == "weekdays":
-        return weekday < 5
-    if freq == "weekends":
-        return weekday >= 5
-    return True
+# Day rules live in meal_math so Today's guidance applies the same ones.
+# Re-exported here because callers and tests already import them from usuals.
 
 
 def is_expected(frequency: Optional[str], days: Optional[List[str]] = None) -> bool:
