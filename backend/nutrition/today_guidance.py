@@ -7,6 +7,13 @@ around what has already been eaten and which meals are still flexible.
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from nutrition.meal_math import (
+    anchor_kind,
+    anchor_macros,
+    grouped_macros,
+    items_for_weekday,
+)
+
 SLOT_TO_MEALS = {
     "breakfast": {"breakfast"},
     "lunch": {"lunch"},
@@ -90,18 +97,24 @@ def _range_text(low: Optional[float], high: Optional[float], unit: str) -> Optio
 
 
 def _macro_totals(foods: List[Dict]) -> Dict[str, float]:
-    """Calories/protein a set of planned foods is expected to contribute."""
-    totals = {"calories": 0.0, "protein": 0.0}
-    for food in foods or []:
-        totals["calories"] += _num(food.get("calories"))
-        totals["protein"] += _num(food.get("protein"))
-    return totals
+    """Calories/protein one serving of a set of planned foods contributes."""
+    return grouped_macros(foods)
 
 
 def _anchor_totals(anchors: List[Dict]) -> Dict[str, float]:
-    totals = {"calories": 0.0, "protein": 0.0}
+    """
+    What the given anchors are expected to cost.
+
+    Option meals count as one typical pick and alternates count once, so a
+    breakfast listing four choices no longer reserves four breakfasts worth of
+    calories. Uncertain meals contribute nothing and are counted separately.
+    """
+    totals = {"calories": 0.0, "protein": 0.0, "uncertain": 0}
     for anchor in anchors or []:
-        part = _macro_totals(anchor.get("foods"))
+        if anchor_kind(anchor) == "uncertain":
+            totals["uncertain"] += 1
+            continue
+        part = anchor_macros(anchor)
         totals["calories"] += part["calories"]
         totals["protein"] += part["protein"]
     return totals
@@ -192,10 +205,15 @@ def plan_coverage(plan: Dict[str, Any]) -> Dict[str, Any]:
 def build_today_guidance(
     plan: Optional[Dict[str, Any]],
     logged_foods: List[Dict],
+    weekday: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Remaining budget for today, accounting for flexible meals that have not
     been logged yet. Returns a payload the Today page can render as-is.
+
+    `weekday` is Monday=0. Pass it and only the meals mapped to that day count
+    against the budget — a Saturday-only anchor stops eating into a Tuesday.
+    Omit it and every meal counts, which is the old behaviour.
     """
     if not plan or plan.get("status") == "completed":
         return {"has_plan": False}
@@ -210,14 +228,17 @@ def build_today_guidance(
     remaining_cal = cal_target - logged["calories"] if cal_target else None
     remaining_protein = protein_target - logged["protein"] if protein_target else None
 
+    todays_flex = items_for_weekday(plan.get("flexible_meals"), weekday)
+    todays_anchors = items_for_weekday(plan.get("meal_anchors"), weekday)
+
     remaining_flex = []
-    for meal in plan.get("flexible_meals") or []:
+    for meal in todays_flex:
         if _meal_logged(meal.get("name") or "", logged_names, logged_foods):
             continue
         remaining_flex.append(meal)
 
     remaining_anchors = []
-    for anchor in plan.get("meal_anchors") or []:
+    for anchor in todays_anchors:
         if _anchor_logged(anchor, logged_names, logged_foods):
             continue
         remaining_anchors.append(anchor)
@@ -310,6 +331,16 @@ def build_today_guidance(
             f"only account for about {coverage['planned_calories_max']} of your "
             f"{int(round(cal_target))} kcal target — roughly {int(cal_gap)} kcal a day is unplanned. "
             f"Consider adding a snack or shake to your plan."
+        )
+
+    if pending_anchors.get("uncertain"):
+        count = pending_anchors["uncertain"]
+        labels = _join_names(
+            [a.get("label") for a in remaining_anchors if anchor_kind(a) == "uncertain"]
+        )
+        messages.append(
+            f"{count} meal{'s' if count > 1 else ''} still undecided"
+            f"{f' ({labels})' if labels else ''} — those calories are not counted above."
         )
 
     priorities = plan.get("food_priorities") or []

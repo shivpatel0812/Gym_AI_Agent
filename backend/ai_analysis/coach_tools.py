@@ -13,11 +13,16 @@ the routers, because routers/ already imports ai_analysis/.
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
+from nutrition.meal_math import anchor_kind, anchor_macros
+
 # Caps to keep tool results from blowing up the context window
 MAX_SESSIONS = 20
 MAX_EXERCISE_ENTRIES = 12
 MAX_RECORDS = 15
 MAX_DAYS_LOOKBACK = 365
+# Enough to see the shape of a day without turning one tool call into a wall
+# of JSON the model has to read past.
+MAX_FOODS_PER_DAY = 12
 
 # Epley's formula loses meaning past ~12 reps; beyond this we report no estimate
 MAX_1RM_REPS = 12
@@ -254,23 +259,72 @@ class CoachToolbox:
             "days": days,
         }
 
-    def get_nutrition_log(self, days: int = 7) -> Dict[str, Any]:
-        """Day-by-day macro totals."""
+    def get_nutrition_log(self, days: int = 7, include_foods: bool = True) -> Dict[str, Any]:
+        """
+        Day-by-day macro totals, and by default the foods behind them.
+
+        Totals alone cannot answer "what did I eat Tuesday?" or notice that
+        every dinner this week was the same takeout, so the item names ride
+        along unless the caller opts out.
+        """
         rows = self._fetch_range("macros", days)
-        return {
-            "days": days,
-            "days_logged": len(rows),
-            "entries": [
-                {
-                    "date": r.get("date"),
-                    "calories": r.get("total_calories"),
-                    "protein": r.get("total_protein"),
-                    "carbs": r.get("total_carbs"),
-                    "fats": r.get("total_fats"),
-                }
-                for r in rows
-            ],
-        }
+        entries = []
+        for r in rows:
+            entry = {
+                "date": r.get("date"),
+                "calories": r.get("total_calories"),
+                "protein": r.get("total_protein"),
+                "carbs": r.get("total_carbs"),
+                "fats": r.get("total_fats"),
+                "fiber": r.get("total_fiber"),
+            }
+            if include_foods:
+                entry["foods"] = [
+                    {
+                        "name": item.get("name"),
+                        "meal": item.get("meal"),
+                        "calories": item.get("calories"),
+                        "protein": item.get("protein"),
+                    }
+                    for item in (r.get("food_items") or [])[:MAX_FOODS_PER_DAY]
+                    if isinstance(item, dict) and item.get("name")
+                ]
+            entries.append(entry)
+        return {"days": days, "days_logged": len(entries), "entries": entries}
+
+    def get_today_remaining(self, date: Optional[str] = None) -> Dict[str, Any]:
+        """What is actually left of today's budget, plan-aware."""
+        from datetime import datetime as _dt
+
+        from nutrition.plan_store import NutritionPlanStore
+        from nutrition.today_guidance import build_today_guidance
+
+        day = str(date or _dt.now().strftime("%Y-%m-%d"))[:10]
+        try:
+            plan = NutritionPlanStore(self.db, self.user_id).get_active()
+        except Exception as e:
+            return {"error": f"Could not load nutrition plan: {e}"}
+        if not plan:
+            return {"status": "no_plan", "message": "No active nutrition plan."}
+
+        try:
+            asked = _dt.strptime(day, "%Y-%m-%d")
+        except ValueError:
+            asked = _dt.now()
+            day = asked.strftime("%Y-%m-%d")
+        # Reach back far enough to include the day being asked about, not just
+        # today, so "what was left on Sunday" still finds Sunday's food.
+        lookback = max(1, min((_dt.now() - asked).days + 1, 30))
+
+        foods = []
+        for row in self._fetch_range("macros", lookback):
+            if str(row.get("date") or "")[:10] == day:
+                foods.extend(row.get("food_items") or [])
+        weekday = asked.weekday()
+
+        guidance = build_today_guidance(plan, foods, weekday=weekday)
+        guidance["date"] = day
+        return guidance
 
     def get_training_plan(self) -> Dict[str, Any]:
         """Active workout/training plan so nutrition advice can support the lifts."""
@@ -311,7 +365,25 @@ class CoachToolbox:
                     "label": a.get("label"),
                     "slot": a.get("slot"),
                     "frequency": a.get("frequency"),
-                    "foods": [f.get("name") for f in (a.get("foods") or []) if f.get("name")],
+                    # Which weekdays it actually applies to, and whether it is a
+                    # fixed meal, a pick from options, or still undecided —
+                    # without these the coach edits a meal it cannot see.
+                    "days": a.get("days") or [],
+                    "kind": anchor_kind(a),
+                    "place": a.get("place"),
+                    "expected_calories": round(anchor_macros(a)["calories"]) or None,
+                    "expected_protein": round(anchor_macros(a)["protein"]) or None,
+                    "foods": [
+                        {
+                            "name": f.get("name"),
+                            "amount": f.get("amount"),
+                            "calories": f.get("calories"),
+                            "protein": f.get("protein"),
+                            "alternate_group": f.get("group_key"),
+                        }
+                        for f in (a.get("foods") or [])
+                        if f.get("name")
+                    ],
                 }
                 for a in (plan.get("meal_anchors") or [])
             ],
@@ -551,6 +623,7 @@ class CoachToolbox:
             "get_todays_plan": self.get_todays_plan,
             "get_current_split": self.get_current_split,
             "get_nutrition_log": self.get_nutrition_log,
+            "get_today_remaining": self.get_today_remaining,
             "get_nutrition_plan": self.get_nutrition_plan,
             "get_training_plan": self.get_training_plan,
             "get_wellness_log": self.get_wellness_log,
@@ -645,12 +718,42 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "get_nutrition_log",
             "description": (
-                "Get day-by-day calorie and macro totals. Use for questions about eating "
-                "patterns, protein intake, or nutrition consistency on specific days."
+                "Get day-by-day calories, macros (including fiber) and the foods logged "
+                "each day. Use for questions about eating patterns, protein or fiber "
+                "intake, repetition, or what they actually ate on a given day."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"days": _days_param("How many days back to look", 7)},
+                "properties": {
+                    "days": _days_param("How many days back to look", 7),
+                    "include_foods": {
+                        "type": "boolean",
+                        "description": "Include the food names per day (default true). "
+                                       "Set false when you only need totals.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_today_remaining",
+            "description": (
+                "What is left of today's calorie and protein budget right now, after what "
+                "has already been logged and after setting aside the planned meals that "
+                "still apply today. Call this before answering 'what should I eat for "
+                "dinner/next' so the answer uses the real remaining budget instead of "
+                "averages. Only the meals mapped to today's weekday are counted."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD. Omit for today.",
+                    }
+                },
             },
         },
     },

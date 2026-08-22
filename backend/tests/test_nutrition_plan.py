@@ -451,3 +451,100 @@ def test_health_focus_labels_ignore_unknown_ids():
 
     assert health_focus_labels(["digestion", "cancer"]) == ["Easier digestion"]
     assert health_focus_labels(None) == []
+
+
+def _day_plan():
+    return {
+        "status": "active",
+        "targets": {"calories": 2000, "protein": 150},
+        "meal_anchors": [
+            {
+                "id": "weekday-breakfast",
+                "slot": "breakfast",
+                "label": "Breakfast",
+                "days": ["mon", "tue", "wed", "thu", "fri"],
+                "foods": [{"name": "oatmeal", "calories": 400, "protein": 20}],
+            },
+            {
+                "id": "weekend-brunch",
+                "slot": "lunch",
+                "label": "Brunch",
+                "days": ["sat", "sun"],
+                "foods": [{"name": "eggs and toast", "calories": 700, "protein": 35}],
+            },
+        ],
+        "flexible_meals": [],
+    }
+
+
+def test_today_guidance_only_counts_meals_mapped_to_that_day():
+    plan = _day_plan()
+    # Monday: the weekday breakfast is pending, the weekend brunch is not.
+    monday = build_today_guidance(plan, [], weekday=0)
+    saturday = build_today_guidance(plan, [], weekday=5)
+
+    assert "400" not in (saturday["headline"] or "")
+    assert monday["headline"] != saturday["headline"]
+    # 2000 - 400 pending breakfast on Monday, 2000 - 700 brunch on Saturday.
+    assert "1600" in " ".join(monday["messages"]) or "1,600" in " ".join(monday["messages"])
+    assert "1300" in " ".join(saturday["messages"]) or "1,300" in " ".join(saturday["messages"])
+
+
+def test_option_meals_are_counted_once_not_summed():
+    """A 'potential' breakfast with four options is one breakfast, not four."""
+    plan = {
+        "status": "active",
+        "targets": {"calories": 2000, "protein": 150},
+        "meal_anchors": [
+            {
+                "id": "options",
+                "slot": "breakfast",
+                "label": "Breakfast",
+                "kind": "potential",
+                "foods": [
+                    {"name": "bagel", "calories": 400, "protein": 12},
+                    {"name": "oatmeal", "calories": 400, "protein": 12},
+                    {"name": "eggs", "calories": 400, "protein": 12},
+                    {"name": "yogurt", "calories": 400, "protein": 12},
+                ],
+            }
+        ],
+        "flexible_meals": [],
+    }
+    coverage = plan_coverage(plan)
+    assert coverage["planned_calories_max"] == 400
+
+
+def test_alternates_sharing_a_group_key_count_once():
+    plan = {
+        "status": "active",
+        "targets": {"calories": 2000, "protein": 150},
+        "meal_anchors": [
+            {
+                "id": "grouped",
+                "slot": "breakfast",
+                "label": "Breakfast",
+                "foods": [
+                    {"name": "shake A", "calories": 200, "protein": 30, "group_key": "shake"},
+                    {"name": "shake B", "calories": 220, "protein": 32, "group_key": "shake"},
+                    {"name": "banana", "calories": 100, "protein": 1},
+                ],
+            }
+        ],
+        "flexible_meals": [],
+    }
+    # One shake (200) + banana (100), not both shakes.
+    assert plan_coverage(plan)["planned_calories_max"] == 300
+
+
+def test_uncertain_meals_are_flagged_not_silently_free():
+    plan = {
+        "status": "active",
+        "targets": {"calories": 2000, "protein": 150},
+        "meal_anchors": [
+            {"id": "u", "slot": "dinner", "label": "Dinner out", "kind": "uncertain", "foods": []}
+        ],
+        "flexible_meals": [],
+    }
+    guidance = build_today_guidance(plan, [], weekday=0)
+    assert any("undecided" in m for m in guidance["messages"])
