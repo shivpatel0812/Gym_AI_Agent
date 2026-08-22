@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -12,11 +12,12 @@ import {
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import CreateNutritionPlanModal from "./CreateNutritionPlanModal";
-import EditMealAnchorModal, { slotIcon, sumAnchorMacros } from "./EditMealAnchorModal";
+import EditMealAnchorModal, { slotIcon } from "./EditMealAnchorModal";
 import EditGoToItemModal from "./EditGoToItemModal";
 import EditFlexibleMealModal from "./EditFlexibleMealModal";
-import DayMap from "./DayMap";
+import DayMap, { SlotIdea } from "./DayMap";
 import AddBlueprintModal, { BlueprintAddResult } from "./AddBlueprintModal";
+import PlanSuggestions from "./PlanSuggestions";
 import {
   BlueprintExtra,
   DayBand,
@@ -25,10 +26,13 @@ import {
   GoToItem,
   MealAnchor,
   NutritionPlan,
+  NutritionPlanEdit,
+  NutritionSuggestionSet,
   PrimaryMealSlot,
-  SlotStance,
+  applySuggestions,
+  dismissSuggestions,
   endNutritionPlan,
-  frequencyLabel,
+  getPendingSuggestions,
   getActiveNutritionPlan,
   goalLabel,
   pauseNutritionPlan,
@@ -39,6 +43,7 @@ import {
   updateNutritionPlan,
 } from "../../../api/nutritionPlan";
 import { buildDayMap } from "../../../lib/dayMap";
+import { LoggedMealPattern } from "../../../lib/recentMeals";
 import { AI_MODEL_STORAGE_KEY, normalizeAiModel } from "../../../lib/aiModels";
 import apiClient from "../../../api/client";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -48,24 +53,11 @@ interface Props {
   onAskCoach?: (prompt: string) => void;
 }
 
-const MACRO_TILES = [
-  { key: "protein", label: "Protein", icon: "food-steak" as const, color: "#FF6B35", unit: "g" },
-  { key: "carbs", label: "Carbs", icon: "barley" as const, color: "#F5C542", unit: "g" },
-  { key: "fats", label: "Fat", icon: "water" as const, color: "#C4B5FD", unit: "g" },
-  { key: "fiber", label: "Fiber", icon: "leaf" as const, color: "#4ADE80", unit: "g" },
-];
-
 export default function NutritionPlanTab({ onAskCoach }: Props) {
   const [plan, setPlan] = useState<NutritionPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const [editingTargets, setEditingTargets] = useState(false);
-  const [cal, setCal] = useState("");
-  const [protein, setProtein] = useState("");
-  const [carbs, setCarbs] = useState("");
-  const [fats, setFats] = useState("");
-  const [fiber, setFiber] = useState("");
   const [editingFlex, setEditingFlex] = useState<FlexibleMeal | null>(null);
   const [editingFlexIndex, setEditingFlexIndex] = useState<number | null>(null);
   const [flexEditorOpen, setFlexEditorOpen] = useState(false);
@@ -75,10 +67,11 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
   const [editingGoTo, setEditingGoTo] = useState<GoToItem | null>(null);
   const [editingGoToIndex, setEditingGoToIndex] = useState<number | null>(null);
   const [goToEditorOpen, setGoToEditorOpen] = useState(false);
-  const [strategyOpen, setStrategyOpen] = useState(false);
   const [addBand, setAddBand] = useState<DayBand | null>(null);
   const [editingExtra, setEditingExtra] = useState<BlueprintExtra | null>(null);
   const [suggestingSlot, setSuggestingSlot] = useState<string | null>(null);
+  const [ideasBySlot, setIdeasBySlot] = useState<Record<string, SlotIdea[]>>({});
+  const [preloadedSlots, setPreloadedSlots] = useState<Record<string, boolean>>({});
   const [suggestingPlaceId, setSuggestingPlaceId] = useState<string | null>(null);
   const [orderSuggestions, setOrderSuggestions] = useState<
     Record<
@@ -95,18 +88,31 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       }
     >
   >({});
+  const [macroLogs, setMacroLogs] = useState<any[]>([]);
+  const [suggestions, setSuggestions] = useState<NutritionSuggestionSet | null>(null);
+  const [planChangedSince, setPlanChangedSince] = useState(false);
+  const [suggestionsBusy, setSuggestionsBusy] = useState(false);
+
+  const loadSuggestions = useCallback(async () => {
+    try {
+      const pending = await getPendingSuggestions();
+      setSuggestions(pending.suggestion);
+      setPlanChangedSince(pending.plan_changed_since);
+    } catch {
+      // Suggestions are additive — a failure here must not hide the plan.
+      setSuggestions(null);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
-      const active = await getActiveNutritionPlan();
+      const [active, macrosRes] = await Promise.all([
+        getActiveNutritionPlan(),
+        apiClient.get("/api/macros").catch(() => ({ data: [] })),
+      ]);
       setPlan(active);
-      if (active?.targets) {
-        setCal(String(active.targets.calories ?? ""));
-        setProtein(String(active.targets.protein ?? ""));
-        setCarbs(String(active.targets.carbs ?? ""));
-        setFats(String(active.targets.fats ?? ""));
-        setFiber(String(active.targets.fiber ?? ""));
-      }
+      setMacroLogs(Array.isArray(macrosRes.data) ? macrosRes.data : []);
+      if (active) loadSuggestions();
     } catch (error) {
       console.error("Error loading nutrition plan:", error);
     } finally {
@@ -119,14 +125,122 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     load();
   }, [load]);
 
+  const acceptSuggestions = async (editIds?: string[]) => {
+    if (!suggestions) return;
+    setSuggestionsBusy(true);
+    try {
+      const result = await applySuggestions(suggestions.id, editIds);
+      // The response carries the merged plan, so no second round trip
+      setPlan(result.plan);
+      setSuggestions(result.suggestion);
+      setPlanChangedSince(false);
+      if (result.stale_edit_ids?.length) {
+        Alert.alert(
+          "Some updates were skipped",
+          "They no longer matched your plan. Ask the coach again if you still want them."
+        );
+      }
+    } catch {
+      Alert.alert("Error", "Could not apply those suggestions.");
+    } finally {
+      setSuggestionsBusy(false);
+    }
+  };
+
+  const rejectSuggestions = async (editIds?: string[]) => {
+    if (!suggestions) return;
+    setSuggestionsBusy(true);
+    try {
+      const result = await dismissSuggestions(suggestions.id, editIds);
+      setSuggestions(result.suggestion);
+    } catch {
+      Alert.alert("Error", "Could not dismiss those suggestions.");
+    } finally {
+      setSuggestionsBusy(false);
+    }
+  };
+
+  /** Accept-with-changes: open the normal editor prefilled from the suggestion. */
+  const editSuggestion = (edit: NutritionPlanEdit) => {
+    if (edit.field === "meal_anchors" && edit.payload) {
+      const index = (plan?.meal_anchors || []).findIndex((a) => a.id === edit.payload.id);
+      setEditingAnchor(edit.payload as MealAnchor);
+      setEditingAnchorIndex(index >= 0 ? index : null);
+      setAnchorEditorOpen(true);
+      return;
+    }
+    if (edit.field === "go_to_items" && edit.payload) {
+      const index = (plan?.go_to_items || []).findIndex((g) => g.id === edit.payload.id);
+      setEditingGoTo(edit.payload as GoToItem);
+      setEditingGoToIndex(index >= 0 ? index : null);
+      setGoToEditorOpen(true);
+      return;
+    }
+    if (edit.field === "flexible_meals" && edit.payload) {
+      const index = (plan?.flexible_meals || []).findIndex((m) => m.id === edit.payload.id);
+      setEditingFlex(edit.payload as FlexibleMeal);
+      setEditingFlexIndex(index >= 0 ? index : null);
+      setFlexEditorOpen(true);
+    }
+  };
+
+  /**
+   * Tapping day cells fires one PATCH per tap. Responses can land out of
+   * order, and an older one carries the older day set — applying it would
+   * silently undo the taps that came after it. Only the newest save writes
+   * state back.
+   */
+  const saveSeq = useRef(0);
+
   const savePatch = async (patch: Partial<NutritionPlan>) => {
     if (!plan) return false;
+    const seq = ++saveSeq.current;
     try {
       const updated = await updateNutritionPlan(plan.id, patch);
+      if (seq !== saveSeq.current) return true;
+      const preferAnchors = patch.meal_anchors ?? plan.meal_anchors ?? [];
+      const preferById = new Map(
+        preferAnchors.filter((a) => a.id).map((a) => [a.id as string, a])
+      );
+      const mergeAnchorKind = (a: MealAnchor): MealAnchor => {
+        const local = a.id ? preferById.get(a.id) : undefined;
+        const src = local || a;
+        const kind =
+          (src.kind as MealAnchor["kind"]) ||
+          (src.uncertain ? "uncertain" : src.varies ? "potential" : "individual");
+        return {
+          ...a,
+          ...(local || {}),
+          kind,
+          varies: kind === "potential",
+          uncertain: kind === "uncertain",
+          place: local?.place ?? a.place,
+          days: local?.days ?? a.days,
+        };
+      };
+      let mealAnchors = updated.meal_anchors ?? patch.meal_anchors ?? plan.meal_anchors;
+      if (mealAnchors?.length) {
+        mealAnchors = mealAnchors.map(mergeAnchorKind);
+      }
+      let goTos = updated.go_to_items ?? patch.go_to_items ?? plan.go_to_items;
+      if (patch.go_to_items?.length && goTos?.length) {
+        const byId = new Map(
+          patch.go_to_items.filter((g) => g.id).map((g) => [g.id as string, g])
+        );
+        goTos = goTos.map((g) => {
+          const local = g.id ? byId.get(g.id) : undefined;
+          if (!local) return g;
+          return {
+            ...g,
+            ...local,
+            days: local.days ?? g.days ?? [],
+          };
+        });
+      }
       setPlan({
         ...updated,
-        go_to_items: updated.go_to_items ?? patch.go_to_items ?? plan.go_to_items,
-        meal_anchors: updated.meal_anchors ?? patch.meal_anchors ?? plan.meal_anchors,
+        go_to_items: goTos,
+        meal_anchors: mealAnchors,
         flexible_meals: updated.flexible_meals ?? patch.flexible_meals ?? plan.flexible_meals,
         blueprint_extras:
           updated.blueprint_extras ?? patch.blueprint_extras ?? plan.blueprint_extras,
@@ -136,24 +250,14 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       });
       return true;
     } catch {
+      // A newer save is already in flight — let it own the outcome instead of
+      // reloading the plan out from under it.
+      if (seq !== saveSeq.current) return true;
       Alert.alert("Error", "Could not save that change.");
       return false;
     }
   };
 
-  const saveTargets = async () => {
-    await savePatch({
-      targets: {
-        ...plan?.targets,
-        calories: Number(cal) || plan?.targets.calories,
-        protein: Number(protein) || plan?.targets.protein,
-        carbs: Number(carbs) || plan?.targets.carbs,
-        fats: Number(fats) || plan?.targets.fats,
-        fiber: Number(fiber) || plan?.targets.fiber,
-      },
-    });
-    setEditingTargets(false);
-  };
 
   const openNewAnchor = () => {
     setEditingAnchor({
@@ -166,7 +270,10 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     setAnchorEditorOpen(true);
   };
 
-  const openNewAnchorForBand = (slot: PrimaryMealSlot | DayBand) => {
+  const openNewAnchorForBand = (
+    slot: PrimaryMealSlot | DayBand,
+    kind: "individual" | "potential" | "uncertain" = "individual"
+  ) => {
     const resolved: PrimaryMealSlot =
       slot === "Morning"
         ? "breakfast"
@@ -177,12 +284,18 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
             : slot === "Late"
               ? "snack"
               : (slot as PrimaryMealSlot);
+    const defaults =
+      kind === "potential"
+        ? { label: `${slotLabel(resolved)} options`, varies: true, uncertain: false, kind: "potential" as const }
+        : kind === "uncertain"
+          ? { label: `Uncertain ${slotLabel(resolved).toLowerCase()}`, varies: false, uncertain: true, kind: "uncertain" as const }
+          : { label: slotLabel(resolved), varies: false, uncertain: false, kind: "individual" as const };
     setEditingAnchor({
       slot: resolved,
-      label: slotLabel(resolved),
       foods: [],
       frequency: "daily",
       days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      ...defaults,
     });
     setEditingAnchorIndex(null);
     setAnchorEditorOpen(true);
@@ -241,7 +354,7 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       setAddBand((extra.band as DayBand) || slot.band);
       return;
     }
-    if (slot.kind === "suggest") {
+    if (slot.kind === "suggest" || slot.kind === "goto") {
       const items = plan.go_to_items || [];
       const idx =
         items.findIndex((g) => g.id && g.id === slot.sourceId) >= 0
@@ -253,19 +366,84 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     }
   };
 
+  const toggleBlueprintDay = async (
+    slot: import("../../../lib/dayMap").DayMapSlot,
+    dayId: string
+  ) => {
+    if (!plan) return;
+    const day = String(dayId).slice(0, 3).toLowerCase();
+    const normDays = (days?: string[] | null) =>
+      (days || [])
+        .map((d) => String(d).slice(0, 3).toLowerCase())
+        .filter((d) => ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].includes(d));
+
+    if (slot.kind === "anchor") {
+      const idx = findAnchorIndex(slot);
+      if (idx < 0 || !plan.meal_anchors[idx]) return;
+      const anchor = plan.meal_anchors[idx];
+      // Prefer the grid's days (includes daily/weekdays materialization) over raw storage.
+      const current = normDays(slot.days?.length ? slot.days : anchor.days);
+      const has = current.includes(day);
+      const nextDays = has ? current.filter((d) => d !== day) : [...current, day];
+      const anchors = [...plan.meal_anchors];
+      anchors[idx] = {
+        ...anchor,
+        days: nextDays as any,
+        frequency: nextDays.length === 7 ? "daily" : "most_days",
+      };
+      setPlan((prev) => (prev ? { ...prev, meal_anchors: anchors } : prev));
+      const ok = await savePatch({ meal_anchors: anchors });
+      if (!ok) await load();
+      return;
+    }
+    if (slot.kind === "goto" || slot.kind === "suggest") {
+      const items = [...(plan.go_to_items || [])];
+      const idx =
+        items.findIndex((g) => g.id && g.id === slot.sourceId) >= 0
+          ? items.findIndex((g) => g.id === slot.sourceId)
+          : typeof slot.sourceIndex === "number"
+            ? slot.sourceIndex
+            : -1;
+      if (idx < 0 || !items[idx]) return;
+      const item = items[idx];
+      const current = normDays(slot.days?.length ? slot.days : item.days);
+      const has = current.includes(day);
+      const nextDays = has ? current.filter((d) => d !== day) : [...current, day];
+      items[idx] = { ...item, days: nextDays as any };
+      setPlan((prev) => (prev ? { ...prev, go_to_items: items } : prev));
+      const ok = await savePatch({ go_to_items: items });
+      if (!ok) await load();
+    }
+  };
+
   const saveAnchor = async (next: MealAnchor) => {
     if (!plan) return;
+    const kind =
+      next.kind ||
+      (next.uncertain ? "uncertain" : next.varies ? "potential" : "individual");
+    const normalized: MealAnchor = {
+      ...next,
+      kind,
+      varies: kind === "potential",
+      uncertain: kind === "uncertain",
+    };
     const anchors = [...(plan.meal_anchors || [])];
     if (editingAnchorIndex != null && editingAnchorIndex >= 0) {
-      anchors[editingAnchorIndex] = next;
-    } else if (next.id) {
-      const idx = anchors.findIndex((a) => a.id === next.id);
-      if (idx >= 0) anchors[idx] = next;
-      else anchors.push(next);
+      anchors[editingAnchorIndex] = normalized;
+    } else if (normalized.id) {
+      const idx = anchors.findIndex((a) => a.id === normalized.id);
+      if (idx >= 0) anchors[idx] = normalized;
+      else anchors.push(normalized);
     } else {
-      anchors.push(next);
+      anchors.push(normalized);
     }
-    await savePatch({ meal_anchors: anchors });
+    // Optimistic UI so color updates even if the response is slow / stale.
+    setPlan((prev) => (prev ? { ...prev, meal_anchors: anchors } : prev));
+    const ok = await savePatch({ meal_anchors: anchors });
+    if (!ok) {
+      // Reload so we don't leave a lying optimistic state.
+      await load();
+    }
     setAnchorEditorOpen(false);
     setEditingAnchor(null);
     setEditingAnchorIndex(null);
@@ -340,8 +518,8 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     ]);
   };
 
-  const openNewGoTo = () => {
-    setEditingGoTo(null);
+  const openNewGoTo = (slot?: PrimaryMealSlot | string) => {
+    setEditingGoTo(slot ? { slot, name: "" } : null);
     setEditingGoToIndex(null);
     setGoToEditorOpen(true);
   };
@@ -354,18 +532,26 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
 
   const saveGoTo = async (next: GoToItem) => {
     if (!plan) return;
+    const normalized: GoToItem = {
+      ...next,
+      days: (next.days || []).map((d) => String(d).slice(0, 3).toLowerCase()),
+    };
     const items = [...(plan.go_to_items || [])];
     if (editingGoToIndex != null && editingGoToIndex >= 0) {
-      items[editingGoToIndex] = next;
-    } else if (next.id) {
-      const idx = items.findIndex((g) => g.id === next.id);
-      if (idx >= 0) items[idx] = next;
-      else items.push(next);
+      items[editingGoToIndex] = normalized;
+    } else if (normalized.id) {
+      const idx = items.findIndex((g) => g.id === normalized.id);
+      if (idx >= 0) items[idx] = normalized;
+      else items.push(normalized);
     } else {
-      items.push(next);
+      items.push(normalized);
     }
+    setPlan((prev) => (prev ? { ...prev, go_to_items: items } : prev));
     const ok = await savePatch({ go_to_items: items });
-    if (!ok) return;
+    if (!ok) {
+      await load();
+      return;
+    }
     setGoToEditorOpen(false);
     setEditingGoTo(null);
     setEditingGoToIndex(null);
@@ -490,67 +676,122 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     ]);
   };
 
-  const setSlotStance = async (slot: PrimaryMealSlot, stance: SlotStance) => {
-    if (!plan) return;
-    const profiles = [...(plan.slot_profiles || [])];
-    const idx = profiles.findIndex((p) => p.slot === slot);
-    if (idx >= 0) profiles[idx] = { ...profiles[idx], stance };
-    else profiles.push({ slot, stance, notes: null });
-    // ensure all primary slots exist via backend normalize
-    await savePatch({ slot_profiles: profiles });
-  };
+  const mapIdea = (idea: {
+    label: string;
+    foods?: Array<{
+      name?: string;
+      calories?: number | null;
+      protein?: number | null;
+      carbs?: number | null;
+      fats?: number | null;
+    }>;
+    days?: string[];
+    notes?: string;
+  }, fallbackNotes?: string | null): SlotIdea => ({
+    label: idea.label,
+    foods: (idea.foods || []).map((f) => ({
+      name: f.name,
+      calories: f.calories ?? undefined,
+      protein: f.protein ?? undefined,
+      carbs: f.carbs ?? undefined,
+      fats: f.fats ?? undefined,
+    })),
+    days: idea.days,
+    notes: idea.notes || fallbackNotes || undefined,
+  });
 
-  const runSuggestSlot = async (slot: PrimaryMealSlot) => {
+  const runSuggestSlot = async (
+    slot: PrimaryMealSlot,
+    mode: "preload" | "more" = "more"
+  ) => {
     if (!plan) return;
+    if (mode === "preload" && (preloadedSlots[slot] || suggestingSlot === slot)) return;
+    if (mode === "more" && suggestingSlot) return;
+
     setSuggestingSlot(slot);
+    if (mode === "preload") {
+      setPreloadedSlots((prev) => ({ ...prev, [slot]: true }));
+    }
     try {
       const stance =
         (plan.slot_profiles || []).find((p) => p.slot === slot)?.stance || "anchors";
+      const existing = ideasBySlot[slot] || [];
       const suggestion = await suggestSlotFills(
         plan.id,
         slot,
         String(stance),
-        normalizeAiModel(await AsyncStorage.getItem(AI_MODEL_STORAGE_KEY))
+        normalizeAiModel(await AsyncStorage.getItem(AI_MODEL_STORAGE_KEY)),
+        {
+          count: mode === "preload" ? 1 : 2,
+          excludeLabels: existing.map((i) => i.label),
+        }
       );
-      if (suggestion.ideas?.length) {
-        Alert.alert(
-          `Ideas for ${slotLabel(slot)}`,
-          suggestion.ideas
-            .map(
-              (idea, i) =>
-                `${i + 1}. ${idea.label}${
-                  idea.foods?.length ? ` — ${idea.foods.map((f) => f.name).join(", ")}` : ""
-                }`
-            )
-            .join("\n\n") + (suggestion.notes ? `\n\n${suggestion.notes}` : ""),
-          [
-            { text: "Close", style: "cancel" },
-            {
-              text: "Add first idea",
-              onPress: () => {
-                const idea = suggestion.ideas[0];
-                setEditingAnchor({
-                  slot,
-                  label: idea.label,
-                  foods: idea.foods || [{ name: idea.label }],
-                  frequency: "most_days",
-                  days: (idea.days as any) || ["mon", "tue", "wed", "thu", "fri"],
-                  notes: idea.notes || null,
-                });
-                setEditingAnchorIndex(null);
-                setAnchorEditorOpen(true);
-              },
-            },
-          ]
-        );
-      } else {
-        Alert.alert("No ideas yet", suggestion.notes || "Try again in a moment.");
+      const mapped = (suggestion.ideas || [])
+        .map((idea) => mapIdea(idea, suggestion.notes))
+        .slice(0, mode === "preload" ? 1 : 2);
+      if (mapped.length) {
+        setIdeasBySlot((prev) => {
+          const cur = prev[slot] || [];
+          const seen = new Set(cur.map((i) => i.label.toLowerCase()));
+          const fresh = mapped.filter((i) => !seen.has(i.label.toLowerCase()));
+          return { ...prev, [slot]: [...cur, ...fresh].slice(0, 6) };
+        });
+      } else if (mode === "more") {
+        Alert.alert("No more ideas", suggestion.notes || "Try again in a moment.");
       }
     } catch {
-      Alert.alert("Error", "Could not get AI suggestions.");
+      if (mode === "preload") {
+        // Allow a retry next time this slot is focused.
+        setPreloadedSlots((prev) => ({ ...prev, [slot]: false }));
+      } else {
+        Alert.alert("Error", "Could not get AI suggestions.");
+      }
     } finally {
       setSuggestingSlot(null);
     }
+  };
+
+  const addIdeaAsAnchor = (idea: SlotIdea, slot: PrimaryMealSlot) => {
+    setEditingAnchor({
+      slot,
+      label: idea.label,
+      foods: (idea.foods as any) || [{ name: idea.label }],
+      frequency: "most_days",
+      days: (idea.days as any) || ["mon", "tue", "wed", "thu", "fri"],
+      notes: idea.notes || null,
+    });
+    setEditingAnchorIndex(null);
+    setAnchorEditorOpen(true);
+  };
+
+  const addLoggedMealAsAnchor = (pattern: LoggedMealPattern, slot: PrimaryMealSlot) => {
+    const days =
+      pattern.days?.length >= 2
+        ? (pattern.days as any)
+        : ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    setEditingAnchor({
+      slot,
+      label: pattern.name,
+      foods: [
+        {
+          name: pattern.name,
+          amount: pattern.amount || null,
+          calories: pattern.calories || null,
+          protein: pattern.protein || null,
+          carbs: pattern.carbs ?? null,
+          fats: pattern.fats ?? null,
+          fiber: pattern.fiber ?? null,
+        },
+      ],
+      frequency: pattern.count >= 4 ? "most_days" : "few_times_week",
+      days,
+      kind: "individual",
+      varies: false,
+      uncertain: false,
+      notes: pattern.count > 1 ? `Logged ${pattern.count}× in the last month` : null,
+    });
+    setEditingAnchorIndex(null);
+    setAnchorEditorOpen(true);
   };
 
   const addFastFoodPlace = async (slot: PrimaryMealSlot, name: string) => {
@@ -710,26 +951,6 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     );
   }
 
-  const range =
-    plan.targets.calories_min && plan.targets.calories_max
-      ? `${plan.targets.calories_min}–${plan.targets.calories_max} kcal`
-      : null;
-
-  const macroValues: Record<string, number | null | undefined> = {
-    protein: plan.targets.protein,
-    carbs: plan.targets.carbs,
-    fats: plan.targets.fats,
-    fiber: plan.targets.fiber,
-  };
-
-  const preferenceTags = [
-    ...(plan.preferences?.likes || []),
-    ...(plan.preferences?.dislikes || []).map((d) => `No ${d}`),
-  ];
-  if (plan.preferences?.dietary_restrictions) {
-    preferenceTags.push(plan.preferences.dietary_restrictions);
-  }
-
   return (
     <View style={styles.container}>
       <ScrollView
@@ -761,291 +982,51 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.title}>{goalLabel(plan.goal)}</Text>
-        {plan.goal_detail ? <Text style={styles.subtitle}>{plan.goal_detail}</Text> : null}
+        {plan.carryover_note ? (
+          <View style={styles.carryover}>
+            <Text style={styles.carryoverText}>{plan.carryover_note}</Text>
+            <TouchableOpacity onPress={() => savePatch({ carryover_note: "" })}>
+              <Text style={styles.carryoverDismiss}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {suggestions ? (
+          <PlanSuggestions
+            set={suggestions}
+            planChangedSince={planChangedSince}
+            busy={suggestionsBusy}
+            onAccept={acceptSuggestions}
+            onDismiss={rejectSuggestions}
+            onEdit={editSuggestion}
+          />
+        ) : null}
 
         {dayMap ? (
           <DayMap
             map={dayMap}
-            strategyExpanded={strategyOpen}
-            onEditStrategy={() => setStrategyOpen((v) => !v)}
             onAddAnchor={openNewAnchorForBand}
+            onAddGoTo={(slot) => openNewGoTo(slot)}
             onPressSlot={handlePressBlueprintSlot}
-            onStanceChange={setSlotStance}
-            onSuggestSlot={runSuggestSlot}
+            onToggleDay={toggleBlueprintDay}
+            onSuggestSlot={(slot) => runSuggestSlot(slot, "more")}
+            onPreloadSlot={(slot) => runSuggestSlot(slot, "preload")}
             suggestingSlot={suggestingSlot}
+            slotIdeas={ideasBySlot}
+            onAddIdea={addIdeaAsAnchor}
+            macroLogs={macroLogs}
+            onAddLoggedMeal={addLoggedMealAsAnchor}
             onAddPlace={addFastFoodPlace}
             onSuggestOrders={runSuggestOrders}
             suggestingPlaceId={suggestingPlaceId}
             orderSuggestions={orderSuggestions}
             onLogOrder={logSuggestedOrder}
           />
-        ) : null}
-
-        <View style={styles.targetsStrip}>
-          <View style={styles.cardHead}>
-            <Text style={styles.cardTitle}>Daily targets</Text>
-            <TouchableOpacity onPress={() => (editingTargets ? saveTargets() : setEditingTargets(true))}>
-              <Text style={styles.link}>{editingTargets ? "Save" : "Edit"}</Text>
-            </TouchableOpacity>
-          </View>
-
-          {editingTargets ? (
-            <View style={styles.editGrid}>
-              {[
-                ["Calories", cal, setCal],
-                ["Protein", protein, setProtein],
-                ["Carbs", carbs, setCarbs],
-                ["Fat", fats, setFats],
-                ["Fiber", fiber, setFiber],
-              ].map(([label, val, set]) => (
-                <View key={label as string} style={styles.editField}>
-                  <Text style={styles.label}>{label as string}</Text>
-                  <TextInput
-                    style={styles.input}
-                    keyboardType="numeric"
-                    value={val as string}
-                    onChangeText={set as (v: string) => void}
-                  />
-                </View>
-              ))}
-            </View>
-          ) : (
-            <>
-              <View style={styles.targetHero}>
-                <Text style={styles.kcalValue}>
-                  {plan.targets.calories?.toLocaleString() ?? "—"}
-                </Text>
-                <Text style={styles.kcalUnit}>kcal / day</Text>
-                {range ? <Text style={styles.kcalRange}>{range}</Text> : null}
-              </View>
-              <View style={styles.macroStrip}>
-                {MACRO_TILES.map((tile) => {
-                  const value = macroValues[tile.key];
-                  return (
-                    <View key={tile.key} style={styles.macroChip}>
-                      <View style={[styles.macroDot, { backgroundColor: tile.color }]} />
-                      <Text style={styles.macroValue}>
-                        {value ?? "—"}
-                        {value != null ? tile.unit : ""}
-                      </Text>
-                      <Text style={styles.macroLabel}>{tile.label}</Text>
-                    </View>
-                  );
-                })}
-              </View>
-            </>
-          )}
-        </View>
-
-        {strategyOpen ? (
-          <>
-            <Text style={styles.sectionLabel}>YOUR STRATEGY</Text>
-            <Text style={styles.strategyIntro}>
-              Anchors are meals you repeat. Flexible meals are less controlled. Go-tos fill gaps on the day map.
-            </Text>
-
-            <View style={styles.sectionBlock}>
-              <View style={styles.sectionHead}>
-                <Text style={styles.sectionTitle}>Meal Anchors</Text>
-                <TouchableOpacity onPress={openNewAnchor}>
-                  <Text style={styles.addLink}>+ Add</Text>
-                </TouchableOpacity>
-              </View>
-
-              {(plan.meal_anchors || []).map((anchor, i) => {
-                const macros = sumAnchorMacros(anchor.foods || []);
-                const hasMacros =
-                  macros.calories > 0 || macros.protein > 0 || macros.carbs > 0 || macros.fats > 0;
-                return (
-                  <TouchableOpacity
-                    key={anchor.id || `${anchor.label}-${i}`}
-                    style={styles.listCard}
-                    onPress={() => openEditAnchor(anchor, i)}
-                    onLongPress={() => removeAnchor(anchor.id, i)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.slotIconWrap}>
-                      <MaterialCommunityIcons
-                        name={slotIcon(anchor.slot)}
-                        size={20}
-                        color={colors.accentPrimary}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.listTitle}>{anchor.label}</Text>
-                      <Text style={styles.listMeta}>{frequencyLabel(anchor.frequency)}</Text>
-                      <Text style={styles.listBody}>
-                        {(anchor.foods || []).map((f) => f.name).join(", ") || "No foods listed"}
-                      </Text>
-                      {hasMacros ? (
-                        <View style={styles.pillRow}>
-                          <View style={styles.pill}>
-                            <Text style={styles.pillText}>{Math.round(macros.calories)} kcal</Text>
-                          </View>
-                          <View style={styles.pill}>
-                            <Text style={styles.pillText}>{Math.round(macros.protein)}g protein</Text>
-                          </View>
-                        </View>
-                      ) : null}
-                    </View>
-                    <MaterialCommunityIcons name="chevron-right" size={20} color={colors.textMuted} />
-                  </TouchableOpacity>
-                );
-              })}
-
-              {!plan.meal_anchors?.length ? (
-                <Text style={styles.emptyHint}>No regular foods saved yet. Tap + Add to log macros.</Text>
-              ) : null}
-            </View>
-
-            <View style={styles.sectionBlock}>
-              <View style={styles.sectionHead}>
-                <Text style={styles.sectionTitle}>Flexible Meals</Text>
-                <TouchableOpacity onPress={openNewFlex}>
-                  <Text style={styles.addLink}>+ Add</Text>
-                </TouchableOpacity>
-              </View>
-
-              {(plan.flexible_meals || []).map((meal, i) => (
-                <TouchableOpacity
-                  key={meal.id || `${meal.name}-${i}`}
-                  style={styles.listCard}
-                  onPress={() => openEditFlex(meal, i)}
-                  onLongPress={() => removeFlex(meal.id, i)}
-                  activeOpacity={0.7}
-                >
-                  <View style={[styles.slotIconWrap, styles.slotIconFlex]}>
-                    <MaterialCommunityIcons
-                      name="silverware-fork-knife"
-                      size={20}
-                      color="#C4B5FD"
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.listTitle}>{meal.name}</Text>
-                    <Text style={styles.listMeta}>{frequencyLabel(meal.frequency)}</Text>
-                    <Text style={styles.listBody}>
-                      {meal.calorie_min || "?"}–{meal.calorie_max || "?"} kcal
-                      {meal.protein_min || meal.protein_max
-                        ? ` · ${meal.protein_min || "?"}–${meal.protein_max || "?"}g protein`
-                        : ""}
-                    </Text>
-                    {meal.notes ? <Text style={styles.listNote}>{meal.notes}</Text> : null}
-                  </View>
-                  <MaterialCommunityIcons name="chevron-right" size={20} color={colors.textMuted} />
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <View style={styles.sectionBlock}>
-              <View style={styles.sectionHead}>
-                <Text style={styles.sectionTitle}>Go To</Text>
-                <TouchableOpacity onPress={openNewGoTo}>
-                  <Text style={styles.addLink}>+ Add</Text>
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.sectionHint}>
-                Staples the day map can suggest when anchors + flexible meals leave a gap.
-              </Text>
-
-              {(plan.go_to_items || []).map((goTo, i) => {
-                const hasMacros =
-                  (Number(goTo.calories) || 0) > 0 ||
-                  (Number(goTo.protein) || 0) > 0;
-                return (
-                  <TouchableOpacity
-                    key={goTo.id || `${goTo.name}-${i}`}
-                    style={styles.listCard}
-                    onPress={() => openEditGoTo(goTo, i)}
-                    onLongPress={() => removeGoTo(goTo.id, i)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={[styles.slotIconWrap, styles.slotIconSuggest]}>
-                      <MaterialCommunityIcons
-                        name={slotIcon(goTo.slot || "other")}
-                        size={20}
-                        color={colors.ai}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.listTitle}>{goTo.name}</Text>
-                      <Text style={styles.listMeta}>{slotLabel(goTo.slot)}</Text>
-                      {goTo.amount ? <Text style={styles.listBody}>{goTo.amount}</Text> : null}
-                      {hasMacros ? (
-                        <View style={styles.pillRow}>
-                          {(Number(goTo.calories) || 0) > 0 ? (
-                            <View style={styles.pill}>
-                              <Text style={styles.pillText}>{Math.round(Number(goTo.calories))} kcal</Text>
-                            </View>
-                          ) : null}
-                          {(Number(goTo.protein) || 0) > 0 ? (
-                            <View style={styles.pill}>
-                              <Text style={styles.pillText}>{Math.round(Number(goTo.protein))}g protein</Text>
-                            </View>
-                          ) : null}
-                        </View>
-                      ) : null}
-                    </View>
-                    <MaterialCommunityIcons name="chevron-right" size={20} color={colors.textMuted} />
-                  </TouchableOpacity>
-                );
-              })}
-
-              {!plan.go_to_items?.length ? (
-                <Text style={styles.emptyHint}>
-                  No go-to items yet. Add shakes or snacks to fill day-map gaps.
-                </Text>
-              ) : null}
-            </View>
-
-            {(plan.food_priorities?.length || preferenceTags.length || plan.preferences) ? (
-              <>
-                <Text style={styles.sectionLabel}>GUIDANCE</Text>
-
-                {plan.food_priorities?.length ? (
-                  <View style={styles.card}>
-                    <Text style={styles.cardTitle}>Food priorities</Text>
-                    {plan.food_priorities.map((priority, i) => (
-                      <View key={i} style={styles.priorityRow}>
-                        <MaterialCommunityIcons name="check" size={16} color={colors.accentPrimary} />
-                        <Text style={styles.priorityText}>{priority}</Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-
-                {plan.preferences ? (
-                  <View style={styles.card}>
-                    <Text style={styles.cardTitle}>Preferences</Text>
-                    <Text style={styles.prefStyle}>
-                      {plan.preferences.guidance_style === "strict" ? "Stricter targets" : "Flexible guidance"}
-                    </Text>
-                    {preferenceTags.length ? (
-                      <View style={styles.tagRow}>
-                        {preferenceTags.map((tag) => (
-                          <View key={tag} style={styles.tag}>
-                            <Text style={styles.tagText}>{tag}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    ) : null}
-                  </View>
-                ) : null}
-              </>
-            ) : null}
-          </>
         ) : (
-          <TouchableOpacity style={styles.strategyPeek} onPress={() => setStrategyOpen(true)}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.strategyPeekTitle}>Strategy under the map</Text>
-              <Text style={styles.strategyPeekBody}>
-                {(plan.meal_anchors || []).length} anchors · {(plan.flexible_meals || []).length} flexible ·{" "}
-                {(plan.go_to_items || []).length} go-tos
-              </Text>
-            </View>
-            <MaterialCommunityIcons name="chevron-down" size={22} color={colors.textMuted} />
-          </TouchableOpacity>
+          <>
+            <Text style={styles.title}>{goalLabel(plan.goal)}</Text>
+            {plan.goal_detail ? <Text style={styles.subtitle}>{plan.goal_detail}</Text> : null}
+          </>
         )}
 
         {onAskCoach ? (
@@ -1245,6 +1226,22 @@ const styles = StyleSheet.create({
   macroDot: { width: 6, height: 6, borderRadius: 3 },
   macroValue: { fontSize: 13, fontWeight: "700", color: colors.textPrimary },
   macroLabel: { fontSize: 11, color: colors.textMuted, fontWeight: "600" },
+  carryover: {
+    borderWidth: 1,
+    borderColor: "rgba(94,234,212,0.35)",
+    backgroundColor: "rgba(94,234,212,0.10)",
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: 6,
+  },
+  carryoverText: { fontSize: 13, color: "#5EEAD4", lineHeight: 19, fontWeight: "600" },
+  carryoverDismiss: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.textMuted,
+    alignSelf: "flex-end",
+  },
   strategyIntro: {
     fontSize: 13,
     color: colors.textSecondary,
@@ -1295,7 +1292,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: "rgba(255,107,53,0.12)",
+    backgroundColor: "rgba(156, 192, 232,0.12)",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 2,
@@ -1338,7 +1335,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,107,53,0.45)",
+    borderColor: "rgba(156, 192, 232,0.45)",
   },
   coachBtnText: { color: colors.accentPrimary, fontWeight: "700", fontSize: 14 },
   footerActions: {
@@ -1370,7 +1367,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     alignItems: "center",
   },
-  primaryText: { color: "#fff", fontWeight: "700" },
+  primaryText: { color: colors.onAccent, fontWeight: "700" },
   secondary: {
     marginTop: spacing.sm,
     borderRadius: borderRadius.md,

@@ -137,7 +137,7 @@ export default function StressSection() {
                 </Text>
               </View>
               <TouchableOpacity onPress={() => entry.id && remove(entry.id)} hitSlop={10}>
-                <MaterialCommunityIcons name="delete-outline" size={18} color="#636366" />
+                <MaterialCommunityIcons name="delete-outline" size={18} color="#55647A" />
               </TouchableOpacity>
             </View>
             <Meter label="Stress" value={entry.level} reverse />

@@ -171,7 +171,7 @@ export default function PhysicalActivity() {
             >
               <View style={[styles.check, form.is_whole_day && styles.checkOn]}>
                 {form.is_whole_day ? (
-                  <MaterialCommunityIcons name="check" size={14} color="#fff" />
+                  <MaterialCommunityIcons name="check" size={14} color={colors.onAccent} />
                 ) : null}
               </View>
               <Text style={styles.checkLabel}>Whole day activity</Text>
@@ -229,7 +229,7 @@ export default function PhysicalActivity() {
               <View style={logStyles.cardTop}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1 }}>
                   <View style={styles.iconBox}>
-                    <MaterialCommunityIcons name="run-fast" size={22} color="#FF6B35" />
+                    <MaterialCommunityIcons name="run-fast" size={22} color="#9CC0E8" />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={logStyles.cardDate}>
@@ -239,7 +239,7 @@ export default function PhysicalActivity() {
                   </View>
                 </View>
                 <TouchableOpacity onPress={() => activity.id && remove(activity.id)} hitSlop={10}>
-                  <MaterialCommunityIcons name="delete-outline" size={18} color="#636366" />
+                  <MaterialCommunityIcons name="delete-outline" size={18} color="#55647A" />
                 </TouchableOpacity>
               </View>
               <View style={{ marginTop: 12 }}>
@@ -278,7 +278,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   title: { fontSize: 32, fontWeight: "700", color: "#fff" },
-  sub: { color: "#8E8E93", fontSize: 14, marginTop: 4 },
+  sub: { color: "#7C8CA0", fontSize: 14, marginTop: 4 },
   checkRow: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 16 },
   check: {
     width: 22,
@@ -286,17 +286,17 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
     alignItems: "center",
     justifyContent: "center",
   },
-  checkOn: { backgroundColor: "#FF6B35", borderColor: "#FF6B35" },
+  checkOn: { backgroundColor: "#9CC0E8", borderColor: "#9CC0E8" },
   checkLabel: { color: "#fff", fontSize: 14, fontWeight: "600" },
   iconBox: {
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: "rgba(255,107,53,0.15)",
+    backgroundColor: "rgba(156, 192, 232,0.15)",
     alignItems: "center",
     justifyContent: "center",
   },

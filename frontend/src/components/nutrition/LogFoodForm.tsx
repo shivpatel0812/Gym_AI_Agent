@@ -22,11 +22,31 @@ import {
   DEFAULT_AI_MODEL,
   normalizeAiModel,
 } from "../../lib/aiModels";
+import {
+  displayMealLabel,
+  extractRecentMeals,
+  normalizeMealLabel,
+  RecentMealPick,
+} from "../../lib/recentMeals";
+import type { MealAnchorFood } from "../../api/nutritionPlan";
+
+export type PlanMealPick = {
+  id: string;
+  label: string;
+  kind: "individual" | "potential" | "uncertain";
+  foods: MealAnchorFood[];
+};
 
 interface LogFoodFormProps {
   meal: string;
   onAdd: (food: FoodItem) => void;
+  /** Import a full anchored meal (multiple foods) in one save. */
+  onAddMany?: (foods: FoodItem[]) => void;
   onCancel: () => void;
+  /** Prefill uncertain checkbox (e.g. lunch/dinner stance). */
+  defaultUncertain?: boolean;
+  /** Active plan meals for this slot — import or tag. */
+  planMeals?: PlanMealPick[];
 }
 
 function toFoodDbItem(raw: any): FoodDbItem {
@@ -63,14 +83,21 @@ const field = {
   height: 48,
   paddingHorizontal: 16,
   borderRadius: 12,
-  backgroundColor: "#0A0A0B",
+  backgroundColor: "#05080F",
   borderWidth: 1,
   borderColor: colors.border,
   color: "#fff",
   fontSize: 14,
 };
 
-export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps) {
+export default function LogFoodForm({
+  meal,
+  onAdd,
+  onAddMany,
+  onCancel,
+  defaultUncertain,
+  planMeals = [],
+}: LogFoodFormProps) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<FoodDbItem | null>(null);
   const [amountMode, setAmountMode] = useState<"serving" | "custom">("serving");
@@ -93,8 +120,15 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
   const [savedFoods, setSavedFoods] = useState<FoodDbItem[]>([]);
   const [estimating, setEstimating] = useState(false);
   const [estimateError, setEstimateError] = useState<string | null>(null);
+  const [uncertain, setUncertain] = useState(Boolean(defaultUncertain));
+  const [weekMeals, setWeekMeals] = useState<RecentMealPick[]>([]);
+  const [tagAnchorId, setTagAnchorId] = useState<string | null>(null);
+  const [expandedPotential, setExpandedPotential] = useState<string | null>(null);
   const estimateQueryRef = useRef("");
   const lastEstimatedRef = useRef("");
+
+  const mealSlot = normalizeMealLabel(meal);
+  const showUncertain = mealSlot === "lunch" || mealSlot === "dinner";
 
   useEffect(() => {
     AsyncStorage.getItem(AI_MODEL_STORAGE_KEY)
@@ -119,10 +153,30 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         setSavedFoods(items.filter((f) => f.name));
       })
       .catch(() => {});
+    if (showUncertain) {
+      apiClient
+        .get("/api/macros")
+        .then((res) => {
+          if (cancelled) return;
+          setWeekMeals(
+            extractRecentMeals(Array.isArray(res.data) ? res.data : [], {
+              meal: mealSlot,
+              days: 7,
+              excludeToday: true,
+              limit: 12,
+            })
+          );
+        })
+        .catch(() => {});
+    }
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [showUncertain, mealSlot]);
+
+  useEffect(() => {
+    setUncertain(Boolean(defaultUncertain));
+  }, [defaultUncertain]);
 
   const catalog = useMemo(() => {
     const byName = new Map<string, FoodDbItem>();
@@ -182,8 +236,8 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         );
         return [saved, ...rest];
       });
-    } catch {
-      // Search still works from the in-session list if save fails.
+    } catch (err) {
+      console.warn("Could not save food to library", err);
     }
   };
 
@@ -249,6 +303,10 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       fiber: scaled.fiber,
       meal,
       amount: amountLabel,
+      uncertain: showUncertain ? uncertain : undefined,
+      ...(tagAnchorId
+        ? { anchor_id: tagAnchorId, usual_id: tagAnchorId }
+        : {}),
     });
     void rememberFood(selected, [query.trim(), amountLabel]);
   };
@@ -278,6 +336,10 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       fiber: Number.isFinite(fiber) && fiber >= 0 ? Math.round(fiber * 10) / 10 : 0,
       meal,
       amount: customAmount.trim() || undefined,
+      uncertain: showUncertain ? uncertain : undefined,
+      ...(tagAnchorId
+        ? { anchor_id: tagAnchorId, usual_id: tagAnchorId }
+        : {}),
     });
     void rememberFood(
       {
@@ -293,6 +355,49 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       [name]
     );
   };
+
+  const foodFromPlan = (f: MealAnchorFood, anchorId: string): FoodItem => ({
+    name: String(f.name || "Food").trim() || "Food",
+    calories: Math.round(Number(f.calories) || 0),
+    protein: Math.round((Number(f.protein) || 0) * 10) / 10,
+    carbs: f.carbs != null ? Math.round(Number(f.carbs) * 10) / 10 : 0,
+    fats: f.fats != null ? Math.round(Number(f.fats) * 10) / 10 : 0,
+    fiber: f.fiber != null ? Math.round(Number(f.fiber) * 10) / 10 : 0,
+    amount: f.amount ? String(f.amount) : undefined,
+    meal,
+    anchor_id: anchorId,
+    usual_id: anchorId,
+    uncertain: showUncertain ? uncertain : undefined,
+  });
+
+  const importPlanMeal = (pick: PlanMealPick) => {
+    const foods = (pick.foods || [])
+      .filter((f) => String(f.name || "").trim())
+      .map((f) => foodFromPlan(f, pick.id));
+    if (!foods.length) {
+      onAdd({
+        name: pick.label,
+        calories: 0,
+        protein: 0,
+        meal,
+        anchor_id: pick.id,
+        usual_id: pick.id,
+      });
+      return;
+    }
+    if (onAddMany) onAddMany(foods);
+    else foods.forEach((f) => onAdd(f));
+  };
+
+  const importPlanOption = (pick: PlanMealPick, food: MealAnchorFood) => {
+    onAdd(foodFromPlan(food, pick.id));
+  };
+
+  const kindColor = (kind: PlanMealPick["kind"]) =>
+    kind === "potential" ? "#E09A45" : kind === "uncertain" ? "#A78BFA" : colors.accentPrimary;
+
+  const kindLabel = (kind: PlanMealPick["kind"]) =>
+    kind === "potential" ? "Potential" : kind === "uncertain" ? "Uncertain" : "Anchor";
 
   const pickPhoto = async (fromCamera: boolean) => {
     setPhotoError(null);
@@ -423,11 +528,201 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
   return (
     <View style={styles.wrap}>
       <View style={styles.rowBetween}>
-        <Text style={styles.addTitle}>Add food</Text>
+        <Text style={styles.addTitle}>Add food · {displayMealLabel(meal)}</Text>
         <TouchableOpacity onPress={onCancel}>
           <Text style={styles.cancel}>Cancel</Text>
         </TouchableOpacity>
       </View>
+
+      {planMeals.length > 0 ? (
+        <View style={styles.planBox}>
+          <Text style={styles.planTitle}>From your plan</Text>
+          <Text style={styles.planHint}>
+            Import a meal, or tap Tag then log food to link it.
+          </Text>
+          {planMeals.map((pick) => {
+            const color = kindColor(pick.kind);
+            const tagging = tagAnchorId === pick.id;
+            const expanded = expandedPotential === pick.id;
+            const isOptions = pick.kind === "potential" || pick.kind === "uncertain";
+            const foodCount = (pick.foods || []).filter((f) => f.name).length;
+            return (
+              <View
+                key={pick.id}
+                style={[styles.planCard, tagging && { borderColor: color }]}
+              >
+                <View style={styles.planCardTop}>
+                  <View style={[styles.planKindDot, { backgroundColor: color }]} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.planName} numberOfLines={1}>
+                      {pick.label}
+                    </Text>
+                    <Text style={styles.planMeta}>
+                      {kindLabel(pick.kind)}
+                      {foodCount
+                        ? ` · ${foodCount} ${isOptions ? "option" : "food"}${
+                            foodCount === 1 ? "" : "s"
+                          }`
+                        : ""}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[
+                      styles.planTagBtn,
+                      tagging && { backgroundColor: `${color}33`, borderColor: color },
+                    ]}
+                    onPress={() => setTagAnchorId(tagging ? null : pick.id)}
+                  >
+                    <Text style={[styles.planTagText, tagging && { color }]}>
+                      {tagging ? "Tagged" : "Tag"}
+                    </Text>
+                  </TouchableOpacity>
+                  {isOptions && foodCount > 1 ? (
+                    <TouchableOpacity
+                      style={styles.planImportBtn}
+                      onPress={() =>
+                        setExpandedPotential(expanded ? null : pick.id)
+                      }
+                    >
+                      <Text style={[styles.planImportText, { color }]}>
+                        {expanded ? "Hide" : "Pick"}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.planImportBtn, { borderColor: color }]}
+                      onPress={() => importPlanMeal(pick)}
+                    >
+                      <Text style={[styles.planImportText, { color }]}>Import</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {expanded && isOptions
+                  ? (pick.foods || [])
+                      .filter((f) => f.name)
+                      .map((food, i) => (
+                        <TouchableOpacity
+                          key={`${food.name}-${i}`}
+                          style={styles.planOptionRow}
+                          onPress={() => importPlanOption(pick, food)}
+                        >
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Text style={styles.planOptionName} numberOfLines={1}>
+                              {food.name}
+                            </Text>
+                            <Text style={styles.planMeta}>
+                              {[
+                                food.calories != null
+                                  ? `${Math.round(Number(food.calories))} kcal`
+                                  : null,
+                                food.protein != null
+                                  ? `${Math.round(Number(food.protein))}g P`
+                                  : null,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </Text>
+                          </View>
+                          <MaterialCommunityIcons
+                            name="plus-circle"
+                            size={20}
+                            color={color}
+                          />
+                        </TouchableOpacity>
+                      ))
+                  : null}
+                {!isOptions && foodCount > 1 ? (
+                  <Text style={styles.planFoods} numberOfLines={2}>
+                    {(pick.foods || [])
+                      .map((f) => f.name)
+                      .filter(Boolean)
+                      .join(", ")}
+                  </Text>
+                ) : null}
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+
+      {showUncertain ? (
+        <TouchableOpacity
+          style={[styles.uncertainRow, uncertain && styles.uncertainRowOn]}
+          onPress={() => setUncertain((v) => !v)}
+          activeOpacity={0.8}
+        >
+          <MaterialCommunityIcons
+            name={uncertain ? "checkbox-marked" : "checkbox-blank-outline"}
+            size={22}
+            color={uncertain ? "#F5C542" : "#7C8CA0"}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.uncertainTitle, uncertain && { color: "#F5C542" }]}>
+              Uncertain {displayMealLabel(meal).toLowerCase()}
+            </Text>
+            <Text style={styles.uncertainHint}>
+              Different each time — pick from this week or search.
+            </Text>
+          </View>
+        </TouchableOpacity>
+      ) : null}
+
+      {showUncertain && uncertain && weekMeals.length > 0 ? (
+        <View style={styles.weekBox}>
+          <Text style={styles.weekTitle}>Past week · {displayMealLabel(meal)}</Text>
+          {weekMeals.map((item) => (
+            <TouchableOpacity
+              key={item.key}
+              style={styles.weekRow}
+              onPress={() => {
+                onAdd({
+                  name: item.name,
+                  calories: item.calories,
+                  protein: item.protein,
+                  carbs: item.carbs,
+                  fats: item.fats,
+                  fiber: item.fiber,
+                  amount: item.amount,
+                  meal: displayMealLabel(mealSlot),
+                  uncertain: true,
+                  ...(tagAnchorId
+                    ? { anchor_id: tagAnchorId, usual_id: tagAnchorId }
+                    : {}),
+                });
+                void rememberFood(
+                  {
+                    name: item.name,
+                    serving: item.amount || "1 serving",
+                    grams: 100,
+                    calories: item.calories,
+                    protein: item.protein,
+                    carbs: item.carbs || 0,
+                    fats: item.fats || 0,
+                    fiber: item.fiber || 0,
+                  },
+                  [item.name]
+                );
+              }}
+            >
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.weekName} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                <Text style={styles.weekMeta}>
+                  {[
+                    item.calories ? `${item.calories} kcal` : null,
+                    item.protein ? `${item.protein}g P` : null,
+                    item.date,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </Text>
+              </View>
+              <MaterialCommunityIcons name="plus-circle" size={22} color="#F5C542" />
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
 
       <View style={styles.tabs}>{["Search", "Photo", "Custom"].map((label, i) =>
         tabBtn((["search", "photo", "custom"] as const)[i], label)
@@ -439,7 +734,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
             <MaterialCommunityIcons
               name="magnify"
               size={16}
-              color="#636366"
+              color="#55647A"
               style={styles.searchIcon}
             />
             <TextInput
@@ -453,7 +748,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
                 if (!selected) void estimateFood(query);
               }}
               placeholder="Search or type 2 belvita crackers..."
-              placeholderTextColor="#636366"
+              placeholderTextColor="#55647A"
               autoFocus
               style={[field, { paddingLeft: 40, paddingRight: 36 }]}
             />
@@ -465,7 +760,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
                   setSelected(null);
                 }}
               >
-                <MaterialCommunityIcons name="close" size={15} color="#636366" />
+                <MaterialCommunityIcons name="close" size={15} color="#55647A" />
               </TouchableOpacity>
             ) : null}
           </View>
@@ -486,7 +781,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
                   </View>
                   <View style={styles.macroRow}>
                     <View style={styles.macroCell}>
-                      <Text style={[styles.macroVal, { color: "#FF6B35" }]}>{f.calories}</Text>
+                      <Text style={[styles.macroVal, { color: "#9CC0E8" }]}>{f.calories}</Text>
                       <Text style={styles.macroUnit}>kcal</Text>
                     </View>
                     <View style={styles.macroCell}>
@@ -567,7 +862,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
                   <Text
                     style={[
                       styles.amountLabel,
-                      amountMode === "serving" && { color: "#FF6B35" },
+                      amountMode === "serving" && { color: "#9CC0E8" },
                     ]}
                   >
                     Serving
@@ -575,7 +870,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
                   <Text
                     style={[
                       styles.amountVal,
-                      amountMode === "serving" && { color: "#FF6B35" },
+                      amountMode === "serving" && { color: "#9CC0E8" },
                     ]}
                   >
                     {selected.serving}
@@ -591,7 +886,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
                   <Text
                     style={[
                       styles.amountLabel,
-                      amountMode === "custom" && { color: "#FF6B35" },
+                      amountMode === "custom" && { color: "#9CC0E8" },
                     ]}
                   >
                     Custom (g)
@@ -602,14 +897,14 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
                     onFocus={() => setAmountMode("custom")}
                     onChangeText={setCustomGrams}
                     placeholder="Enter grams"
-                    placeholderTextColor="#636366"
+                    placeholderTextColor="#55647A"
                     style={{ color: "#fff", fontSize: 14, fontWeight: "600" }}
                   />
                 </TouchableOpacity>
               </View>
               <View style={{ flexDirection: "row", gap: 8 }}>
                 {[
-                  ["Calories", scaled.calories, "#FF6B35"],
+                  ["Calories", scaled.calories, "#9CC0E8"],
                   ["Protein", scaled.protein, "#E4B896"],
                   ["Carbs", scaled.carbs, "#F5C542"],
                   ["Fat", scaled.fats, "#C4B5FD"],
@@ -642,7 +937,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
           {!photoUri ? (
             <View style={{ flexDirection: "row", gap: 12 }}>
               <TouchableOpacity style={styles.photoBox} onPress={() => pickPhoto(true)}>
-                <MaterialCommunityIcons name="camera" size={22} color="#FF6B35" />
+                <MaterialCommunityIcons name="camera" size={22} color="#9CC0E8" />
                 <Text style={styles.photoBoxText}>Take photo</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.photoBox} onPress={() => pickPhoto(false)}>
@@ -686,7 +981,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
             value={photoTitle}
             onChangeText={setPhotoTitle}
             placeholder="e.g. Frankie"
-            placeholderTextColor="#636366"
+            placeholderTextColor="#55647A"
             style={field}
           />
           <Text style={styles.label}>Description</Text>
@@ -694,7 +989,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
             value={photoNote}
             onChangeText={setPhotoNote}
             placeholder="e.g. Indian vegetarian frankie, I had 3, with chutney"
-            placeholderTextColor="#636366"
+            placeholderTextColor="#55647A"
             multiline
             style={[field, { height: 84, paddingTop: 12, textAlignVertical: "top" }]}
           />
@@ -733,7 +1028,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
             value={customName}
             onChangeText={setCustomName}
             placeholder="e.g. Homemade protein shake"
-            placeholderTextColor="#636366"
+            placeholderTextColor="#55647A"
             style={field}
           />
           <Text style={styles.label}>Amount (optional)</Text>
@@ -741,7 +1036,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
             value={customAmount}
             onChangeText={setCustomAmount}
             placeholder="e.g. 1 bowl, 200g"
-            placeholderTextColor="#636366"
+            placeholderTextColor="#55647A"
             style={field}
           />
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
@@ -761,7 +1056,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
                   value={val}
                   onChangeText={setVal}
                   placeholder="0"
-                  placeholderTextColor="#636366"
+                  placeholderTextColor="#55647A"
                   style={field}
                 />
               </View>
@@ -782,21 +1077,56 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
 
 const styles = StyleSheet.create({
   wrap: { gap: 16 },
+  uncertainRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#1E2A38",
+    backgroundColor: "#12151C",
+  },
+  uncertainRowOn: {
+    borderColor: "rgba(245,197,66,0.45)",
+    backgroundColor: "rgba(245,197,66,0.08)",
+  },
+  uncertainTitle: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  uncertainHint: { color: "#55647A", fontSize: 11, marginTop: 2, lineHeight: 15 },
+  weekBox: {
+    gap: 8,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(245,197,66,0.28)",
+    backgroundColor: "rgba(245,197,66,0.05)",
+  },
+  weekTitle: { color: "#F5C542", fontSize: 12, fontWeight: "800" },
+  weekRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(245,197,66,0.12)",
+  },
+  weekName: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  weekMeta: { color: "#7C8CA0", fontSize: 11, marginTop: 2 },
   rowBetween: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   addTitle: { color: "#fff", fontSize: 14, fontWeight: "600" },
-  cancel: { color: "#8E8E93", fontSize: 12, fontWeight: "600" },
+  cancel: { color: "#7C8CA0", fontSize: 12, fontWeight: "600" },
   tabs: {
     flexDirection: "row",
     padding: 4,
     borderRadius: 12,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
     borderWidth: 1,
     borderColor: colors.border,
   },
   tab: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: "center" },
-  tabActive: { backgroundColor: "#FF6B35" },
-  tabText: { color: "#8E8E93", fontSize: 14, fontWeight: "600" },
-  tabTextActive: { color: "#fff" },
+  tabActive: { backgroundColor: "#9CC0E8" },
+  tabText: { color: "#7C8CA0", fontSize: 14, fontWeight: "600" },
+  tabTextActive: { color: colors.onAccent },
   searchIcon: { position: "absolute", left: 14, top: 16, zIndex: 1 },
   clearQuery: { position: "absolute", right: 12, top: 16 },
   resultList: {
@@ -815,27 +1145,27 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   resultName: { color: "#fff", fontSize: 14, fontWeight: "600" },
-  muted: { color: "#8E8E93", fontSize: 14 },
-  mutedXs: { color: "#636366", fontSize: 12, marginTop: 2 },
-  mutedBold: { color: "#8E8E93", fontSize: 14, fontWeight: "600" },
+  muted: { color: "#7C8CA0", fontSize: 14 },
+  mutedXs: { color: "#55647A", fontSize: 12, marginTop: 2 },
+  mutedBold: { color: "#7C8CA0", fontSize: 14, fontWeight: "600" },
   macroRow: { flexDirection: "row", gap: 10 },
   macroCell: { alignItems: "center" },
   macroVal: { fontSize: 13, fontWeight: "700" },
   macroUnit: {
     fontSize: 9,
     fontWeight: "600",
-    color: "#636366",
+    color: "#55647A",
     textTransform: "uppercase",
   },
-  fillLink: { color: "#FF6B35", fontSize: 14, fontWeight: "600", textAlign: "center" },
+  fillLink: { color: "#9CC0E8", fontSize: 14, fontWeight: "600", textAlign: "center" },
   primaryBtn: {
-    backgroundColor: "#FF6B35",
+    backgroundColor: "#9CC0E8",
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: "center",
     width: "100%",
   },
-  primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  primaryBtnText: { color: colors.onAccent, fontWeight: "700", fontSize: 14 },
   selectedBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -843,9 +1173,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderRadius: 12,
-    backgroundColor: "rgba(255,107,53,0.05)",
+    backgroundColor: "rgba(156, 192, 232,0.05)",
     borderWidth: 1,
-    borderColor: "rgba(255,107,53,0.3)",
+    borderColor: "rgba(156, 192, 232,0.3)",
   },
   selectedName: { color: "#fff", fontWeight: "700", fontSize: 14, flex: 1 },
   changeBtn: {
@@ -860,7 +1190,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1.4,
-    color: "#636366",
+    color: "#55647A",
     textTransform: "uppercase",
     marginBottom: 4,
   },
@@ -871,25 +1201,25 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
   },
   amountCardOn: {
-    borderColor: "#FF6B35",
-    backgroundColor: "rgba(255,107,53,0.1)",
+    borderColor: "#9CC0E8",
+    backgroundColor: "rgba(156, 192, 232,0.1)",
   },
   amountLabel: {
     fontSize: 9,
     fontWeight: "700",
     letterSpacing: 1.4,
-    color: "#636366",
+    color: "#55647A",
     textTransform: "uppercase",
     marginBottom: 4,
   },
-  amountVal: { color: "#8E8E93", fontSize: 14, fontWeight: "600" },
+  amountVal: { color: "#7C8CA0", fontSize: 14, fontWeight: "600" },
   scaledBox: {
     flex: 1,
     borderRadius: 12,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
     borderWidth: 1,
     borderColor: colors.border,
     paddingVertical: 12,
@@ -903,12 +1233,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderStyle: "dashed",
     borderColor: colors.border,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
   },
-  photoBoxText: { color: "#8E8E93", fontSize: 14, fontWeight: "600" },
+  photoBoxText: { color: "#7C8CA0", fontSize: 14, fontWeight: "600" },
   modelRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   modelChip: {
     paddingHorizontal: 12,
@@ -916,14 +1246,14 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
   },
   modelChipOn: {
-    borderColor: "#FF6B35",
-    backgroundColor: "rgba(255,107,53,0.18)",
+    borderColor: "#9CC0E8",
+    backgroundColor: "rgba(156, 192, 232,0.18)",
   },
-  modelChipText: { color: "#8E8E93", fontWeight: "700", fontSize: 13 },
-  modelChipTextOn: { color: "#FF6B35" },
+  modelChipText: { color: "#7C8CA0", fontWeight: "700", fontSize: 13 },
+  modelChipTextOn: { color: "#9CC0E8" },
   preview: {
     width: "100%",
     height: 176,
@@ -940,4 +1270,57 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(11,12,16,0.8)",
   },
   error: { color: "#FCA5A5", fontSize: 14 },
+  planBox: {
+    gap: 8,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#0C0C0E",
+  },
+  planTitle: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+  },
+  planHint: { color: "#636366", fontSize: 11, fontWeight: "600", marginBottom: 2 },
+  planCard: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#111113",
+    padding: 10,
+    gap: 6,
+  },
+  planCardTop: { flexDirection: "row", alignItems: "center", gap: 8 },
+  planKindDot: { width: 8, height: 8, borderRadius: 4 },
+  planName: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  planMeta: { color: "#636366", fontSize: 11, marginTop: 1 },
+  planTagBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  planTagText: { color: "#8E8E93", fontSize: 11, fontWeight: "800" },
+  planImportBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  planImportText: { fontSize: 11, fontWeight: "800" },
+  planOptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  planOptionName: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  planFoods: { color: "#8E8E93", fontSize: 11, marginTop: 2 },
 });

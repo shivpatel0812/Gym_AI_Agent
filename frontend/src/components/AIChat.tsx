@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -11,14 +11,17 @@ import {
   Alert,
   Animated,
   Modal,
+  ActivityIndicator,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
 import LinearGradient from "./shared/LinearGradient";
 import Button from "./shared/Button";
 import Markdown from "./shared/Markdown";
 import ConversationSidebar from "./chat/ConversationSidebar";
 import CreatePlanModal from "./plan/CreatePlanModal";
 import CreateNutritionPlanModal from "./nutrition/plan/CreateNutritionPlanModal";
+import { NutritionSuggestionArtifact } from "../api/nutritionPlan";
 import apiClient from "../api/client";
 import { streamChat, StreamError } from "../api/streamChat";
 import RequestAiAccessModal from "./ai/RequestAiAccessModal";
@@ -45,6 +48,12 @@ import {
 interface Message {
   role: "user" | "assistant";
   content: string;
+  /** Plan edits this turn staged for review. Chat never writes the plan. */
+  suggestions?: NutritionSuggestionArtifact;
+}
+
+function suggestionArtifact(artifacts?: any[]): NutritionSuggestionArtifact | undefined {
+  return (artifacts || []).find((a) => a?.type === "nutrition_suggestions");
 }
 
 // Shown while the coach is pulling data mid-answer
@@ -55,6 +64,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_current_split: "Looking at your current split...",
   get_nutrition_log: "Reviewing your nutrition log...",
   get_nutrition_plan: "Checking your nutrition plan...",
+  propose_nutrition_edits: "Drafting plan updates...",
   get_training_plan: "Looking at your training plan...",
   get_wellness_log: "Reviewing your sleep and recovery...",
   get_personal_records: "Looking up your personal bests...",
@@ -69,6 +79,8 @@ interface AIChatProps {
   /** Opens Plan or Nutrition interview mode from another tab. */
   initialMode?: ChatMode | null;
   onModeConsumed?: () => void;
+  /** Jumps to the Nutrition Plan tab to review coach-staged plan edits. */
+  onOpenNutritionPlan?: () => void;
 }
 
 export default function AIChat({
@@ -76,6 +88,7 @@ export default function AIChat({
   onPromptConsumed,
   initialMode,
   onModeConsumed,
+  onOpenNutritionPlan,
 }: AIChatProps = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
@@ -93,6 +106,7 @@ export default function AIChat({
   const [chatMode, setChatMode] = useState<ChatMode>("coach");
   const [aiModel, setAiModel] = useState<AiModelId>(DEFAULT_AI_MODEL);
   const [aiStatus, setAiStatus] = useState<AiAccessStatus | null>(null);
+  const [refreshingAiStatus, setRefreshingAiStatus] = useState(false);
   const [requestAccessOpen, setRequestAccessOpen] = useState(false);
   const [reportTarget, setReportTarget] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
@@ -238,18 +252,27 @@ export default function AIChat({
     }
   }, [initialMode, onModeConsumed]);
 
-  const refreshAiStatus = async () => {
+  const refreshAiStatus = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setRefreshingAiStatus(true);
     try {
       setAiStatus(await fetchAiAccessStatus());
     } catch {
       // A failed status read shouldn't block chatting; the backend is still the
       // authority and will return 429 if the user is actually out.
+    } finally {
+      if (!opts?.silent) setRefreshingAiStatus(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    refreshAiStatus();
-  }, []);
+    refreshAiStatus({ silent: true });
+  }, [refreshAiStatus]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshAiStatus({ silent: true });
+    }, [refreshAiStatus])
+  );
 
   /** Show the limit message as a coach turn and offer the request-access flow. */
   const showQuotaMessage = (baseMessages: Message[], message: string) => {
@@ -276,7 +299,14 @@ export default function AIChat({
 
       if (res.data.status !== "success") throw new Error("Chat failed");
 
-      setMessages([...baseMessages, { role: "assistant", content: res.data.response }]);
+      setMessages([
+        ...baseMessages,
+        {
+          role: "assistant",
+          content: res.data.response,
+          suggestions: suggestionArtifact(res.data.artifacts),
+        },
+      ]);
       setConversationHistory(res.data.conversation_history || []);
       if (res.data.conversation_id) setConversationId(res.data.conversation_id);
       if (res.data.ai_access) setAiStatus(res.data.ai_access);
@@ -345,7 +375,11 @@ export default function AIChat({
         onDone: (payload) => {
           setMessages([
             ...updatedMessages,
-            { role: "assistant", content: payload.response || streamed },
+            {
+              role: "assistant",
+              content: payload.response || streamed,
+              suggestions: suggestionArtifact(payload.artifacts),
+            },
           ]);
           setConversationHistory(payload.conversation_history || []);
           if (payload.conversation_id) setConversationId(payload.conversation_id);
@@ -409,6 +443,31 @@ export default function AIChat({
             <View style={[styles.messageBubble, styles.assistantBubble]}>
               <Markdown style={styles.messageText}>{item.content}</Markdown>
             </View>
+            {item.suggestions ? (
+              <TouchableOpacity
+                style={styles.suggestionCard}
+                onPress={() => onOpenNutritionPlan?.()}
+                activeOpacity={0.85}
+              >
+                <View style={styles.suggestionCardHeader}>
+                  <MaterialCommunityIcons
+                    name="auto-fix"
+                    size={16}
+                    color={colors.ai}
+                  />
+                  <Text style={styles.suggestionCardTitle}>
+                    {item.suggestions.count}{" "}
+                    {item.suggestions.count === 1 ? "plan update" : "plan updates"} ready
+                  </Text>
+                </View>
+                {item.suggestions.titles.slice(0, 3).map((title) => (
+                  <Text key={title} style={styles.suggestionCardLine} numberOfLines={1}>
+                    · {title}
+                  </Text>
+                ))}
+                <Text style={styles.suggestionCardCta}>Review on Plan →</Text>
+              </TouchableOpacity>
+            ) : null}
             {/* Guideline 1.2: every AI response must be reportable */}
             <TouchableOpacity
               style={styles.reportButton}
@@ -525,6 +584,23 @@ export default function AIChat({
           </View>
           <View style={styles.headerActions}>
             <TouchableOpacity
+              onPress={() => refreshAiStatus()}
+              style={styles.refreshButton}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              disabled={refreshingAiStatus}
+              accessibilityLabel="Refresh AI access"
+            >
+              {refreshingAiStatus ? (
+                <ActivityIndicator size="small" color={colors.accentPrimary} />
+              ) : (
+                <MaterialCommunityIcons
+                  name="refresh"
+                  size={22}
+                  color={colors.accentPrimary}
+                />
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
               onPress={() => toggleMode("plan")}
               style={[styles.planButton, chatMode === "plan" && styles.planButtonActive]}
             >
@@ -599,24 +675,50 @@ export default function AIChat({
 
       <View style={styles.inputContainer}>
         {outOfQuota ? (
-          <TouchableOpacity
-            style={styles.quotaBanner}
-            onPress={() => setRequestAccessOpen(true)}
-            activeOpacity={0.8}
-          >
+          <View style={styles.quotaBanner}>
             <MaterialCommunityIcons name="lock-outline" size={16} color={colors.warning} />
-            <Text style={styles.quotaBannerText}>
-              You've used all {aiStatus?.daily_limit} AI requests for today.
-              {aiStatus?.request_status === "pending"
-                ? " Your access request is being reviewed."
-                : " Tap to request more access."}
-            </Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={{ flex: 1 }}
+              onPress={() => setRequestAccessOpen(true)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.quotaBannerText}>
+                You've used all {aiStatus?.daily_limit} AI requests for today.
+                {aiStatus?.request_status === "pending"
+                  ? " Your access request is being reviewed."
+                  : " Tap to request more access."}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => refreshAiStatus()}
+              style={styles.quotaRefreshBtn}
+              disabled={refreshingAiStatus}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Refresh quota"
+            >
+              {refreshingAiStatus ? (
+                <ActivityIndicator size="small" color={colors.warning} />
+              ) : (
+                <MaterialCommunityIcons name="refresh" size={18} color={colors.warning} />
+              )}
+            </TouchableOpacity>
+          </View>
         ) : lowQuota ? (
           <View style={styles.quotaHint}>
             <Text style={styles.quotaHintText}>
               {aiStatus?.remaining} AI {aiStatus?.remaining === 1 ? "request" : "requests"} left today
             </Text>
+            <TouchableOpacity
+              onPress={() => refreshAiStatus()}
+              disabled={refreshingAiStatus}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              {refreshingAiStatus ? (
+                <ActivityIndicator size="small" color={colors.textMuted} />
+              ) : (
+                <MaterialCommunityIcons name="refresh" size={14} color={colors.textMuted} />
+              )}
+            </TouchableOpacity>
           </View>
         ) : null}
         {chatMode === "plan" && hasUserMessage ? (
@@ -854,13 +956,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
   },
+  quotaRefreshBtn: {
+    padding: 2,
+  },
   quotaHint: {
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
     marginBottom: spacing.sm,
   },
   quotaHintText: {
     color: colors.textMuted,
     fontSize: 11,
+  },
+  refreshButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
   },
   container: {
     flex: 1,
@@ -1002,7 +1117,36 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   modelChipTextActive: {
-    color: "#fff",
+    color: colors.onAccent,
+  },
+  suggestionCard: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: borderRadius.lg,
+    backgroundColor: "rgba(94,234,212,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(94,234,212,0.4)",
+  },
+  suggestionCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  suggestionCardTitle: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  suggestionCardLine: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  suggestionCardCta: {
+    color: colors.ai,
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: spacing.sm,
   },
   planButton: {
     flexDirection: "row",
@@ -1026,7 +1170,7 @@ const styles = StyleSheet.create({
     color: colors.accentPrimary,
   },
   planButtonTextActive: {
-    color: "#fff",
+    color: colors.onAccent,
   },
   generateBar: {
     flexDirection: "row",
@@ -1039,12 +1183,12 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   generateBarText: {
-    color: "#fff",
+    color: colors.onAccent,
     fontWeight: "700",
     fontSize: 15,
   },
   inputWrapperPlan: {
-    borderColor: "rgba(255,107,53,0.45)",
+    borderColor: "rgba(156, 192, 232,0.45)",
   },
   modalBackdrop: {
     flex: 1,

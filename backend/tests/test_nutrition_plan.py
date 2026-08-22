@@ -306,3 +306,70 @@ def test_fallback_plan_mentions_training_goal():
         "training_context": {"has_plan": True, "primary_goal": "Hit 85s on incline press"},
     })
     assert "incline press" in (plan["strategy"] or "").lower()
+
+
+def _existing_plan():
+    return NutritionPlanBuilder.validate_plan({
+        "goal": "muscle",
+        "meal_anchors": [
+            {
+                "id": "keep-me",
+                "slot": "breakfast",
+                "label": "Breakfast",
+                "kind": "potential",
+                "place": "Fannie Mae",
+                "days": ["mon", "tue", "wed"],
+                "frequency": "most_days",
+                "foods": [{"name": "Greek yogurt", "calories": 150, "protein": 20}],
+            }
+        ],
+        "go_to_items": [{"id": "goto-1", "name": "Rice cakes", "slot": "snack"}],
+        "preferences": {"likes": ["yogurt"], "dietary_restrictions": "no shellfish"},
+    })
+
+
+def test_preserve_existing_keeps_user_anchors_verbatim():
+    existing = _existing_plan()
+    regenerated = NutritionPlanBuilder.validate_plan({
+        "goal": "muscle",
+        # A "redesign" that drops the user's breakfast and invents a new one.
+        "meal_anchors": [
+            {"slot": "lunch", "label": "Chicken bowl", "foods": [{"name": "chicken"}]}
+        ],
+        "go_to_items": [],
+        "preferences": {"likes": ["chicken"]},
+    })
+
+    merged = NutritionPlanBuilder.preserve_existing(regenerated, existing)
+
+    kept = next(a for a in merged["meal_anchors"] if a["id"] == "keep-me")
+    assert kept["kind"] == "potential"
+    assert kept["place"] == "Fannie Mae"
+    assert kept["days"] == ["mon", "tue", "wed"]
+    assert [f["name"] for f in kept["foods"]] == ["Greek yogurt"]
+
+    added = [a for a in merged["meal_anchors"] if a["id"] != "keep-me"]
+    assert [a["label"] for a in added] == ["Chicken bowl"]
+    assert "on top" in (added[0]["notes"] or "")
+
+    assert [g["name"] for g in merged["go_to_items"]] == ["Rice cakes"]
+    assert merged["preferences"]["likes"] == ["yogurt", "chicken"]
+    assert merged["preferences"]["dietary_restrictions"] == "no shellfish"
+    assert "Chicken bowl" in merged["carryover_note"]
+
+
+def test_preserve_existing_drops_ai_copies_of_the_same_meal():
+    existing = _existing_plan()
+    regenerated = NutritionPlanBuilder.validate_plan({
+        "goal": "muscle",
+        # Same slot + label as the anchor the user already set.
+        "meal_anchors": [
+            {"slot": "breakfast", "label": "Breakfast", "foods": [{"name": "egg whites"}]}
+        ],
+    })
+
+    merged = NutritionPlanBuilder.preserve_existing(regenerated, existing)
+
+    assert len(merged["meal_anchors"]) == 1
+    assert [f["name"] for f in merged["meal_anchors"][0]["foods"]] == ["Greek yogurt"]
+    assert "stay exactly as you set them" in merged["carryover_note"]

@@ -37,6 +37,8 @@ export interface MealAnchorFood {
   carbs?: number | null;
   fats?: number | null;
   fiber?: number | null;
+  group_key?: string | null;
+  match_similar?: boolean | null;
 }
 
 export interface MealAnchor {
@@ -48,6 +50,10 @@ export interface MealAnchor {
   /** Days this anchor usually applies. Empty = use frequency. */
   days?: WeekdayKey[] | string[];
   notes?: string | null;
+  /** Order/choice changes each time (e.g. lunch at a spot). */
+  varies?: boolean;
+  /** Place or context when varies — e.g. "Fannie Mae". */
+  place?: string | null;
 }
 
 export interface FlexibleMeal {
@@ -250,10 +256,14 @@ export const WEEKDAY_OPTIONS: { id: WeekdayKey; label: string; short: string }[]
 ];
 
 export const STANCE_OPTIONS: { id: SlotStance; label: string; hint: string }[] = [
-  { id: "anchors", label: "Meal anchors", hint: "Specific foods you usually eat" },
-  { id: "uncertain", label: "Uncertain", hint: "Varies day to day" },
-  { id: "eat_out", label: "Eat out", hint: "Restaurants / fast food often" },
-  { id: "flexible", label: "Flexible", hint: "Range only, you pick foods" },
+  { id: "anchors", label: "Meal anchors", hint: "Mostly set meals — add anchors with foods & days" },
+  {
+    id: "uncertain",
+    label: "Uncertain",
+    hint: "Some days vary — still add anchors for days you know, plus places for the rest",
+  },
+  { id: "eat_out", label: "Eat out", hint: "Often restaurants — add places, and anchors for cook days" },
+  { id: "flexible", label: "Flexible", hint: "Macro range only — you pick foods later" },
 ];
 
 /** Slot labels for go-to items — "other" reads as Anytime. */
@@ -449,4 +459,98 @@ export async function getSuggestedGoal(): Promise<SuggestedGoal | null> {
   } catch {
     return null;
   }
+}
+
+// --- AI-proposed plan edits ------------------------------------------------
+
+export type NutritionEditStatus = "pending" | "applied" | "dismissed" | "stale";
+
+export type NutritionSuggestionSetStatus =
+  | "pending"
+  | "partially_applied"
+  | "applied"
+  | "dismissed"
+  | "superseded";
+
+/** One reviewable change the coach staged against the live plan. */
+export interface NutritionPlanEdit {
+  id: string;
+  op: string;
+  /** Plan field the edit lands in, e.g. "targets" / "meal_anchors". */
+  field?: string;
+  target_id?: string | null;
+  /** Short human label, e.g. "Breakfast → 520 kcal". */
+  title: string;
+  rationale?: string | null;
+  /** What the edit replaces — null for additions. */
+  before?: any;
+  payload?: any;
+  status: NutritionEditStatus;
+}
+
+export interface NutritionSuggestionSet {
+  id: string;
+  plan_id: string;
+  plan_version?: number;
+  conversation_id?: string | null;
+  status: NutritionSuggestionSetStatus;
+  summary: string;
+  edits: NutritionPlanEdit[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PendingSuggestions {
+  suggestion: NutritionSuggestionSet | null;
+  pending_count: number;
+  /** The plan was edited after these were proposed — some may be stale. */
+  plan_changed_since: boolean;
+}
+
+/** Coach-staged edits awaiting review. Never changes the plan by itself. */
+export async function getPendingSuggestions(): Promise<PendingSuggestions> {
+  const res = await apiClient.get("/api/nutrition-plan/suggestions");
+  return {
+    suggestion: res.data?.suggestion ?? null,
+    pending_count: res.data?.pending_count ?? 0,
+    plan_changed_since: !!res.data?.plan_changed_since,
+  };
+}
+
+/** Accept staged edits. Omit editIds to accept everything still pending. */
+export async function applySuggestions(
+  setId: string,
+  editIds?: string[]
+): Promise<{
+  plan: NutritionPlan;
+  suggestion: NutritionSuggestionSet;
+  applied_edit_ids: string[];
+  stale_edit_ids: string[];
+  pending_count: number;
+}> {
+  const res = await apiClient.post(`/api/nutrition-plan/suggestions/${setId}/apply`, {
+    edit_ids: editIds,
+  });
+  return res.data;
+}
+
+/** Reject staged edits. Omit editIds to clear the whole set. */
+export async function dismissSuggestions(
+  setId: string,
+  editIds?: string[]
+): Promise<{ suggestion: NutritionSuggestionSet; pending_count: number }> {
+  const res = await apiClient.post(`/api/nutrition-plan/suggestions/${setId}/dismiss`, {
+    edit_ids: editIds,
+  });
+  return res.data;
+}
+
+/** A "3 plan updates ready" card emitted by a nutrition-mode chat turn. */
+export interface NutritionSuggestionArtifact {
+  type: "nutrition_suggestions";
+  suggestion_set_id: string;
+  plan_id: string;
+  summary: string;
+  count: number;
+  titles: string[];
 }

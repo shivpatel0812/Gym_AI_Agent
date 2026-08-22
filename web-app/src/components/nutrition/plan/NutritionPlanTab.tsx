@@ -11,6 +11,7 @@ import EditMealAnchorModal, { SlotIcon, sumAnchorMacros } from "./EditMealAnchor
 import EditGoToItemModal from "./EditGoToItemModal";
 import EditFlexibleMealModal from "./EditFlexibleMealModal";
 import DayMap from "./DayMap";
+import PlanSuggestions from "./PlanSuggestions";
 import AddBlueprintModal, { BlueprintAddResult } from "./AddBlueprintModal";
 import {
   BlueprintExtra,
@@ -19,7 +20,13 @@ import {
   GoToItem,
   MealAnchor,
   NutritionPlan,
+  NutritionPlanEdit,
+  NutritionSuggestionSet,
+  PrimaryMealSlot,
+  applySuggestions,
+  dismissSuggestions,
   endNutritionPlan,
+  getPendingSuggestions,
   frequencyLabel,
   getActiveNutritionPlan,
   goalLabel,
@@ -32,6 +39,8 @@ import { buildDayMap } from "../../../lib/dayMap";
 
 interface Props {
   onAskCoach?: (prompt: string) => void;
+  /** Arrived from a chat card — scroll the staged suggestions into view. */
+  focusSuggestions?: boolean;
 }
 
 const MACRO_TILES = [
@@ -44,7 +53,7 @@ const MACRO_TILES = [
 const fieldClass =
   "w-full px-3 py-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/40";
 
-export default function NutritionPlanTab({ onAskCoach }: Props) {
+export default function NutritionPlanTab({ onAskCoach, focusSuggestions }: Props) {
   const [plan, setPlan] = useState<NutritionPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -67,11 +76,26 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
   const [strategyOpen, setStrategyOpen] = useState(false);
   const [addBand, setAddBand] = useState<DayBand | null>(null);
   const [editingExtra, setEditingExtra] = useState<BlueprintExtra | null>(null);
+  const [suggestions, setSuggestions] = useState<NutritionSuggestionSet | null>(null);
+  const [planChangedSince, setPlanChangedSince] = useState(false);
+  const [suggestionsBusy, setSuggestionsBusy] = useState(false);
+
+  const loadSuggestions = useCallback(async () => {
+    try {
+      const pending = await getPendingSuggestions();
+      setSuggestions(pending.suggestion);
+      setPlanChangedSince(pending.plan_changed_since);
+    } catch {
+      // Suggestions are additive — a failure here must not hide the plan.
+      setSuggestions(null);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
       const active = await getActiveNutritionPlan();
       setPlan(active);
+      if (active) loadSuggestions();
       if (active?.targets) {
         setCal(String(active.targets.calories ?? ""));
         setProtein(String(active.targets.protein ?? ""));
@@ -89,6 +113,81 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (focusSuggestions && suggestions) {
+      document
+        .querySelector('[data-testid="plan-suggestions"]')
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [focusSuggestions, suggestions]);
+
+  const acceptSuggestions = async (editIds?: string[]) => {
+    if (!suggestions) return;
+    setSuggestionsBusy(true);
+    try {
+      const result = await applySuggestions(suggestions.id, editIds);
+      // The response carries the merged plan, so no second round trip
+      setPlan(result.plan);
+      setSuggestions(result.suggestion);
+      setPlanChangedSince(false);
+      if (result.stale_edit_ids?.length) {
+        setError("Some suggestions no longer matched your plan and were skipped.");
+      } else {
+        setError(null);
+      }
+    } catch {
+      setError("Could not apply those suggestions.");
+    } finally {
+      setSuggestionsBusy(false);
+    }
+  };
+
+  const rejectSuggestions = async (editIds?: string[]) => {
+    if (!suggestions) return;
+    setSuggestionsBusy(true);
+    try {
+      const result = await dismissSuggestions(suggestions.id, editIds);
+      setSuggestions(result.suggestion);
+    } catch {
+      setError("Could not dismiss those suggestions.");
+    } finally {
+      setSuggestionsBusy(false);
+    }
+  };
+
+  /** Accept-with-changes: open the normal editor prefilled from the suggestion. */
+  const editSuggestion = (edit: NutritionPlanEdit) => {
+    if (edit.field === "meal_anchors" && edit.payload) {
+      const index = (plan?.meal_anchors || []).findIndex((a) => a.id === edit.payload.id);
+      setEditingAnchor(edit.payload as MealAnchor);
+      setEditingAnchorIndex(index >= 0 ? index : null);
+      setAnchorEditorOpen(true);
+      return;
+    }
+    if (edit.field === "go_to_items" && edit.payload) {
+      const index = (plan?.go_to_items || []).findIndex((g) => g.id === edit.payload.id);
+      setEditingGoTo(edit.payload as GoToItem);
+      setEditingGoToIndex(index >= 0 ? index : null);
+      setGoToEditorOpen(true);
+      return;
+    }
+    if (edit.field === "flexible_meals" && edit.payload) {
+      const index = (plan?.flexible_meals || []).findIndex((m) => m.id === edit.payload.id);
+      setEditingFlex(edit.payload as FlexibleMeal);
+      setEditingFlexIndex(index >= 0 ? index : null);
+      setFlexEditorOpen(true);
+      return;
+    }
+    if (edit.field === "targets" && edit.payload) {
+      if (edit.payload.calories != null) setCal(String(edit.payload.calories));
+      if (edit.payload.protein != null) setProtein(String(edit.payload.protein));
+      if (edit.payload.carbs != null) setCarbs(String(edit.payload.carbs));
+      if (edit.payload.fats != null) setFats(String(edit.payload.fats));
+      if (edit.payload.fiber != null) setFiber(String(edit.payload.fiber));
+      setEditingTargets(true);
+    }
+  };
 
   const savePatch = async (patch: Partial<NutritionPlan>) => {
     if (!plan) return false;
@@ -192,7 +291,7 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       setAddBand((extra.band as DayBand) || slot.band);
       return;
     }
-    if (slot.kind === "suggest") {
+    if (slot.kind === "suggest" || slot.kind === "goto") {
       const items = plan.go_to_items || [];
       const idx = items.findIndex((g) => g.id && g.id === slot.sourceId);
       const resolved = idx >= 0 ? idx : typeof slot.sourceIndex === "number" ? slot.sourceIndex : -1;
@@ -271,8 +370,8 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     setEditingFlexIndex(null);
   };
 
-  const openNewGoTo = () => {
-    setEditingGoTo(null);
+  const openNewGoTo = (slot?: PrimaryMealSlot | string) => {
+    setEditingGoTo(slot ? { slot, name: "" } : null);
     setEditingGoToIndex(null);
     setGoToEditorOpen(true);
   };
@@ -510,6 +609,17 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
         </button>
       </div>
 
+      {suggestions ? (
+        <PlanSuggestions
+          set={suggestions}
+          planChangedSince={planChangedSince}
+          busy={suggestionsBusy}
+          onAccept={acceptSuggestions}
+          onDismiss={rejectSuggestions}
+          onEdit={editSuggestion}
+        />
+      ) : null}
+
       <div>
         <h2 className="text-[28px] font-bold text-white leading-tight">{goalLabel(plan.goal)}</h2>
         {plan.goal_detail ? (
@@ -533,6 +643,7 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
             setEditingAnchorIndex(null);
             setAnchorEditorOpen(true);
           }}
+          onAddGoTo={(slot) => openNewGoTo(slot)}
           onPressSlot={handlePressBlueprintSlot}
           onStanceChange={async (slot, stance) => {
             if (!plan) return;

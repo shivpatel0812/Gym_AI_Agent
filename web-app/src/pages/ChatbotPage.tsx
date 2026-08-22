@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import apiClient from "../lib/api-client";
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
 import Input from "../components/ui/Input";
 import CreateNutritionPlanModal from "../components/nutrition/plan/CreateNutritionPlanModal";
+import { NutritionSuggestionArtifact } from "../api/nutritionPlan";
 import {
   MdSend,
   MdChatBubble,
@@ -23,11 +24,14 @@ import {
 interface Message {
   role: "user" | "assistant";
   content: string;
+  /** Plan edits this turn staged for review. Chat never writes the plan. */
+  suggestions?: NutritionSuggestionArtifact;
 }
 
 type ChatMode = "coach" | "plan" | "nutrition";
 
 export default function ChatbotPage() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
@@ -110,9 +114,13 @@ export default function ChatbotPage() {
       );
 
       if (res.data.status === "success") {
+        const staged = (res.data.artifacts || []).find(
+          (a: any) => a?.type === "nutrition_suggestions"
+        ) as NutritionSuggestionArtifact | undefined;
         const assistantMessage: Message = {
           role: "assistant",
           content: res.data.response,
+          suggestions: staged,
         };
         setMessages([...updatedMessages, assistantMessage]);
         setConversationHistory(res.data.conversation_history || []);
@@ -273,6 +281,32 @@ export default function ChatbotPage() {
                   }`}
                 >
                   <div className="whitespace-pre-wrap">{message.content}</div>
+                  {message.suggestions ? (
+                    <button
+                      type="button"
+                      data-testid="suggestion-card"
+                      onClick={() => navigate("/nutrition?tab=plan&suggestions=1")}
+                      className="mt-3 w-full text-left rounded-xl bg-[rgba(94,234,212,0.08)] border border-[#5EEAD4]/40 p-3 hover:bg-[rgba(94,234,212,0.14)]"
+                    >
+                      <div className="flex items-center gap-2">
+                        <MdAutoAwesome className="text-[#5EEAD4] shrink-0" />
+                        <span className="text-sm font-bold text-white">
+                          {message.suggestions.count}{" "}
+                          {message.suggestions.count === 1 ? "plan update" : "plan updates"} ready
+                        </span>
+                      </div>
+                      <ul className="mt-2 space-y-0.5">
+                        {message.suggestions.titles.slice(0, 3).map((title) => (
+                          <li key={title} className="text-xs text-[#8E8E93]">
+                            · {title}
+                          </li>
+                        ))}
+                      </ul>
+                      <span className="mt-2 inline-block text-xs font-bold text-[#5EEAD4]">
+                        Review on Plan →
+                      </span>
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ))

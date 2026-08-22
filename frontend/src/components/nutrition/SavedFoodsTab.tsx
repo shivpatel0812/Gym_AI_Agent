@@ -305,7 +305,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: "center",
   },
-  primaryText: { color: "#fff", fontWeight: "700" },
+  primaryText: { color: colors.onAccent, fontWeight: "700" },
   secondary: {
     flex: 1,
     borderRadius: borderRadius.md,

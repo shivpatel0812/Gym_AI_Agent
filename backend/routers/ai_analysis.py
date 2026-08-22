@@ -494,13 +494,16 @@ async def chat_with_ai(
         mode = _chat_mode(request)
         split_context = _split_context_for_plan(user_id) if mode == "plan" else None
         nutrition_context = _nutrition_context_for_chat(user_id) if mode == "nutrition" else None
+        toolbox = CoachToolbox(
+            db, user_id, mode=mode, conversation_id=request.conversation_id
+        )
 
         # Get chat response, with tools so the coach can look up specifics
         result = coach.chat(
             user_message=request.message,
             summary=summary,
             conversation_history=history,
-            toolbox=CoachToolbox(db, user_id),
+            toolbox=toolbox,
             mode=mode,
             split_context=split_context,
             nutrition_context=nutrition_context,
@@ -518,6 +521,9 @@ async def chat_with_ai(
             "response": result["response"],
             "tokens_used": result["tokens_used"],
             "tools_used": result.get("tools_used", []),
+            # Structured side effects of the turn (e.g. staged plan
+            # suggestions) so the client can render a card, not just text
+            "artifacts": toolbox.artifacts,
             "conversation_id": conversation_id,
             "conversation_history": result["conversation_history"],
             "ai_access": ai_access.get_status(user_id),
@@ -625,11 +631,13 @@ async def chat_with_ai_stream(
             model=resolve_model(request.model),
             user_profile=user_profile,
         )
-        toolbox = CoachToolbox(db, user_id)
+        mode = _chat_mode(request)
+        toolbox = CoachToolbox(
+            db, user_id, mode=mode, conversation_id=request.conversation_id
+        )
 
         store = ConversationStore(db, user_id)
         history = _chat_history(store, request)
-        mode = _chat_mode(request)
         split_context = _split_context_for_plan(user_id) if mode == "plan" else None
         nutrition_context = _nutrition_context_for_chat(user_id) if mode == "nutrition" else None
     except Exception:
@@ -656,6 +664,7 @@ async def chat_with_ai_stream(
                         mode=mode,
                     )
                     event["ai_access"] = ai_access.get_status(user_id)
+                    event["artifacts"] = toolbox.artifacts
                 elif event.get("type") == "error":
                     # chat_stream catches its own failures and yields them as
                     # events rather than raising, so the refund has to happen

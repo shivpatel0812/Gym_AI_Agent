@@ -21,14 +21,18 @@ import {
   WEEKDAY_OPTIONS,
   WeekdayKey,
   frequencyLabel,
+  mealAnchorKind,
+  mealFoodGroups,
+  sumGroupedFoodMacros,
 } from "../../../api/nutritionPlan";
-import { colors, spacing, borderRadius } from "../../../theme";
+import { bp, nutritionSheet } from "../../../lib/blueprintTheme";
+import { borderRadius, spacing } from "../../../theme";
 
 interface Props {
   visible: boolean;
   anchor: MealAnchor | null;
   onClose: () => void;
-  onSave: (anchor: MealAnchor) => void;
+  onSave: (anchor: MealAnchor) => void | Promise<void>;
   onDelete?: () => void;
 }
 
@@ -61,16 +65,11 @@ function emptyFood(): MealAnchorFood {
 }
 
 export function sumAnchorMacros(foods: MealAnchorFood[] = []) {
-  return foods.reduce(
-    (acc, food) => ({
-      calories: acc.calories + (Number(food.calories) || 0),
-      protein: acc.protein + (Number(food.protein) || 0),
-      carbs: acc.carbs + (Number(food.carbs) || 0),
-      fats: acc.fats + (Number(food.fats) || 0),
-      fiber: acc.fiber + (Number(food.fiber) || 0),
-    }),
-    { calories: 0, protein: 0, carbs: 0, fats: 0, fiber: 0 }
-  );
+  return sumGroupedFoodMacros(foods);
+}
+
+function newGroupKey() {
+  return `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
 export function slotIcon(slot?: string): keyof typeof MaterialCommunityIcons.glyphMap {
@@ -106,12 +105,21 @@ export default function EditMealAnchorModal({
   const [frequency, setFrequency] = useState("daily");
   const [days, setDays] = useState<WeekdayKey[]>([]);
   const [notes, setNotes] = useState("");
+  const [mealKind, setMealKind] = useState<"individual" | "potential" | "uncertain">("individual");
+  const [place, setPlace] = useState("");
   const [foods, setFoods] = useState<MealAnchorFood[]>([]);
   const [query, setQuery] = useState("");
   const [savedFoods, setSavedFoods] = useState<FoodDbItem[]>([]);
+  const [recentLogs, setRecentLogs] = useState<FoodDbItem[]>([]);
+  const [attachOpen, setAttachOpen] = useState(false);
   const [custom, setCustom] = useState(emptyFood());
   const [showCustom, setShowCustom] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** When set, next search/custom add joins this food group as an alternate. */
+  const [alternateForKey, setAlternateForKey] = useState<string | null>(null);
+
+  const varies = mealKind === "potential";
+  const uncertain = mealKind === "uncertain";
 
   useEffect(() => {
     if (!visible) return;
@@ -124,10 +132,15 @@ export default function EditMealAnchorModal({
       )
     );
     setNotes(anchor?.notes || "");
+    const kind = mealAnchorKind(anchor || {});
+    setMealKind(kind);
+    setPlace(anchor?.place || "");
     setFoods(anchor?.foods?.length ? anchor.foods.map((f) => ({ ...f })) : []);
     setQuery("");
     setCustom(emptyFood());
     setShowCustom(false);
+    setAttachOpen(kind === "potential" || kind === "uncertain");
+    setAlternateForKey(null);
   }, [visible, anchor]);
 
   useEffect(() => {
@@ -139,6 +152,36 @@ export default function EditMealAnchorModal({
         if (cancelled) return;
         const items = Array.isArray(res.data) ? res.data.map(toFoodDbItem) : [];
         setSavedFoods(items.filter((f) => f.name));
+      })
+      .catch(() => {});
+    apiClient
+      .get("/api/macros")
+      .then((res) => {
+        if (cancelled) return;
+        const rows = Array.isArray(res.data) ? res.data : [];
+        const seen = new Set<string>();
+        const out: FoodDbItem[] = [];
+        for (const row of rows.slice(0, 80)) {
+          const name = String(row?.name || "").trim();
+          if (!name) continue;
+          const key = name.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push(
+            toFoodDbItem({
+              id: row.id,
+              name,
+              serving: row.serving || row.amount || "1 serving",
+              calories: row.calories,
+              protein: row.protein,
+              carbs: row.carbs,
+              fats: row.fats,
+              fiber: row.fiber,
+            })
+          );
+          if (out.length >= 24) break;
+        }
+        setRecentLogs(out);
       })
       .catch(() => {});
     return () => {
@@ -153,6 +196,20 @@ export default function EditMealAnchorModal({
     return Array.from(byName.values());
   }, [savedFoods]);
 
+  const previousMeals = useMemo(() => {
+    const byName = new Map<string, FoodDbItem>();
+    for (const food of recentLogs) byName.set(food.name.toLowerCase(), food);
+    for (const food of savedFoods) byName.set(food.name.toLowerCase(), food);
+    return Array.from(byName.values()).slice(0, 30);
+  }, [recentLogs, savedFoods]);
+
+  const attachResults = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const pool = previousMeals.length ? previousMeals : catalog;
+    if (!q) return pool.slice(0, 12);
+    return pool.filter((f) => foodMatchesQuery(f, q)).slice(0, 12);
+  }, [query, previousMeals, catalog]);
+
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
@@ -160,8 +217,10 @@ export default function EditMealAnchorModal({
   }, [query, catalog]);
 
   const totals = sumAnchorMacros(foods);
+  const foodGroups = useMemo(() => mealFoodGroups(foods), [foods]);
 
   const addFromDb = (item: FoodDbItem) => {
+    const groupKey = alternateForKey || newGroupKey();
     setFoods((prev) => [
       ...prev,
       {
@@ -172,14 +231,18 @@ export default function EditMealAnchorModal({
         carbs: Math.round(item.carbs * 10) / 10,
         fats: Math.round(item.fats * 10) / 10,
         fiber: item.fiber != null ? Math.round(item.fiber * 10) / 10 : null,
+        group_key: !varies && !uncertain ? groupKey : undefined,
+        match_similar: false,
       },
     ]);
     setQuery("");
-    if (!label.trim()) setLabel(item.name);
+    setAlternateForKey(null);
+    if (!label.trim() && !varies && !alternateForKey) setLabel(item.name);
   };
 
   const addCustom = () => {
     if (!custom.name.trim()) return;
+    const groupKey = alternateForKey || newGroupKey();
     setFoods((prev) => [
       ...prev,
       {
@@ -190,10 +253,13 @@ export default function EditMealAnchorModal({
         carbs: Number(custom.carbs) || null,
         fats: Number(custom.fats) || null,
         fiber: Number(custom.fiber) || null,
+        group_key: !varies && !uncertain ? groupKey : undefined,
+        match_similar: false,
       },
     ]);
     setCustom(emptyFood());
     setShowCustom(false);
+    setAlternateForKey(null);
   };
 
   const updateFood = (index: number, patch: Partial<MealAnchorFood>) => {
@@ -204,20 +270,46 @@ export default function EditMealAnchorModal({
     setFoods((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleSave = () => {
-    const nextLabel = label.trim() || foods[0]?.name || "Regular meal";
-    if (!foods.length && !label.trim()) return;
+  const removeGroup = (groupKey: string) => {
+    setFoods((prev) =>
+      prev.filter((f, i) => {
+        const key = f.group_key || `solo:${i}:${String(f.name || "").toLowerCase()}`;
+        return key !== groupKey;
+      })
+    );
+    if (alternateForKey === groupKey) setAlternateForKey(null);
+  };
+
+  const handleSave = async () => {
+    const kind = mealKind;
+    const nextLabel =
+      label.trim() ||
+      (kind === "potential" ? place.trim() || "Potential meal" : "") ||
+      (kind === "uncertain" ? place.trim() || "Uncertain meal" : "") ||
+      foods[0]?.name ||
+      "Regular meal";
+    if (kind === "individual" && !foods.length && !label.trim()) return;
+    if (kind !== "individual" && !label.trim() && !place.trim() && !foods.length) return;
     setSaving(true);
-    onSave({
-      id: anchor?.id,
-      slot,
-      label: nextLabel,
-      frequency: days.length === 7 ? "daily" : days.length ? "most_days" : frequency,
-      days,
-      notes: notes.trim() || null,
-      foods: foods.length ? foods : [{ name: nextLabel }],
-    });
-    setSaving(false);
+    try {
+      await Promise.resolve(
+        onSave({
+          id: anchor?.id,
+          slot,
+          label: nextLabel,
+          frequency: days.length === 7 ? "daily" : days.length ? "most_days" : frequency,
+          days,
+          notes: notes.trim() || null,
+          kind,
+          varies: kind === "potential",
+          uncertain: kind === "uncertain",
+          place: place.trim() || null,
+          foods: foods.length ? foods : kind === "individual" ? [{ name: nextLabel }] : [],
+        })
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -227,7 +319,7 @@ export default function EditMealAnchorModal({
           <View style={styles.header}>
             <Text style={styles.title}>{anchor?.id ? "Edit meal anchor" : "Add meal anchor"}</Text>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <MaterialCommunityIcons name="close" size={20} color={colors.textSecondary} />
+              <MaterialCommunityIcons name="close" size={20} color={bp.muted} />
             </TouchableOpacity>
           </View>
 
@@ -238,7 +330,7 @@ export default function EditMealAnchorModal({
               value={label}
               onChangeText={setLabel}
               placeholder="Breakfast"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={bp.muted2}
             />
 
             <Text style={styles.label}>Meal</Text>
@@ -252,32 +344,105 @@ export default function EditMealAnchorModal({
                   <MaterialCommunityIcons
                     name={slotIcon(s.id)}
                     size={14}
-                    color={slot === s.id ? colors.accentPrimary : colors.textMuted}
+                    color={slot === s.id ? bp.accent : bp.muted2}
                   />
                   <Text style={[styles.chipText, slot === s.id && styles.chipTextOn]}>{s.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
 
-            <Text style={styles.label}>Days you usually eat this</Text>
+            <Text style={styles.label}>Meal type</Text>
+            <View style={styles.chipRow}>
+              {(
+                [
+                  ["individual", "Individual", bp.accent, bp.accentSoft],
+                  ["potential", "Potential", bp.potential, bp.potentialSoft],
+                  ["uncertain", "Uncertain", bp.uncertain, bp.uncertainSoft],
+                ] as const
+              ).map(([id, text, color, soft]) => {
+                const on = mealKind === id;
+                return (
+                  <TouchableOpacity
+                    key={id}
+                    style={[
+                      styles.chip,
+                      on && { borderColor: color, backgroundColor: soft },
+                    ]}
+                    onPress={() => {
+                      setMealKind(id);
+                      if (id !== "individual") setAttachOpen(true);
+                    }}
+                  >
+                    <View style={[styles.kindDot, { backgroundColor: color }]} />
+                    <Text style={[styles.chipText, on && { color }]}>{text}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {varies && !uncertain ? (
+              <View style={styles.variesBox}>
+                <Text style={styles.hint}>
+                  e.g. “Fannie Lunch” — attach 3–4 options you rotate through.
+                </Text>
+                <Text style={styles.label}>Place / spot</Text>
+                <TextInput
+                  style={styles.input}
+                  value={place}
+                  onChangeText={setPlace}
+                  placeholder="e.g. Fannie Mae, Chipotle"
+                  placeholderTextColor={bp.muted2}
+                />
+              </View>
+            ) : null}
+            {uncertain ? (
+              <View style={[styles.variesBox, { borderColor: "rgba(123,163,196,0.45)" }]}>
+                <Text style={styles.hint}>
+                  Open day — you don’t know yet. Optional place + idea meals for later.
+                </Text>
+                <Text style={styles.label}>Place / context (optional)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={place}
+                  onChangeText={setPlace}
+                  placeholder="e.g. out with friends, work cafeteria"
+                  placeholderTextColor={bp.muted2}
+                />
+              </View>
+            ) : null}
+
+            <Text style={styles.label}>Days you're certain</Text>
+            <Text style={styles.hint}>
+              Turn on days you know this meal. Leave Thu–Sun off if those are uncertain — keep the meal
+              slot on Uncertain and add places there.
+            </Text>
             <View style={styles.chipRow}>
               {WEEKDAY_OPTIONS.map((d) => {
                 const on = days.includes(d.id);
                 return (
                   <TouchableOpacity
                     key={d.id}
-                    style={[styles.dayChip, on && styles.chipOn]}
+                    style={[styles.dayChip, on && styles.dayChipOn]}
                     onPress={() =>
                       setDays((prev) =>
                         prev.includes(d.id) ? prev.filter((x) => x !== d.id) : [...prev, d.id]
                       )
                     }
                   >
-                    <Text style={[styles.chipText, on && styles.chipTextOn]}>{d.label}</Text>
+                    <Text style={[styles.dayChipText, on && styles.dayChipTextOn]}>
+                      {d.short || d.label.slice(0, 1)}
+                    </Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
+            {days.length > 0 && days.length < 7 ? (
+              <Text style={styles.hint}>
+                Open / uncertain:{" "}
+                {WEEKDAY_OPTIONS.filter((d) => !days.includes(d.id))
+                  .map((d) => d.label)
+                  .join(", ")}
+              </Text>
+            ) : null}
             <View style={styles.chipRow}>
               <TouchableOpacity
                 style={styles.chip}
@@ -309,71 +474,246 @@ export default function EditMealAnchorModal({
               ))}
             </View>
 
-            <Text style={styles.label}>Foods & macros</Text>
-            <Text style={styles.hint}>Search your food database or saved foods, then tweak amounts.</Text>
+            <Text style={styles.label}>
+              {uncertain
+                ? "Idea meals (optional)"
+                : varies
+                  ? "Options (add 3–4)"
+                  : "Foods & macros"}
+            </Text>
+            <Text style={styles.hint}>
+              {uncertain
+                ? "Optional ideas for when you decide — or leave empty."
+                : varies
+                  ? "Attach 3–4 previous meals as options — pick one when you eat."
+                  : alternateForKey
+                    ? "Pick another food that also counts for this slot (e.g. another yogurt)."
+                    : "Each card is one meal slot. Add alternates or “any similar” so Previous still matches."}
+            </Text>
+            {varies || uncertain ? (
+              <TouchableOpacity
+                style={styles.attachBtn}
+                onPress={() => setAttachOpen((v) => !v)}
+              >
+                <MaterialCommunityIcons name="history" size={16} color={bp.ai} />
+                <Text style={styles.attachBtnText}>
+                  {attachOpen ? "Hide previous meals" : "Attach previous meals"}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
 
-            {(foods || []).map((food, i) => (
-              <View key={`${food.name}-${i}`} style={styles.foodCard}>
-                <View style={styles.foodHead}>
-                  <Text style={styles.foodName}>{food.name}</Text>
-                  <TouchableOpacity onPress={() => removeFood(i)}>
-                    <MaterialCommunityIcons name="close" size={18} color={colors.textMuted} />
-                  </TouchableOpacity>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  value={food.amount || ""}
-                  onChangeText={(v) => updateFood(i, { amount: v })}
-                  placeholder="Amount (e.g. 200g)"
-                  placeholderTextColor={colors.textMuted}
-                />
-                <View style={styles.macroEditRow}>
-                  {(
-                    [
-                      ["calories", "kcal"],
-                      ["protein", "P"],
-                      ["carbs", "C"],
-                      ["fats", "F"],
-                    ] as const
-                  ).map(([key, short]) => (
-                    <View key={key} style={styles.macroEditField}>
-                      <Text style={styles.macroEditLabel}>{short}</Text>
+            {!varies && !uncertain
+              ? foodGroups.map((group) => {
+                  const primary = group.primary;
+                  if (!primary) return null;
+                  const primaryIndex = foods.findIndex(
+                    (f) => f === primary || (f.name === primary.name && f.group_key === group.key)
+                  );
+                  const pi = primaryIndex >= 0 ? primaryIndex : foods.indexOf(primary);
+                  const alternates = foods.filter((f, i) => {
+                    const key = f.group_key || `solo:${i}:${String(f.name || "").toLowerCase()}`;
+                    return key === group.key && f !== primary;
+                  });
+                  const addingHere = alternateForKey === group.key;
+                  return (
+                    <View key={group.key} style={styles.foodCard}>
+                      <View style={styles.foodHead}>
+                        <Text style={styles.foodName}>{primary.name}</Text>
+                        <TouchableOpacity onPress={() => removeGroup(group.key)}>
+                          <MaterialCommunityIcons name="close" size={18} color={bp.muted2} />
+                        </TouchableOpacity>
+                      </View>
                       <TextInput
-                        style={styles.macroEditInput}
-                        keyboardType="numeric"
-                        value={food[key] != null ? String(food[key]) : ""}
-                        onChangeText={(v) =>
-                          updateFood(i, { [key]: v === "" ? null : Number(v) || 0 })
-                        }
-                        placeholder="0"
-                        placeholderTextColor={colors.textMuted}
+                        style={styles.input}
+                        value={primary.amount || ""}
+                        onChangeText={(v) => pi >= 0 && updateFood(pi, { amount: v })}
+                        placeholder="Amount (e.g. 200g)"
+                        placeholderTextColor={bp.muted2}
                       />
+                      <View style={styles.macroEditRow}>
+                        {(
+                          [
+                            ["calories", "kcal"],
+                            ["protein", "P"],
+                            ["carbs", "C"],
+                            ["fats", "F"],
+                          ] as const
+                        ).map(([key, short]) => (
+                          <View key={key} style={styles.macroEditField}>
+                            <Text style={styles.macroEditLabel}>{short}</Text>
+                            <TextInput
+                              style={styles.macroEditInput}
+                              keyboardType="numeric"
+                              value={primary[key] != null ? String(primary[key]) : ""}
+                              onChangeText={(v) =>
+                                pi >= 0 &&
+                                updateFood(pi, { [key]: v === "" ? null : Number(v) || 0 })
+                              }
+                              placeholder="0"
+                              placeholderTextColor={bp.muted2}
+                            />
+                          </View>
+                        ))}
+                      </View>
+
+                      {alternates.length ? (
+                        <View style={styles.altRow}>
+                          {alternates.map((alt) => {
+                            const ai = foods.indexOf(alt);
+                            return (
+                              <View key={`${alt.name}-${ai}`} style={styles.altChip}>
+                                <Text style={styles.altChipText} numberOfLines={1}>
+                                  {alt.name}
+                                </Text>
+                                <TouchableOpacity onPress={() => ai >= 0 && removeFood(ai)} hitSlop={6}>
+                                  <MaterialCommunityIcons name="close" size={14} color={bp.muted2} />
+                                </TouchableOpacity>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      ) : null}
+
+                      <View style={styles.groupActions}>
+                        <TouchableOpacity
+                          style={[
+                            styles.groupToggle,
+                            group.matchSimilar && styles.groupToggleOn,
+                          ]}
+                          onPress={() => {
+                            const on = !group.matchSimilar;
+                            setFoods((prev) => {
+                              let key = primary.group_key;
+                              if (!key || String(key).startsWith("solo:")) {
+                                key = newGroupKey();
+                              }
+                              return prev.map((f, i) => {
+                                const isPrimary = i === pi;
+                                const fKey =
+                                  f.group_key || `solo:${i}:${String(f.name || "").toLowerCase()}`;
+                                const inGroup =
+                                  isPrimary ||
+                                  fKey === group.key ||
+                                  (primary.group_key && f.group_key === primary.group_key);
+                                if (!inGroup && !isPrimary) return f;
+                                return {
+                                  ...f,
+                                  group_key: key,
+                                  match_similar: on,
+                                };
+                              });
+                            });
+                          }}
+                        >
+                          <MaterialCommunityIcons
+                            name={
+                              group.matchSimilar
+                                ? "checkbox-marked-outline"
+                                : "checkbox-blank-outline"
+                            }
+                            size={16}
+                            color={group.matchSimilar ? bp.accent : bp.muted}
+                          />
+                          <Text
+                            style={[
+                              styles.groupToggleText,
+                              group.matchSimilar && { color: bp.accent },
+                            ]}
+                          >
+                            Any similar (e.g. any yogurt)
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.altAddBtn, addingHere && styles.altAddBtnOn]}
+                          onPress={() => {
+                            if (addingHere) {
+                              setAlternateForKey(null);
+                              return;
+                            }
+                            let key = primary.group_key || "";
+                            if (!key || key.startsWith("solo:")) {
+                              key = newGroupKey();
+                              if (pi >= 0) updateFood(pi, { group_key: key });
+                            }
+                            setAlternateForKey(key);
+                          }}
+                        >
+                          <Text style={[styles.altAddText, addingHere && { color: bp.accent }]}>
+                            {addingHere ? "Cancel alternate" : "+ Alternate"}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                  ))}
-                </View>
-              </View>
-            ))}
+                  );
+                })
+              : (foods || []).map((food, i) => (
+                  <View key={`${food.name}-${i}`} style={styles.foodCard}>
+                    <View style={styles.foodHead}>
+                      <Text style={styles.foodName}>{food.name}</Text>
+                      <TouchableOpacity onPress={() => removeFood(i)}>
+                        <MaterialCommunityIcons name="close" size={18} color={bp.muted2} />
+                      </TouchableOpacity>
+                    </View>
+                    <TextInput
+                      style={styles.input}
+                      value={food.amount || ""}
+                      onChangeText={(v) => updateFood(i, { amount: v })}
+                      placeholder="Amount (e.g. 200g)"
+                      placeholderTextColor={bp.muted2}
+                    />
+                    <View style={styles.macroEditRow}>
+                      {(
+                        [
+                          ["calories", "kcal"],
+                          ["protein", "P"],
+                          ["carbs", "C"],
+                          ["fats", "F"],
+                        ] as const
+                      ).map(([key, short]) => (
+                        <View key={key} style={styles.macroEditField}>
+                          <Text style={styles.macroEditLabel}>{short}</Text>
+                          <TextInput
+                            style={styles.macroEditInput}
+                            keyboardType="numeric"
+                            value={food[key] != null ? String(food[key]) : ""}
+                            onChangeText={(v) =>
+                              updateFood(i, { [key]: v === "" ? null : Number(v) || 0 })
+                            }
+                            placeholder="0"
+                            placeholderTextColor={bp.muted2}
+                          />
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                ))}
 
             <View style={styles.searchBox}>
-              <MaterialCommunityIcons name="magnify" size={18} color={colors.textMuted} />
+              <MaterialCommunityIcons name="magnify" size={18} color={bp.muted2} />
               <TextInput
                 style={styles.searchInput}
                 value={query}
                 onChangeText={setQuery}
-                placeholder="Search foods..."
-                placeholderTextColor={colors.textMuted}
+                placeholder={
+                  alternateForKey ? "Search alternate food..." : "Search foods..."
+                }
+                placeholderTextColor={bp.muted2}
                 autoCorrect={false}
               />
             </View>
-            {results.map((item) => (
-              <TouchableOpacity key={item.name} style={styles.resultRow} onPress={() => addFromDb(item)}>
+            {((varies || uncertain) && attachOpen ? attachResults : results).map((item) => (
+              <TouchableOpacity
+                key={`${item.id || item.name}`}
+                style={styles.resultRow}
+                onPress={() => addFromDb(item)}
+              >
                 <View style={{ flex: 1 }}>
                   <Text style={styles.resultName}>{item.name}</Text>
                   <Text style={styles.resultMeta}>
                     {item.serving} · {Math.round(item.calories)} kcal · {Math.round(item.protein)}g P
                   </Text>
                 </View>
-                <MaterialCommunityIcons name="plus-circle" size={22} color={colors.accentPrimary} />
+                <MaterialCommunityIcons name="plus-circle" size={22} color={bp.accent} />
               </TouchableOpacity>
             ))}
 
@@ -390,14 +730,14 @@ export default function EditMealAnchorModal({
                   value={custom.name || ""}
                   onChangeText={(v) => setCustom((c) => ({ ...c, name: v }))}
                   placeholder="Food name"
-                  placeholderTextColor={colors.textMuted}
+                  placeholderTextColor={bp.muted2}
                 />
                 <TextInput
                   style={styles.input}
                   value={custom.amount || ""}
                   onChangeText={(v) => setCustom((c) => ({ ...c, amount: v }))}
                   placeholder="Amount"
-                  placeholderTextColor={colors.textMuted}
+                  placeholderTextColor={bp.muted2}
                 />
                 <View style={styles.macroEditRow}>
                   {(
@@ -418,7 +758,7 @@ export default function EditMealAnchorModal({
                           setCustom((c) => ({ ...c, [key]: v === "" ? null : Number(v) || 0 }))
                         }
                         placeholder="0"
-                        placeholderTextColor={colors.textMuted}
+                        placeholderTextColor={bp.muted2}
                       />
                     </View>
                   ))}
@@ -431,7 +771,7 @@ export default function EditMealAnchorModal({
 
             {totals.calories > 0 || totals.protein > 0 ? (
               <View style={styles.totalsRow}>
-                <Text style={styles.totalsTitle}>Meal total</Text>
+                <Text style={styles.totalsTitle}>{varies ? "Options total (typical ~avg)" : "Meal total"}</Text>
                 <View style={styles.pillRow}>
                   <View style={styles.pill}>
                     <Text style={styles.pillText}>{Math.round(totals.calories)} kcal</Text>
@@ -455,7 +795,7 @@ export default function EditMealAnchorModal({
               value={notes}
               onChangeText={setNotes}
               placeholder="e.g. Usually after training"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={bp.muted2}
               multiline
             />
           </ScrollView>
@@ -471,9 +811,18 @@ export default function EditMealAnchorModal({
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={[styles.primary, (!foods.length && !label.trim()) && styles.primaryDisabled]}
+              style={[
+                styles.primary,
+                ((!varies && !uncertain && !foods.length && !label.trim()) ||
+                  ((varies || uncertain) && !label.trim() && !place.trim() && !foods.length)) &&
+                  styles.primaryDisabled,
+              ]}
               onPress={handleSave}
-              disabled={(!foods.length && !label.trim()) || saving}
+              disabled={
+                ((!varies && !uncertain && !foods.length && !label.trim()) ||
+                  ((varies || uncertain) && !label.trim() && !place.trim() && !foods.length) ||
+                  saving)
+              }
             >
               {saving ? (
                 <ActivityIndicator color="#fff" />
@@ -488,181 +837,134 @@ export default function EditMealAnchorModal({
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.65)",
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    backgroundColor: colors.cardBackground,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: "92%",
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.sm,
-  },
-  title: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
-  closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.background,
+const local = StyleSheet.create({
+  dayChip: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: bp.border,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: bp.surface2,
+    minWidth: 36,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
   },
-  body: { padding: spacing.lg, paddingBottom: spacing["2xl"], gap: 8 },
-  label: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: colors.textMuted,
-    marginTop: spacing.sm,
-    marginBottom: 4,
-  },
-  hint: { fontSize: 12, color: colors.textMuted, marginBottom: 8, lineHeight: 16 },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: borderRadius.md,
-    color: colors.textPrimary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    backgroundColor: colors.background,
-    fontSize: 14,
-  },
-  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: colors.background,
-  },
-  dayChip: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: colors.background,
-    minWidth: 44,
-    alignItems: "center",
-  },
-  chipOn: { borderColor: colors.accentPrimary },
-  chipText: { fontSize: 12, color: colors.textSecondary, fontWeight: "600" },
-  chipTextOn: { color: colors.accentPrimary },
+  kindDot: { width: 6, height: 6, borderRadius: 3 },
   foodCard: {
-    backgroundColor: colors.background,
+    backgroundColor: bp.surface2,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: bp.border,
     padding: spacing.md,
     gap: 8,
     marginBottom: 8,
   },
+  groupActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 2,
+  },
+  groupToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: bp.border,
+  },
+  groupToggleOn: {
+    borderColor: `${bp.accent}88`,
+    backgroundColor: bp.accentSoft,
+  },
+  groupToggleText: { color: bp.muted, fontSize: 11, fontWeight: "700" },
+  altAddBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: bp.border,
+  },
+  altAddBtnOn: {
+    borderColor: `${bp.accent}88`,
+    backgroundColor: bp.accentSoft,
+  },
+  altAddText: { color: bp.muted, fontSize: 11, fontWeight: "800" },
+  altRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  altChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    maxWidth: "100%",
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    backgroundColor: bp.surface,
+    borderWidth: 1,
+    borderColor: bp.border,
+  },
+  altChipText: { color: "#fff", fontSize: 11, fontWeight: "600", maxWidth: 140 },
   foodHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  foodName: { fontSize: 14, fontWeight: "700", color: colors.textPrimary, flex: 1 },
+  foodName: { fontSize: 14, fontWeight: "700", color: bp.text, flex: 1 },
   macroEditRow: { flexDirection: "row", gap: 6 },
   macroEditField: { flex: 1 },
-  macroEditLabel: { fontSize: 10, color: colors.textMuted, fontWeight: "700", marginBottom: 2 },
+  macroEditLabel: {
+    fontSize: 10,
+    color: bp.muted2,
+    fontWeight: "700",
+    marginBottom: 2,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
   macroEditInput: {
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: bp.border,
     borderRadius: 8,
-    color: colors.textPrimary,
+    color: bp.text,
     paddingHorizontal: 8,
     paddingVertical: 6,
-    backgroundColor: colors.cardBackground,
+    backgroundColor: bp.surface,
     fontSize: 13,
     textAlign: "center",
   },
-  searchBox: {
-    flexDirection: "row",
-    alignItems: "center",
+  variesBox: {
     gap: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
+    padding: 12,
     borderRadius: borderRadius.md,
-    backgroundColor: colors.background,
-    paddingHorizontal: spacing.md,
-    marginTop: 4,
+    borderWidth: 1,
+    borderColor: "rgba(94,234,212,0.25)",
+    backgroundColor: bp.aiSoft,
   },
-  searchInput: { flex: 1, color: colors.textPrimary, paddingVertical: 12, fontSize: 14 },
-  resultRow: {
+  attachBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    gap: 6,
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(94,234,212,0.35)",
+    backgroundColor: bp.aiSoft,
+    marginBottom: 4,
   },
-  resultName: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
-  resultMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  attachBtnText: { color: bp.ai, fontWeight: "700", fontSize: 12 },
   customToggle: { paddingVertical: spacing.sm },
-  customToggleText: { color: colors.accentPrimary, fontWeight: "700", fontSize: 13 },
+  customToggleText: { color: bp.accent, fontWeight: "700", fontSize: 13 },
   customBox: { gap: 8, marginBottom: 8 },
   totalsRow: { marginTop: spacing.md, gap: 8 },
-  totalsTitle: { fontSize: 13, fontWeight: "700", color: colors.textPrimary },
-  pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  pill: {
-    backgroundColor: colors.background,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  pillText: { fontSize: 12, color: colors.textSecondary, fontWeight: "600" },
-  actions: {
-    flexDirection: "row",
-    gap: 10,
-    padding: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  primary: {
-    flex: 1,
-    backgroundColor: colors.accentPrimary,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
-    alignItems: "center",
-  },
-  primaryDisabled: { opacity: 0.4 },
-  primaryText: { color: "#fff", fontWeight: "700" },
-  secondary: {
-    flex: 1,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  secondaryText: { color: colors.textSecondary, fontWeight: "700" },
-  deleteBtn: {
-    flex: 1,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.4)",
-  },
-  deleteText: { color: colors.danger, fontWeight: "700" },
+  totalsTitle: { fontSize: 13, fontWeight: "700", color: bp.text },
   smallPrimary: {
-    backgroundColor: colors.accentPrimary,
+    backgroundColor: bp.accent,
     borderRadius: borderRadius.md,
     paddingVertical: spacing.sm,
     alignItems: "center",
   },
 });
+
+const styles = { ...nutritionSheet, ...local };

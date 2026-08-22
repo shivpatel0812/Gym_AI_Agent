@@ -35,6 +35,8 @@ def suggest_slot_fills(
     slot: str,
     stance: Optional[str] = None,
     model: Optional[str] = None,
+    count: int = 1,
+    exclude_labels: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Suggest meal-anchor style fills or notes for a given slot."""
     targets = plan.get("targets") or {}
@@ -45,6 +47,13 @@ def suggest_slot_fills(
     ]
     go_tos = [g.get("name") for g in (plan.get("go_to_items") or []) if g.get("name")]
     places = [p.get("name") for p in (plan.get("fast_food_places") or []) if p.get("name")]
+    n = max(1, min(int(count or 1), 4))
+    exclude = [str(x).strip() for x in (exclude_labels or []) if str(x).strip()]
+    exclude_line = (
+        f"Do NOT suggest these (already shown): {', '.join(exclude[:12])}."
+        if exclude
+        else ""
+    )
 
     prompt = f"""You help fill a nutrition day blueprint.
 
@@ -58,6 +67,7 @@ Existing {slot} anchors: {json.dumps(anchors)[:800]}
 Go-tos: {", ".join(go_tos[:12]) or "n/a"}
 Fast food places: {", ".join(places[:8]) or "n/a"}
 Slot stance: {stance or "anchors"}
+{exclude_line}
 
 Return JSON only:
 {{
@@ -74,7 +84,7 @@ Return JSON only:
 }}
 
 Rules:
-- 2-4 ideas max. Prefer foods the user already likes / has on hand.
+- Return exactly {n} idea{"s" if n != 1 else ""}. Prefer foods the user already likes / has on hand.
 - If stance is eat_out or uncertain, ideas can be lighter and notes should acknowledge flexibility.
 - Macros should be realistic. Days should be mon..sun abbreviations.
 """
@@ -87,12 +97,12 @@ Rules:
                 {"role": "system", "content": "You are a practical nutrition coach. Reply with JSON only."},
                 {"role": "user", "content": prompt},
             ],
-            **completion_kwargs(resolved, max_tokens=900),
+            **completion_kwargs(resolved, max_tokens=500 if n == 1 else 900),
         )
         data = _safe_json(resp.choices[0].message.content or "")
         ideas = data.get("ideas") if isinstance(data.get("ideas"), list) else []
         return {
-            "ideas": ideas[:4],
+            "ideas": ideas[:n],
             "notes": str(data.get("notes") or "").strip()[:300] or None,
             "stance_hint": data.get("stance_hint") if data.get("stance_hint") in (
                 "anchors", "uncertain", "eat_out", "flexible"

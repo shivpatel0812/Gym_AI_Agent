@@ -7,7 +7,7 @@ export function fieldColor(value: number, reverse = false) {
   const n = reverse ? 11 - value : value;
   if (n <= 3) return "#EF4444";
   if (n <= 6) return "#F59E0B";
-  return "#FF6B35";
+  return "#9CC0E8";
 }
 
 export function LevelSlider({
@@ -45,7 +45,7 @@ export function LevelSlider({
         value={value}
         onValueChange={onChange}
         minimumTrackTintColor={color}
-        maximumTrackTintColor="#1C1C1F"
+        maximumTrackTintColor="#1E2A38"
         thumbTintColor={color}
       />
       <View style={styles.sliderEnds}>
@@ -115,7 +115,7 @@ export function Field({
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor="#636366"
+        placeholderTextColor="#55647A"
         keyboardType={keyboardType || "default"}
         multiline={multiline}
         editable={editable}
@@ -163,7 +163,7 @@ export const logStyles = StyleSheet.create({
     marginBottom: 16,
   },
   logBtn: {
-    backgroundColor: "#FF6B35",
+    backgroundColor: "#9CC0E8",
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -171,16 +171,16 @@ export const logStyles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
-  logBtnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  logBtnText: { color: colors.onAccent, fontWeight: "700", fontSize: 14 },
   saveRow: { flexDirection: "row", gap: 10, marginTop: 8 },
   saveBtn: {
     flex: 1,
-    backgroundColor: "#FF6B35",
+    backgroundColor: "#9CC0E8",
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: "center",
   },
-  saveText: { color: "#fff", fontWeight: "700" },
+  saveText: { color: colors.onAccent, fontWeight: "700" },
   card: {
     backgroundColor: colors.cardBackground,
     borderWidth: 1,
@@ -191,7 +191,7 @@ export const logStyles = StyleSheet.create({
   },
   cardTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   cardDate: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  cardSub: { color: "#8E8E93", fontSize: 13, marginTop: 4 },
+  cardSub: { color: "#7C8CA0", fontSize: 13, marginTop: 4 },
 });
 
 const styles = StyleSheet.create({
@@ -199,11 +199,11 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1.2,
-    color: "#636366",
+    color: "#55647A",
     textTransform: "uppercase",
     marginBottom: 8,
   },
-  hint: { color: "#8E8E93", fontSize: 11 },
+  hint: { color: "#7C8CA0", fontSize: 11 },
   sliderHead: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -215,7 +215,7 @@ const styles = StyleSheet.create({
   track: {
     height: 8,
     borderRadius: 999,
-    backgroundColor: "#1C1C1F",
+    backgroundColor: "#1E2A38",
     overflow: "hidden",
   },
   fill: { height: 8, borderRadius: 999 },
@@ -223,7 +223,7 @@ const styles = StyleSheet.create({
     height: 48,
     paddingHorizontal: 16,
     borderRadius: 12,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
     borderWidth: 1,
     borderColor: colors.border,
     color: "#fff",
@@ -244,7 +244,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   formTitle: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  cancel: { color: "#8E8E93", fontWeight: "600" },
+  cancel: { color: "#7C8CA0", fontWeight: "600" },
   empty: {
     borderWidth: 1,
     borderStyle: "dashed",
@@ -253,5 +253,5 @@ const styles = StyleSheet.create({
     padding: 28,
     alignItems: "center",
   },
-  emptyText: { color: "#8E8E93", fontSize: 14, textAlign: "center" },
+  emptyText: { color: "#7C8CA0", fontSize: 14, textAlign: "center" },
 });

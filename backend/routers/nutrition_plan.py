@@ -25,6 +25,15 @@ from nutrition.today_guidance import build_today_guidance
 from nutrition.blueprint_ai import suggest_fast_food_orders, suggest_slot_fills
 from nutrition.usuals import build_usuals, entry_totals, find_usual, foods_to_log
 from nutrition.training_context import conversation_notes, load_training_context
+from nutrition.plan_edits import (
+    EDIT_STATUS_APPLIED,
+    EDIT_STATUS_DISMISSED,
+    EDIT_STATUS_PENDING,
+    EDIT_STATUS_STALE,
+    apply_edits,
+    pending_count,
+)
+from nutrition.suggestion_store import SuggestionStore
 from ai_analysis.profile_transformer import get_user_profile_for_ai
 from ai_analysis.data_analyzer import FitnessDataAnalyzer
 from ai_analysis.conversation_store import ConversationStore
@@ -54,6 +63,8 @@ class SuggestSlotRequest(BaseModel):
     slot: str
     stance: Optional[str] = None
     model: Optional[str] = None
+    count: Optional[int] = 1
+    exclude_labels: Optional[list] = None
 
 
 class SuggestFastFoodRequest(BaseModel):
@@ -63,10 +74,16 @@ class SuggestFastFoodRequest(BaseModel):
     model: Optional[str] = None
 
 
+class SuggestionActionRequest(BaseModel):
+    """Which staged edits to act on. Empty means all of them."""
+    edit_ids: Optional[List[str]] = None
+
+
 class UpdateNutritionPlanRequest(BaseModel):
     goal: Optional[str] = None
     goal_detail: Optional[str] = None
     strategy: Optional[str] = None
+    carryover_note: Optional[str] = None
     typical_day_notes: Optional[str] = None
     targets: Optional[dict] = None
     meal_anchors: Optional[List[dict]] = None
@@ -275,11 +292,16 @@ async def propose_nutrition_plan(
         "preferences": request.preferences or {},
         "conversation_notes": notes,
     }
+    # Whatever the user is already running is carried into the new plan
+    # untouched. A regenerate — even one the user calls a redesign — adds
+    # options on top of their anchors instead of replacing them.
+    existing = _store(user_id).get_active()
     result = _builder(request.model).build_plan(
         answers=answers,
         profile=get_user_profile_for_ai(db, user_id),
         recent_nutrition=_recent_nutrition(user_id),
         training_context=load_training_context(db, user_id),
+        existing_plan=existing,
     )
     if result.get("status") != "success":
         raise HTTPException(status_code=500, detail=result.get("error") or "Could not create plan.")
@@ -306,6 +328,101 @@ async def get_active_nutrition_plan(user_id: str = Depends(get_user_id)):
     if not plan:
         return {"status": "success", "plan": None}
     return {"status": "success", "plan": plan}
+
+
+@router.get("/suggestions")
+async def get_nutrition_suggestions(user_id: str = Depends(get_user_id)):
+    """
+    Coach-proposed edits waiting for review on the Plan page.
+
+    Only ever returns a set that targets the plan that is currently live, so a
+    proposal left over from a retired plan cannot be applied to a new one.
+    """
+    plan = _store(user_id).get_active()
+    if not plan:
+        return {"status": "success", "suggestion": None}
+    record = SuggestionStore(db, user_id).get_pending(plan_id=plan["id"])
+    if not record:
+        return {"status": "success", "suggestion": None}
+    return {
+        "status": "success",
+        "suggestion": record,
+        "pending_count": pending_count(record),
+        "plan_changed_since": int(plan.get("version") or 1) != int(record.get("plan_version") or 1),
+    }
+
+
+@router.post("/suggestions/{set_id}/apply")
+async def apply_nutrition_suggestions(
+    set_id: str,
+    request: SuggestionActionRequest = SuggestionActionRequest(),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Accept some or all staged edits. Omit edit_ids to accept every pending one.
+
+    Edits go through the same validated merge as a hand edit. An edit whose
+    target has since been changed away or deleted comes back "stale" rather
+    than resurrecting something the user already removed.
+    """
+    suggestions = SuggestionStore(db, user_id)
+    record = suggestions.get(set_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Those suggestions are no longer available.")
+
+    plan = _store(user_id).get(record.get("plan_id") or "")
+    if not plan:
+        raise HTTPException(status_code=404, detail="The plan these suggestions target is gone.")
+
+    wanted = set(request.edit_ids or [])
+    selected = [
+        edit for edit in (record.get("edits") or [])
+        if edit.get("status") == EDIT_STATUS_PENDING
+        and (not wanted or str(edit.get("id")) in wanted)
+    ]
+    if not selected:
+        raise HTTPException(status_code=400, detail="Nothing left to accept.")
+
+    patch, outcomes = apply_edits(plan, selected)
+    updated = _apply_patch(user_id, plan["id"], patch) if patch else plan
+    record = suggestions.mark_edits(set_id, outcomes)
+
+    applied = [eid for eid, outcome in outcomes.items() if outcome == EDIT_STATUS_APPLIED]
+    stale = [eid for eid, outcome in outcomes.items() if outcome == EDIT_STATUS_STALE]
+    return {
+        "status": "success",
+        "plan": updated,
+        "suggestion": record,
+        "applied_edit_ids": applied,
+        "stale_edit_ids": stale,
+        "pending_count": pending_count(record),
+    }
+
+
+@router.post("/suggestions/{set_id}/dismiss")
+async def dismiss_nutrition_suggestions(
+    set_id: str,
+    request: SuggestionActionRequest = SuggestionActionRequest(),
+    user_id: str = Depends(get_user_id),
+):
+    """Reject some or all staged edits. Omit edit_ids to clear the whole set."""
+    suggestions = SuggestionStore(db, user_id)
+    record = suggestions.get(set_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Those suggestions are no longer available.")
+
+    wanted = set(request.edit_ids or [])
+    outcomes = {
+        str(edit.get("id")): EDIT_STATUS_DISMISSED
+        for edit in (record.get("edits") or [])
+        if edit.get("status") == EDIT_STATUS_PENDING
+        and (not wanted or str(edit.get("id")) in wanted)
+    }
+    if not outcomes:
+        raise HTTPException(status_code=400, detail="Nothing left to dismiss.")
+
+    record = suggestions.mark_edits(set_id, outcomes)
+    return {"status": "success", "suggestion": record, "pending_count": pending_count(record)}
 
 
 @router.get("/today-guidance")
@@ -380,33 +497,44 @@ async def toggle_usual(
     }
 
 
+PATCHABLE_FIELDS = (
+    "goal", "goal_detail", "targets", "strategy", "typical_day_notes", "carryover_note",
+    "meal_anchors", "flexible_meals", "go_to_items", "blueprint_extras",
+    "slot_profiles", "fast_food_places",
+    "preferences", "food_priorities",
+)
+
+
+def _apply_patch(user_id: str, plan_id: str, patch: dict) -> Optional[dict]:
+    """
+    Merge a patch into a plan through the same validation every edit uses.
+
+    Shared by PATCH and by accepting an AI suggestion, so a coach-proposed
+    edit cannot take a looser path into the plan than a hand edit does.
+    """
+    store = _store(user_id)
+    existing = store.get(plan_id)
+    if not existing:
+        return None
+
+    validated = NutritionPlanBuilder.validate_plan({**existing, **patch})
+    to_write = {k: validated[k] for k in PATCHABLE_FIELDS if k in validated}
+    updated = store.update(plan_id, to_write)
+    if updated and updated.get("status") == STATUS_ACTIVE:
+        _sync_targets(user_id, updated)
+    return updated
+
+
 @router.patch("/{plan_id}")
 async def update_nutrition_plan(
     plan_id: str,
     request: UpdateNutritionPlanRequest,
     user_id: str = Depends(get_user_id),
 ):
-    store = _store(user_id)
-    existing = store.get(plan_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Nutrition plan not found")
-
     patch = {k: v for k, v in request.dict(exclude_unset=True).items() if v is not None}
-    merged = {**existing, **patch}
-    validated = NutritionPlanBuilder.validate_plan(merged)
-    to_write = {
-        k: validated[k]
-        for k in (
-            "goal", "goal_detail", "targets", "strategy", "typical_day_notes",
-            "meal_anchors", "flexible_meals", "go_to_items", "blueprint_extras",
-            "slot_profiles", "fast_food_places",
-            "preferences", "food_priorities",
-        )
-        if k in validated
-    }
-    updated = store.update(plan_id, to_write)
-    if updated and updated.get("status") == STATUS_ACTIVE:
-        _sync_targets(user_id, updated)
+    updated = _apply_patch(user_id, plan_id, patch)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
     return {"status": "success", "plan": updated}
 
 
@@ -422,7 +550,14 @@ async def suggest_slot(
     slot = (request.slot or "").strip().lower()
     if slot not in ("breakfast", "lunch", "pre_workout", "dinner", "snack", "shake", "late_night", "other"):
         raise HTTPException(status_code=400, detail="Invalid slot")
-    result = suggest_slot_fills(plan, slot, request.stance, request.model)
+    result = suggest_slot_fills(
+        plan,
+        slot,
+        request.stance,
+        request.model,
+        count=request.count or 1,
+        exclude_labels=request.exclude_labels,
+    )
     return {"status": "success", "suggestion": result}
 
 

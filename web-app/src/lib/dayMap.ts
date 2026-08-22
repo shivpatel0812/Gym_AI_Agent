@@ -18,7 +18,7 @@ import {
   slotLabel,
 } from "../api/nutritionPlan";
 
-export type DayMapKind = "anchor" | "flexible" | "one_time" | "suggest" | "stance";
+export type DayMapKind = "anchor" | "flexible" | "one_time" | "suggest" | "stance" | "goto";
 
 export interface DayMapSlot {
   id: string;
@@ -39,6 +39,8 @@ export interface DayMapSlot {
   daysText?: string;
   sourceId?: string;
   sourceIndex?: number;
+  /** Random / varies-each-time meal anchor. */
+  varies?: boolean;
 }
 
 export interface MealTargetRow {
@@ -58,6 +60,7 @@ export interface SlotSection {
   stance: SlotStance;
   stanceNotes?: string | null;
   anchors: DayMapSlot[];
+  goTos: DayMapSlot[];
   places: FastFoodPlace[];
 }
 
@@ -138,30 +141,48 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
     dinner: [],
     snack: [],
   };
+  const goTosBySlot: Record<string, DayMapSlot[]> = {
+    breakfast: [],
+    lunch: [],
+    pre_workout: [],
+    dinner: [],
+    snack: [],
+  };
 
   (plan.meal_anchors || []).forEach((anchor: MealAnchor, i) => {
     const macros = sumFoods(anchor.foods || []);
-    anchorsCal += macros.calories;
-    anchorsPro += macros.protein;
     const foods = (anchor.foods || []).map((f) => f.name).filter(Boolean);
+    const n = Math.max(foods.length, 1);
+    // Varies anchors: count typical pick (~avg of examples), not sum of all options.
+    const cal = anchor.varies ? macros.calories / n : macros.calories;
+    const pro = anchor.varies ? macros.protein / n : macros.protein;
+    anchorsCal += cal;
+    anchorsPro += pro;
     const slotRaw = String(anchor.slot || "other");
     const primary = mapSlot(slotRaw) || "snack";
     const days = (anchor.days || []).map(String);
+    const placeBit = anchor.place?.trim() ? `at ${anchor.place.trim()}` : null;
+    const detail = anchor.varies
+      ? [placeBit || "Varies each time", foods.length ? `options: ${foods.join(", ")}` : "attach example meals"]
+          .filter(Boolean)
+          .join(" · ")
+      : foods.join(", ") || "Meal anchor";
     const mapped: DayMapSlot = {
       id: `anchor-${anchor.id || i}`,
       kind: "anchor",
       slot: primary,
       band: bandFor(primary),
       title: anchor.label || slotLabel(primary),
-      detail: foods.join(", ") || "Meal anchor",
-      calories: macros.calories || null,
-      protein: macros.protein || null,
+      detail,
+      calories: cal || null,
+      protein: pro || null,
       foods,
       fillWith: foods,
       days,
       daysText: daysLabel(days, anchor.frequency),
       sourceId: anchor.id,
       sourceIndex: i,
+      varies: Boolean(anchor.varies),
     };
     anchorsBySlot[primary].push(mapped);
     allSlots.push(mapped);
@@ -203,6 +224,34 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
     allSlots.push(mapped);
   });
 
+  let goToCal = 0;
+  let goToPro = 0;
+  (plan.go_to_items || []).forEach((item, i) => {
+    const primary = mapSlot(String(item.slot || "other")) || "snack";
+    const cal = num(item.calories);
+    const pro = num(item.protein);
+    goToCal += cal;
+    goToPro += pro;
+    const mapped: DayMapSlot = {
+      id: `goto-${item.id || i}`,
+      kind: "goto",
+      slot: primary,
+      band: bandFor(primary),
+      title: item.name || "Go-to",
+      detail: [item.amount, item.notes].filter(Boolean).join(" · ") || "Go-to item",
+      calories: cal || null,
+      protein: pro || null,
+      foods: item.name ? [item.name] : [],
+      fillWith: item.name ? [item.name] : [],
+      days: (item.days || []).map(String),
+      daysText: daysLabel(item.days),
+      sourceId: item.id,
+      sourceIndex: i,
+    };
+    goTosBySlot[primary].push(mapped);
+    allSlots.push(mapped);
+  });
+
   const sections: SlotSection[] = PRIMARY_SLOT_OPTIONS.map(({ id, label }) => {
     const profile = profileFor(plan, id);
     const places = (plan.fast_food_places || []).filter((p) =>
@@ -214,15 +263,16 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
       stance: (profile.stance as SlotStance) || "anchors",
       stanceNotes: profile.notes,
       anchors: anchorsBySlot[id] || [],
+      goTos: goTosBySlot[id] || [],
       places,
     };
   });
 
-  const used = anchorsCal + flexCal;
+  const used = anchorsCal + flexCal + goToCal;
   const free = target > 0 ? Math.max(0, target - used) : 0;
   const uncertain = sections.filter((s) => s.stance === "uncertain" || s.stance === "eat_out").length;
 
-  let headline = "Your day by meal — anchors, days, and eat-out slots.";
+  let headline = "Your day by meal — anchors, go-tos, and eat-out slots.";
   if (uncertain) {
     headline = `${uncertain} meal${uncertain === 1 ? "" : "s"} marked flexible / eat-out — add anchors where you can.`;
   } else if (target > 0 && free > 200) {
@@ -259,7 +309,7 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
 
   return {
     slots: allSlots,
-    bands: sections.map((s) => ({ band: s.label, items: s.anchors })),
+    bands: sections.map((s) => ({ band: s.label, items: [...s.anchors, ...s.goTos] })),
     sections,
     table,
     stack: {
@@ -267,12 +317,12 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
       anchors: Math.round(anchorsCal),
       flexible: Math.round(flexCal),
       oneTime: 0,
-      suggested: 0,
+      suggested: Math.round(goToCal),
       free: Math.round(free),
     },
     proteinTarget,
-    proteinPlanned: Math.round(anchorsPro + flexPro),
-    proteinSuggested: 0,
+    proteinPlanned: Math.round(anchorsPro + flexPro + goToPro),
+    proteinSuggested: Math.round(goToPro),
     headline,
     suggestions: [],
   };

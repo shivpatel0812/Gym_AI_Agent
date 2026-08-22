@@ -280,6 +280,11 @@ export default function CreateNutritionPlanModal({
                     ? ` · range ${draft.targets.calories_min}–${draft.targets.calories_max}`
                     : ""}
                 </Text>
+                {draft.carryover_note ? (
+                  <View style={styles.carryover}>
+                    <Text style={styles.carryoverText}>{draft.carryover_note}</Text>
+                  </View>
+                ) : null}
                 {draft.strategy ? (
                   <>
                     <Text style={styles.sub}>Daily strategy</Text>
@@ -669,6 +674,15 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     letterSpacing: 0.3,
   },
+  carryover: {
+    borderWidth: 1,
+    borderColor: "rgba(94,234,212,0.35)",
+    backgroundColor: "rgba(94,234,212,0.10)",
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+  },
+  carryoverText: { fontSize: 13, color: "#5EEAD4", lineHeight: 19, fontWeight: "600" },
   hint: { fontSize: 13, color: colors.textSecondary, lineHeight: 18 },
   bodyText: { fontSize: 14, color: colors.textSecondary, lineHeight: 20 },
   planName: { fontSize: 24, fontWeight: "700", color: colors.textPrimary },
@@ -707,7 +721,7 @@ const styles = StyleSheet.create({
   },
   modelChipOn: {
     borderColor: colors.accentPrimary,
-    backgroundColor: "rgba(255,107,53,0.18)",
+    backgroundColor: "rgba(156, 192, 232,0.18)",
   },
   modelChipText: { color: colors.textSecondary, fontWeight: "700", fontSize: 13 },
   modelChipTextOn: { color: colors.accentPrimary },
@@ -729,7 +743,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  miniChipOn: { borderColor: colors.accentPrimary, backgroundColor: "rgba(255,107,53,0.12)" },
+  miniChipOn: { borderColor: colors.accentPrimary, backgroundColor: "rgba(156, 192, 232,0.12)" },
   miniChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: "600" },
   miniChipTextOn: { color: colors.accentPrimary },
   addBtn: {
@@ -768,5 +782,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  primaryText: { color: "#fff", fontWeight: "700" },
+  primaryText: { color: colors.onAccent, fontWeight: "700" },
 });

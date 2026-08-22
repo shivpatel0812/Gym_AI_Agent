@@ -59,9 +59,16 @@ def _top_set(sets: List[Dict]) -> Optional[Dict[str, Any]]:
 class CoachToolbox:
     """Executes the coach's tool calls against the user's Firestore data."""
 
-    def __init__(self, db, user_id: str):
+    def __init__(self, db, user_id: str, mode: str = "coach", conversation_id: Optional[str] = None):
         self.db = db
         self.user_id = user_id
+        # Which toolset the chat turn is allowed to use. Only nutrition mode
+        # may propose plan edits; ordinary coach chat stays read-only.
+        self.mode = mode
+        self.conversation_id = conversation_id
+        # Structured results the client should render as more than chat text
+        # (a suggestion card, say). Read by the chat routers after the turn.
+        self.artifacts: List[Dict[str, Any]] = []
 
     # --- internal helpers -------------------------------------------------
 
@@ -285,7 +292,10 @@ class CoachToolbox:
             return {"error": f"Could not load nutrition plan: {e}"}
         if not plan:
             return {"status": "no_plan", "message": "No active nutrition plan."}
+        # ids are included so propose_nutrition_edits can target an existing
+        # item instead of proposing a near-duplicate of one.
         return {
+            "plan_id": plan.get("id"),
             "status": plan.get("status"),
             "goal": plan.get("goal"),
             "goal_detail": plan.get("goal_detail"),
@@ -293,6 +303,7 @@ class CoachToolbox:
             "targets": plan.get("targets"),
             "meal_anchors": [
                 {
+                    "id": a.get("id"),
                     "label": a.get("label"),
                     "slot": a.get("slot"),
                     "frequency": a.get("frequency"),
@@ -302,6 +313,7 @@ class CoachToolbox:
             ],
             "flexible_meals": [
                 {
+                    "id": m.get("id"),
                     "name": m.get("name"),
                     "frequency": m.get("frequency"),
                     "calorie_min": m.get("calorie_min"),
@@ -314,6 +326,7 @@ class CoachToolbox:
             ],
             "go_to_items": [
                 {
+                    "id": g.get("id"),
                     "name": g.get("name"),
                     "slot": g.get("slot"),
                     "amount": g.get("amount"),
@@ -324,6 +337,84 @@ class CoachToolbox:
             ],
             "food_priorities": plan.get("food_priorities") or [],
             "preferences": plan.get("preferences") or {},
+        }
+
+    def propose_nutrition_edits(
+        self, summary: str = "", edits: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Stage plan changes for review. Never writes the live nutrition plan.
+
+        The model's arguments *are* the ops, so proposing costs nothing beyond
+        the chat turn the user already paid for. Everything is validated
+        against the live plan first — an edit the user could not safely accept
+        is rejected here rather than stored.
+        """
+        try:
+            from nutrition.plan_store import NutritionPlanStore
+            from nutrition.suggestion_store import SuggestionStore
+            from nutrition.plan_edits import normalize_edits, MAX_EDITS
+
+            plan = NutritionPlanStore(self.db, self.user_id).get_active()
+        except Exception as e:
+            return {"error": f"Could not load nutrition plan: {e}"}
+
+        if not plan:
+            return {
+                "status": "no_plan",
+                "message": (
+                    "There is no active nutrition plan to edit. Tell the user to tap "
+                    "Generate Nutrition Plan to create one first."
+                ),
+            }
+
+        clean_summary = str(summary or "").strip()[:200]
+        normalized, rejected = normalize_edits(plan, edits)
+
+        if not normalized:
+            return {
+                "status": "nothing_proposed",
+                "rejected": rejected,
+                "message": (
+                    "No valid edits. Tell the user plainly what you could not change and why. "
+                    "Do not claim the plan was updated."
+                ),
+            }
+
+        try:
+            record = SuggestionStore(self.db, self.user_id).create(
+                plan=plan,
+                edits=normalized,
+                summary=clean_summary or f"{len(normalized)} plan updates",
+                conversation_id=self.conversation_id,
+            )
+        except Exception as e:
+            return {"error": f"Could not save those suggestions: {e}"}
+
+        self.artifacts.append({
+            "type": "nutrition_suggestions",
+            "suggestion_set_id": record["id"],
+            "plan_id": plan.get("id"),
+            "summary": record["summary"],
+            "count": len(normalized),
+            "titles": [e["title"] for e in normalized],
+        })
+
+        return {
+            "status": "proposed",
+            "suggestion_set_id": record["id"],
+            "count": len(normalized),
+            "max_edits": MAX_EDITS,
+            "proposed": [
+                {"title": e["title"], "op": e["op"], "rationale": e.get("rationale")}
+                for e in normalized
+            ],
+            "rejected": rejected,
+            "message": (
+                "Staged for review. The plan has NOT changed. Explain the changes in plain "
+                "language and tell the user to review them on the Nutrition Plan page, where "
+                "they can accept or dismiss each one. If anything was rejected, say so."
+            ),
         }
 
     def get_wellness_log(self, days: int = 7) -> Dict[str, Any]:
@@ -385,20 +476,71 @@ class CoachToolbox:
             return {"error": f"Could not load body scan: {e}"}
         if not scan:
             return {"status": "no_scan", "message": "No body scan yet."}
+
+        observations = scan.get("observations") or {}
+        confidence = str(observations.get("confidence") or "low").lower()
         return {
             "status": "ok",
             "created_at": scan.get("created_at"),
             "next_scan_at": scan.get("next_scan_at"),
             "goal": scan.get("goal"),
-            "observations": scan.get("observations"),
+            "observations": observations,
             "synthesis": scan.get("synthesis"),
             "photos_retained": False,
+            # Spelled out so the model doesn't present a hedged read as fact
+            "reliability": {
+                "confidence": confidence,
+                "emphasis_applied_to_training": confidence != "low",
+                "guidance": (
+                    "Photos were too unclear to read reliably. Describe the "
+                    "observations as inconclusive and suggest retaking the scan; "
+                    "do not base training advice on them."
+                    if confidence == "low" else
+                    "Appearance-based coaching only — not body composition or "
+                    "medical assessment. Hedge accordingly."
+                ),
+            },
         }
+
+    def get_body_scan_progress(self) -> Dict[str, Any]:
+        """
+        Change between the two most recent body scans.
+
+        The point of storing scans as structured JSON rather than images is
+        being able to answer "has this actually changed" — that needs both
+        scans, which get_latest_body_scan alone cannot supply.
+        """
+        try:
+            from body_scan.store import BodyScanStore
+            from body_scan.synthesizer import diff_scans
+            store = BodyScanStore(self.db, self.user_id)
+            latest, previous = store.latest_pair()
+        except Exception as e:
+            return {"error": f"Could not load body scans: {e}"}
+
+        if not latest:
+            return {"status": "no_scan", "message": "No body scan yet."}
+        if not previous:
+            return {
+                "status": "insufficient_history",
+                "message": "Only one scan so far — no comparison available yet.",
+                "scan_count": 1,
+                "latest_at": latest.get("created_at"),
+                "next_scan_at": latest.get("next_scan_at"),
+            }
+        return {"status": "ok", **diff_scans(latest, previous)}
 
     # --- dispatch ---------------------------------------------------------
 
     def dispatch(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Run a tool by name. Never raises — errors come back as data."""
+        if name in WRITE_TOOLS and name not in {
+            t["function"]["name"] for t in tools_for_mode(self.mode)
+        }:
+            # Belt and braces: the model is only offered write tools in the
+            # modes that allow them, but a replayed tool call must not slip past.
+            return {"error": f"{name} is not available in this conversation."}
+
         handler = {
             "get_recent_sessions": self.get_recent_sessions,
             "get_exercise_history": self.get_exercise_history,
@@ -410,6 +552,8 @@ class CoachToolbox:
             "get_wellness_log": self.get_wellness_log,
             "get_personal_records": self.get_personal_records,
             "get_latest_body_scan": self.get_latest_body_scan,
+            "get_body_scan_progress": self.get_body_scan_progress,
+            "propose_nutrition_edits": self.propose_nutrition_edits,
         }.get(name)
 
         if handler is None:
@@ -565,9 +709,141 @@ TOOL_SCHEMAS = [
             "description": (
                 "Get the user's latest AI body scan: qualitative physique observations, "
                 "parsed goal, and recommended training emphasis. Photos are never stored. "
-                "Use when coaching about physique balance, asymmetries, or scan-based focus."
+                "Call this whenever the user asks why their program emphasizes a "
+                "particular muscle, mentions how they look, asks about weak points, "
+                "lagging or imbalanced body parts, posture, or symmetry. Check the "
+                "'reliability' field before presenting observations as fact."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_body_scan_progress",
+            "description": (
+                "Compare the user's two most recent body scans: which regions improved, "
+                "regressed, or stayed the same, and whether asymmetries resolved. Use "
+                "for any question about physique change over time — 'am I making "
+                "progress', 'has my back caught up', 'is my imbalance better'. Returns "
+                "insufficient_history if they only have one scan. Respect the "
+                "'comparable' flag: when false, the difference is photo variation, "
+                "not established change."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
     },
 ]
+
+
+# --- write tools ----------------------------------------------------------
+#
+# Everything above reads. This one stages a proposal against the live
+# nutrition plan for the user to review on the Plan page. It is offered only
+# in nutrition mode, and even then it cannot write the plan itself.
+
+WRITE_TOOLS = {"propose_nutrition_edits"}
+
+EDIT_OPS = [
+    "update_targets",
+    "add_meal_anchor", "update_meal_anchor", "remove_meal_anchor",
+    "add_flexible_meal", "update_flexible_meal", "remove_flexible_meal",
+    "add_go_to", "update_go_to", "remove_go_to",
+    "add_blueprint_extra", "update_blueprint_extra", "remove_blueprint_extra",
+    "update_strategy", "update_preferences", "update_food_priorities",
+    "update_typical_day_notes",
+]
+
+NUTRITION_WRITE_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_nutrition_edits",
+            "description": (
+                "Stage specific changes to the user's ACTIVE nutrition plan for them to "
+                "review and accept on the Nutrition Plan page. This does NOT change the "
+                "plan — it creates reviewable suggestions. Call it once, at the end of "
+                "your reply, when the user has asked for a concrete change to an existing "
+                "plan (drop breakfast calories, add a post-workout shake, swap a meal, "
+                "raise protein). Call get_nutrition_plan first so you can pass the real "
+                "target_id of any item you are changing or removing. Do not call this for "
+                "a whole-plan rebuild or a goal change — tell the user to tap Generate "
+                "Nutrition Plan instead. Never claim the plan changed; say the updates are "
+                "ready to review. Only use a remove_* op when the user names that exact "
+                "item and asks for it gone. \"Redesign my meals\", \"mix it up\" or "
+                "\"give me better options\" means ADD on top of the meals they already "
+                "set — their anchors stay."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "One short line describing the change set, e.g. "
+                                       "'Lower breakfast, add a post-workout shake'.",
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": "The individual changes. Keep it to the few things "
+                                       "the user actually asked for.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": {
+                                    "type": "string",
+                                    "enum": EDIT_OPS,
+                                    "description": "Which change to make.",
+                                },
+                                "target_id": {
+                                    "type": "string",
+                                    "description": "Required for every update_* and remove_* "
+                                                   "op on a list item: the id from "
+                                                   "get_nutrition_plan. Omit for add_* ops.",
+                                },
+                                "payload": {
+                                    "type": "object",
+                                    "description": (
+                                        "The new values. For update_targets: any of calories, "
+                                        "protein, carbs, fats, fiber. For meal anchors: slot, "
+                                        "label, foods[{name, amount, calories, protein, carbs, "
+                                        "fats}], frequency, days, notes. For flexible meals: "
+                                        "name, frequency, calorie_min, calorie_max, protein_min, "
+                                        "protein_max, notes. For go-tos: name, slot, amount, "
+                                        "calories, protein. For update_strategy / "
+                                        "update_typical_day_notes: {\"value\": \"...\"}. For "
+                                        "update_food_priorities: {\"value\": [\"...\"]}. Send "
+                                        "only the fields that change; the rest are kept."
+                                    ),
+                                    "additionalProperties": True,
+                                },
+                                "rationale": {
+                                    "type": "string",
+                                    "description": "One short line on why, shown next to the "
+                                                   "suggestion on the plan page.",
+                                },
+                            },
+                            "required": ["op"],
+                        },
+                    },
+                },
+                "required": ["summary", "edits"],
+            },
+        },
+    },
+]
+
+# Read tools are available everywhere; write tools are earned by mode.
+READ_TOOL_SCHEMAS = TOOL_SCHEMAS
+
+
+def tools_for_mode(mode: str = "coach") -> List[Dict[str, Any]]:
+    """
+    The toolset a chat turn may use.
+
+    Nutrition mode is the only place the coach can stage plan edits: that is
+    where the user has explicitly opened a conversation about their plan, so a
+    proposal is expected rather than a surprise.
+    """
+    if mode == "nutrition":
+        return READ_TOOL_SCHEMAS + NUTRITION_WRITE_SCHEMAS
+    return READ_TOOL_SCHEMAS

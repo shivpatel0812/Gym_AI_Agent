@@ -22,6 +22,59 @@ def _normalize_food_text(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "").strip().lower())
 
 
+def _remember_logged_foods(user_id: str, food_items) -> None:
+    """Upsert each logged food into the user's Saved Foods library."""
+    items = food_items if isinstance(food_items, list) else []
+    now = datetime.now().isoformat()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            calories = float(item.get("calories") or 0)
+            protein = float(item.get("protein") or 0)
+        except (TypeError, ValueError):
+            continue
+        serving = str(item.get("amount") or "").strip() or "1 serving"
+        name_key = _normalize_food_text(name)
+        payload = {
+            "name": name,
+            "serving": serving[:80],
+            "grams": 100.0,
+            "calories": calories,
+            "protein": protein,
+            "carbs": float(item.get("carbs") or 0),
+            "fats": float(item.get("fats") or 0),
+            "fiber": float(item.get("fiber") or 0),
+            "updated_at": now,
+            "last_used_at": now,
+        }
+        existing = None
+        for doc in _foods_ref(user_id).stream():
+            data = doc.to_dict() or {}
+            if _normalize_food_text(data.get("name") or "") == name_key:
+                existing = doc
+                break
+        if existing:
+            # Keep richer catalog serving/grams if already set; refresh macros + last used.
+            prev = existing.to_dict() or {}
+            merged = {
+                **prev,
+                **payload,
+                "serving": prev.get("serving") or payload["serving"],
+                "grams": float(prev.get("grams") or payload["grams"] or 100),
+                "created_at": prev.get("created_at") or now,
+                "aliases": list({*(prev.get("aliases") or []), name, serving}),
+            }
+            existing.reference.set(merged, merge=True)
+        else:
+            payload["created_at"] = now
+            payload["aliases"] = [name] if name else []
+            _foods_ref(user_id).document().set(payload)
+
+
 def _food_search_blob(food: dict) -> str:
     parts = [food.get("name") or "", food.get("serving") or ""]
     parts.extend(food.get("aliases") or [])
@@ -66,6 +119,10 @@ async def create_macro_entry(macro_entry: MacroEntry, user_id: str = Depends(get
     macro_dict["created_at"] = datetime.now().isoformat()
     doc_ref = db.collection("users").document(user_id).collection("macros").document()
     doc_ref.set(macro_dict)
+    try:
+        _remember_logged_foods(user_id, macro_dict.get("food_items"))
+    except Exception:
+        pass
     return {"id": doc_ref.id, **macro_dict}
 
 @router.put("/{macro_id}")
@@ -86,6 +143,10 @@ async def update_macro_entry(macro_id: str, macro_entry: MacroEntry, user_id: st
     if not doc_ref.get().exists:
         raise HTTPException(status_code=404, detail="Macro entry not found")
     doc_ref.update(macro_dict)
+    try:
+        _remember_logged_foods(user_id, macro_dict.get("food_items"))
+    except Exception:
+        pass
     return {"id": macro_id, **macro_dict}
 
 @router.delete("/{macro_id}")

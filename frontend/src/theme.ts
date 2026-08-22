@@ -1,9 +1,12 @@
 export const colors = {
+  // Same dark black surfaces as before — only the accent shifted orange → blue.
   background: "#070708",
   cardBackground: "#111113",
   surface: "#0C0C0E",
-  accentPrimary: "#FF6B35",
-  accentSecondary: "#FF6B35",
+  accentPrimary: "#9CC0E8",
+  accentSecondary: "#9CC0E8",
+  // Text and icons on top of an accent fill.
+  onAccent: "#070708",
   ai: "#5EEAD4",
   success: "#4ADE80",
   danger: "#EF4444",
@@ -69,6 +72,6 @@ export const shadows = {
 };
 
 export const gradients = {
-  primary: [colors.accentPrimary, "#E85A2A"],
+  primary: [colors.accentPrimary, "#7AA8D4"],
   card: [colors.cardBackground, "#0C0C0E"],
 };

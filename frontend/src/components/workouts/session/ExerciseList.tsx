@@ -118,7 +118,7 @@ const styles = StyleSheet.create({
   planLabel: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#FF6B35",
+    color: "#9CC0E8",
     marginTop: 2,
   },
   customBadge: {

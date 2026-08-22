@@ -42,14 +42,38 @@ class BodyScanStore:
         return items[0] if items else None
 
     def list(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Newest first. Ordered by Firestore, not by the page we happened to get."""
         try:
-            docs = list(self._collection().limit(limit * 2).stream())
+            docs = list(
+                self._collection()
+                .order_by("created_at", direction="DESCENDING")
+                .limit(limit)
+                .stream()
+            )
         except Exception as e:
-            print(f"Warning: list body scans failed: {e}")
-            return []
-        items = [{"id": d.id, **(d.to_dict() or {})} for d in docs]
-        items.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-        return items[:limit]
+            # An order_by needs the field on every doc; pre-`created_at` records
+            # would vanish entirely, so fall back to sorting a page in memory.
+            print(f"Warning: ordered body scan query failed ({e}); falling back")
+            try:
+                docs = list(self._collection().limit(limit * 2).stream())
+            except Exception as inner:
+                print(f"Warning: list body scans failed: {inner}")
+                return []
+            items = [{"id": d.id, **(d.to_dict() or {})} for d in docs]
+            items.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+            return items[:limit]
+        return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
+
+    def latest_pair(self) -> tuple:
+        """
+        (latest, previous) — the two most recent scans, for progress comparison.
+        Either may be None.
+        """
+        items = self.list(limit=2)
+        return (
+            items[0] if items else None,
+            items[1] if len(items) > 1 else None,
+        )
 
     def update(self, scan_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         ref = self._collection().document(scan_id)

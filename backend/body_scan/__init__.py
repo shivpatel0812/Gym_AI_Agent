@@ -4,7 +4,13 @@ from .schemas import CONSENT_VERSION
 from .store import BodyScanStore
 from .vision import analyze_scan_photos
 from .goal_parse import parse_goal_text
-from .synthesizer import synthesize, explain_synthesis, summarize_training_history
+from .synthesizer import (
+    synthesize,
+    explain_synthesis,
+    summarize_training_history,
+    diff_scans,
+    classify_exercise,
+)
 
 __all__ = [
     "CONSENT_VERSION",
@@ -14,4 +20,6 @@ __all__ = [
     "synthesize",
     "explain_synthesis",
     "summarize_training_history",
+    "diff_scans",
+    "classify_exercise",
 ]

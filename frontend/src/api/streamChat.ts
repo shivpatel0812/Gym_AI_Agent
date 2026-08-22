@@ -23,6 +23,8 @@ export interface StreamHandlers {
     conversation_id?: string;
     tools_used?: string[];
     ai_access?: any;
+    /** Structured side effects of the turn, e.g. staged plan suggestions. */
+    artifacts?: any[];
   }) => void;
   /** Stream failed. Fired at most once, and never after onDone. */
   onError: (error: StreamError) => void;

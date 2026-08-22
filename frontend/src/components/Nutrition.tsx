@@ -17,11 +17,18 @@ import apiClient from "../api/client";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { colors, spacing } from "../theme";
 import Ring from "./nutrition/Ring";
-import LogFoodForm from "./nutrition/LogFoodForm";
+import LogFoodForm, { PlanMealPick } from "./nutrition/LogFoodForm";
 import TodayGuidanceCard from "./nutrition/plan/TodayGuidanceCard";
 import NutritionPlanTab from "./nutrition/plan/NutritionPlanTab";
 import SavedFoodsTab from "./nutrition/SavedFoodsTab";
-import { getTodayGuidance, TodayGuidance } from "../api/nutritionPlan";
+import {
+  getActiveNutritionPlan,
+  getTodayGuidance,
+  mealAnchorKind,
+  NutritionPlan,
+  TodayGuidance,
+} from "../api/nutritionPlan";
+import { normalizeMealLabel } from "../lib/recentMeals";
 import {
   DEFAULT_TARGETS,
   FoodItem,
@@ -80,7 +87,7 @@ function FoodRowEditor({
       value={val}
       onChangeText={set}
       keyboardType={keyboard as any}
-      placeholderTextColor="#636366"
+      placeholderTextColor="#55647A"
       style={styles.editInput}
     />
   );
@@ -98,7 +105,7 @@ function FoodRowEditor({
             value={amount}
             onChangeText={setAmount}
             placeholder="e.g. 200g"
-            placeholderTextColor="#636366"
+            placeholderTextColor="#55647A"
             style={styles.editInput}
           />
         </View>
@@ -121,7 +128,7 @@ function FoodRowEditor({
       </View>
       <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
         <TouchableOpacity onPress={onCancel} style={{ padding: 8 }}>
-          <Text style={{ color: "#8E8E93", fontWeight: "600" }}>Cancel</Text>
+          <Text style={{ color: "#7C8CA0", fontWeight: "600" }}>Cancel</Text>
         </TouchableOpacity>
         <TouchableOpacity
           disabled={!canSave}
@@ -151,7 +158,7 @@ function FoodRowEditor({
           }}
           style={[styles.saveBtn, !canSave && { opacity: 0.4 }]}
         >
-          <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>Save</Text>
+          <Text style={{ color: colors.onAccent, fontWeight: "600", fontSize: 14 }}>Save</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -166,6 +173,7 @@ export default function Nutrition() {
   };
   const [hubTab, setHubTab] = useState<"today" | "plan" | "foods">("today");
   const [guidance, setGuidance] = useState<TodayGuidance | null>(null);
+  const [activePlan, setActivePlan] = useState<NutritionPlan | null>(null);
   const [entries, setEntries] = useState<MacroEntry[]>([]);
   const [hydrationEntries, setHydrationEntries] = useState<HydrationEntry[]>([]);
   const [selectedDate, setSelectedDate] = useState(() => toDateKey(new Date()));
@@ -208,6 +216,11 @@ export default function Nutrition() {
       await AsyncStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(loaded));
     } catch (error) {
       console.error("Error fetching nutrition targets:", error);
+    }
+    try {
+      setActivePlan(await getActiveNutritionPlan());
+    } catch {
+      setActivePlan(null);
     }
   }, []);
 
@@ -325,17 +338,22 @@ export default function Nutrition() {
   }, [dayRows]);
 
   const addFood = async (food: FoodItem) => {
+    await addFoods([food]);
+  };
+
+  const addFoods = async (foods: FoodItem[]) => {
+    if (!foods.length) return;
     try {
       const existing = dayEntries[0];
       if (existing?.id) {
         await apiClient.put(`/api/macros/${existing.id}`, {
           date: selectedDate,
-          food_items: [...(existing.food_items || []), food],
+          food_items: [...(existing.food_items || []), ...foods],
         });
       } else {
         await apiClient.post("/api/macros", {
           date: selectedDate,
-          food_items: [food],
+          food_items: foods,
         });
       }
       fetchAll();
@@ -344,6 +362,19 @@ export default function Nutrition() {
       console.error("Error adding food:", error);
     }
   };
+
+  const planMealsForLogging = useMemo((): PlanMealPick[] => {
+    if (!loggingMeal || !activePlan?.meal_anchors?.length) return [];
+    const slot = normalizeMealLabel(loggingMeal);
+    return (activePlan.meal_anchors || [])
+      .filter((a) => a.id && normalizeMealLabel(a.slot) === slot)
+      .map((a) => ({
+        id: String(a.id),
+        label: a.label || "Plan meal",
+        kind: mealAnchorKind(a),
+        foods: a.foods || [],
+      }));
+  }, [loggingMeal, activePlan]);
 
   const removeFood = async (row: MealRow) => {
     try {
@@ -525,7 +556,7 @@ export default function Nutrition() {
               }}
               style={[styles.targetsBtn, showTargets && styles.targetsBtnOn]}
             >
-              <Text style={[styles.targetsBtnText, showTargets && { color: "#fff" }]}>
+              <Text style={[styles.targetsBtnText, showTargets && { color: colors.onAccent }]}>
                 Targets
               </Text>
             </TouchableOpacity>
@@ -553,7 +584,7 @@ export default function Nutrition() {
               </TouchableOpacity>
             )}
             <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.calBtn}>
-              <MaterialCommunityIcons name="calendar" size={18} color="#8E8E93" />
+              <MaterialCommunityIcons name="calendar" size={18} color="#7C8CA0" />
             </TouchableOpacity>
           </ScrollView>
           {showDatePicker && (
@@ -569,7 +600,7 @@ export default function Nutrition() {
           )}
           {Platform.OS === "ios" && showDatePicker && (
             <TouchableOpacity onPress={() => setShowDatePicker(false)} style={{ alignSelf: "flex-end" }}>
-              <Text style={{ color: "#FF6B35", fontWeight: "600", marginBottom: 8 }}>Done</Text>
+              <Text style={{ color: "#9CC0E8", fontWeight: "600", marginBottom: 8 }}>Done</Text>
             </TouchableOpacity>
           )}
 
@@ -619,14 +650,14 @@ export default function Nutrition() {
                   }}
                   style={{ padding: 8 }}
                 >
-                  <Text style={{ color: "#8E8E93", fontWeight: "600" }}>Cancel</Text>
+                  <Text style={{ color: "#7C8CA0", fontWeight: "600" }}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={saveTargets}
                   disabled={savingTargets}
                   style={styles.saveBtn}
                 >
-                  <Text style={{ color: "#fff", fontWeight: "600" }}>
+                  <Text style={{ color: colors.onAccent, fontWeight: "600" }}>
                     {savingTargets ? "Saving..." : "Save targets"}
                   </Text>
                 </TouchableOpacity>
@@ -640,7 +671,7 @@ export default function Nutrition() {
                 size={200}
                 stroke={12}
                 progress={totals.calories / calorieTarget}
-                color="#FF6B35"
+                color="#9CC0E8"
               >
                 <Text style={styles.consumedLabel}>Consumed</Text>
                 <Text style={styles.kcalBig}>{totals.calories.toLocaleString()}</Text>
@@ -695,7 +726,7 @@ export default function Nutrition() {
                     disabled={glasses <= 0}
                     style={[styles.waterBtn, glasses <= 0 && { opacity: 0.3 }]}
                   >
-                    <MaterialCommunityIcons name="chevron-down" size={22} color="#8E8E93" />
+                    <MaterialCommunityIcons name="chevron-down" size={22} color="#7C8CA0" />
                   </TouchableOpacity>
                   <TextInput
                     keyboardType="numeric"
@@ -711,10 +742,10 @@ export default function Nutrition() {
                     onPress={() => commitWater(glasses + 1)}
                     style={styles.waterBtn}
                   >
-                    <MaterialCommunityIcons name="chevron-up" size={22} color="#8E8E93" />
+                    <MaterialCommunityIcons name="chevron-up" size={22} color="#7C8CA0" />
                   </TouchableOpacity>
                 </View>
-                <Text style={{ color: "#8E8E93", fontSize: 14 }}>
+                <Text style={{ color: "#7C8CA0", fontSize: 14 }}>
                   <Text style={{ color: "#fff", fontWeight: "600" }}>{glasses}</Text>
                   {" / "}
                   {targets.water} cups
@@ -767,7 +798,7 @@ export default function Nutrition() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.mealName}>{meal.label}</Text>
                     <Text style={{ fontSize: 13, marginTop: 2 }}>
-                      <Text style={{ color: "#FF6B35", fontWeight: "600" }}>
+                      <Text style={{ color: "#9CC0E8", fontWeight: "600" }}>
                         {Math.round(mealTotals.calories)} kcal
                       </Text>
                       <Text style={{ color: "#E4B896" }}>
@@ -784,7 +815,7 @@ export default function Nutrition() {
                       </Text>
                     </Text>
                   </View>
-                  <Text style={{ color: "#636366", transform: [{ rotate: isCollapsed ? "180deg" : "0deg" }] }}>
+                  <Text style={{ color: "#55647A", transform: [{ rotate: isCollapsed ? "180deg" : "0deg" }] }}>
                     ▲
                   </Text>
                 </TouchableOpacity>
@@ -817,7 +848,7 @@ export default function Nutrition() {
                                   <View style={{ flex: 1, minWidth: 0 }}>
                                     <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                                       <TouchableOpacity onPress={() => removeFood(row)}>
-                                        <MaterialCommunityIcons name="close" size={14} color="#636366" />
+                                        <MaterialCommunityIcons name="close" size={14} color="#55647A" />
                                       </TouchableOpacity>
                                       <TouchableOpacity
                                         onPress={() =>
@@ -827,7 +858,7 @@ export default function Nutrition() {
                                           })
                                         }
                                       >
-                                        <MaterialCommunityIcons name="pencil" size={14} color="#636366" />
+                                        <MaterialCommunityIcons name="pencil" size={14} color="#55647A" />
                                       </TouchableOpacity>
                                       <View style={{ flex: 1 }}>
                                         <Text style={styles.foodName} numberOfLines={1}>
@@ -856,7 +887,7 @@ export default function Nutrition() {
                         })}
                         <View style={styles.totalRow}>
                           <Text style={styles.totalLabel}>Total</Text>
-                          <Text style={[styles.foodKcal, { color: "#FF6B35", fontWeight: "700" }]}>
+                          <Text style={[styles.foodKcal, { color: "#9CC0E8", fontWeight: "700" }]}>
                             {Math.round(mealTotals.calories)}
                           </Text>
                           <Text style={[styles.foodMacro, { color: "#E4B896", fontWeight: "700" }]}>
@@ -878,6 +909,8 @@ export default function Nutrition() {
                             key={meal.id}
                             meal={meal.id}
                             onAdd={addFood}
+                            onAddMany={addFoods}
+                            planMeals={planMealsForLogging}
                             onCancel={() => setLoggingMeal(null)}
                           />
                         ) : (
@@ -885,8 +918,8 @@ export default function Nutrition() {
                             style={styles.addDashed}
                             onPress={() => openLogFood(meal.id)}
                           >
-                            <MaterialCommunityIcons name="plus" size={16} color="#8E8E93" />
-                            <Text style={{ color: "#8E8E93", fontWeight: "500" }}>Add food</Text>
+                            <MaterialCommunityIcons name="plus" size={16} color="#7C8CA0" />
+                            <Text style={{ color: "#7C8CA0", fontWeight: "500" }}>Add food</Text>
                           </TouchableOpacity>
                         )}
                       </View>
@@ -912,7 +945,7 @@ export default function Nutrition() {
                     <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>
                       {meal.label}
                     </Text>
-                    <Text style={{ color: "#636366", fontSize: 12 }}>+ Add food</Text>
+                    <Text style={{ color: "#55647A", fontSize: 12 }}>+ Add food</Text>
                   </View>
                 </TouchableOpacity>
               ))}
@@ -969,7 +1002,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   title: { fontSize: 32, fontWeight: "700", color: "#fff" },
-  dateSub: { color: "#8E8E93", fontSize: 14, marginTop: 4 },
+  dateSub: { color: "#7C8CA0", fontSize: 14, marginTop: 4 },
   targetsBtn: {
     marginTop: 4,
     paddingHorizontal: 14,
@@ -979,19 +1012,19 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.cardBackground,
   },
-  targetsBtnOn: { backgroundColor: "#FF6B35", borderColor: "#FF6B35" },
-  targetsBtnText: { color: "#8E8E93", fontSize: 14, fontWeight: "600" },
+  targetsBtnOn: { backgroundColor: "#9CC0E8", borderColor: "#9CC0E8" },
+  targetsBtnText: { color: "#7C8CA0", fontSize: 14, fontWeight: "600" },
   dayTabs: {
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     marginBottom: 16,
     flexGrow: 0,
   },
-  dayTab: { color: "#8E8E93", fontSize: 14, fontWeight: "600", paddingBottom: 12 },
+  dayTab: { color: "#7C8CA0", fontSize: 14, fontWeight: "600", paddingBottom: 12 },
   dayTabOn: { color: "#fff" },
   dayUnderline: {
     height: 2,
-    backgroundColor: "#FF6B35",
+    backgroundColor: "#9CC0E8",
     borderRadius: 999,
     marginTop: -2,
   },
@@ -1005,14 +1038,14 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   targetsTitle: { color: "#fff", fontWeight: "700", fontSize: 14, marginBottom: 4 },
-  mutedXs: { color: "#8E8E93", fontSize: 12 },
+  mutedXs: { color: "#7C8CA0", fontSize: 12 },
   targetGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 12 },
   targetField: { width: "47%" },
   label: {
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1.4,
-    color: "#636366",
+    color: "#55647A",
     textTransform: "uppercase",
     marginBottom: 6,
   },
@@ -1021,15 +1054,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingRight: 48,
     borderRadius: 12,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
     borderWidth: 1,
     borderColor: colors.border,
     color: "#fff",
     fontSize: 14,
   },
-  unit: { position: "absolute", right: 12, top: 14, color: "#636366", fontSize: 12 },
+  unit: { position: "absolute", right: 12, top: 14, color: "#55647A", fontSize: 12 },
   saveBtn: {
-    backgroundColor: "#FF6B35",
+    backgroundColor: "#9CC0E8",
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -1047,12 +1080,12 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: "700",
     letterSpacing: 1.6,
-    color: "#8E8E93",
+    color: "#7C8CA0",
     textTransform: "uppercase",
   },
   kcalBig: { color: "#fff", fontSize: 34, fontWeight: "700", lineHeight: 38 },
-  pct: { color: "#FF6B35", fontSize: 14, fontWeight: "700", marginTop: 6 },
-  remain: { color: "#8E8E93", fontSize: 11, textAlign: "center", paddingHorizontal: 12, marginTop: 2 },
+  pct: { color: "#9CC0E8", fontSize: 14, fontWeight: "700", marginTop: 6 },
+  remain: { color: "#7C8CA0", fontSize: 11, textAlign: "center", paddingHorizontal: 12, marginTop: 2 },
   macroGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-around", gap: 12 },
   macroItem: { width: "45%", alignItems: "center", marginBottom: 8 },
   macroNum: { color: "#fff", fontSize: 20, fontWeight: "700" },
@@ -1067,7 +1100,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 4,
     borderRadius: 999,
-    backgroundColor: "#1C1C1F",
+    backgroundColor: "#1E2A38",
     marginTop: 6,
     overflow: "hidden",
   },
@@ -1078,7 +1111,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
     overflow: "hidden",
   },
   waterBtn: { width: 40, height: 44, alignItems: "center", justifyContent: "center" },
@@ -1094,7 +1127,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.6,
-    color: "#636366",
+    color: "#55647A",
     textTransform: "uppercase",
     marginBottom: 16,
   },
@@ -1131,7 +1164,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1.2,
-    color: "#636366",
+    color: "#55647A",
     textTransform: "uppercase",
   },
   foodRow: {
@@ -1159,7 +1192,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1.2,
-    color: "#636366",
+    color: "#55647A",
     textTransform: "uppercase",
   },
   addWrap: { padding: 16, borderTopWidth: 1, borderTopColor: colors.border },
@@ -1194,7 +1227,7 @@ const styles = StyleSheet.create({
     height: 40,
     paddingHorizontal: 12,
     borderRadius: 8,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#05080F",
     borderWidth: 1,
     borderColor: colors.border,
     color: "#fff",
@@ -1210,7 +1243,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     paddingVertical: 14,
     borderRadius: 999,
-    backgroundColor: "#FF6B35",
+    backgroundColor: "#9CC0E8",
   },
-  fabText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  fabText: { color: colors.onAccent, fontWeight: "700", fontSize: 16 },
 });

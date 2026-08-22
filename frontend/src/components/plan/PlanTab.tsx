@@ -297,7 +297,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     alignSelf: "stretch",
   },
-  primaryButtonText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  primaryButtonText: { color: colors.onAccent, fontWeight: "700", fontSize: 15 },
 
   statusRow: {
     flexDirection: "row",

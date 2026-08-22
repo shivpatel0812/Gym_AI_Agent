@@ -297,7 +297,7 @@ const styles = StyleSheet.create({
   },
   limitChipActive: {
     borderColor: colors.accentPrimary,
-    backgroundColor: "rgba(255, 107, 53, 0.12)",
+    backgroundColor: "rgba(156, 192, 232, 0.12)",
   },
   limitChipText: {
     color: colors.textSecondary,

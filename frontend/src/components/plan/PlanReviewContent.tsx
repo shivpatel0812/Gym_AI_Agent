@@ -289,9 +289,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(255,107,53,0.12)",
+    backgroundColor: "rgba(156, 192, 232,0.12)",
     borderWidth: 1,
-    borderColor: "rgba(255,107,53,0.28)",
+    borderColor: "rgba(156, 192, 232,0.28)",
   },
   pillText: {
     fontSize: 13,

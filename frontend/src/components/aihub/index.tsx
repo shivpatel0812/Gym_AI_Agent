@@ -66,6 +66,9 @@ export default function AIHub() {
             onPromptConsumed={() => setCoachPrompt(null)}
             initialMode={coachMode}
             onModeConsumed={() => setCoachMode(null)}
+            onOpenNutritionPlan={() =>
+              navigation.navigate("Nutrition", { tab: "plan" })
+            }
           />
         ) : activeTab === "plan" ? (
           <PlanTab onAskCoach={askCoach} />
@@ -92,7 +95,7 @@ const styles = StyleSheet.create({
   },
   tab: { paddingVertical: 12, position: "relative" },
   tabText: { fontSize: 14, fontWeight: "600", color: colors.textSecondary },
-  tabTextActive: { color: "#fff" },
+  tabTextActive: { color: colors.textPrimary },
   tabIndicator: {
     position: "absolute",
     bottom: 0,

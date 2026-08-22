@@ -15,10 +15,14 @@ import type {
 import {
   PRIMARY_SLOT_OPTIONS,
   daysLabel,
+  mealAnchorKind,
+  mealFoodGroups,
   slotLabel,
+  sumGroupedFoodMacros,
 } from "../api/nutritionPlan";
+import { foodNamesMatch } from "./recentMeals";
 
-export type DayMapKind = "anchor" | "flexible" | "one_time" | "suggest" | "stance";
+export type DayMapKind = "anchor" | "flexible" | "one_time" | "suggest" | "stance" | "goto";
 
 export interface DayMapSlot {
   id: string;
@@ -35,10 +39,18 @@ export interface DayMapSlot {
   proteinMax?: number | null;
   foods?: string[];
   fillWith?: string[];
+  /** OR-groups for Previous matching (shake A|B + yogurt X|Y). */
+  foodGroups?: Array<{ key: string; names: string[]; matchSimilar?: boolean }>;
   days?: string[];
   daysText?: string;
   sourceId?: string;
   sourceIndex?: number;
+  /** Random / varies-each-time meal anchor (potential). */
+  varies?: boolean;
+  /** Open / undecided meal. */
+  uncertain?: boolean;
+  /** individual | potential | uncertain */
+  mealKind?: "individual" | "potential" | "uncertain";
 }
 
 export interface MealTargetRow {
@@ -58,6 +70,7 @@ export interface SlotSection {
   stance: SlotStance;
   stanceNotes?: string | null;
   anchors: DayMapSlot[];
+  goTos: DayMapSlot[];
   places: FastFoodPlace[];
 }
 
@@ -68,6 +81,15 @@ export interface DayMapStack {
   oneTime: number;
   suggested: number;
   free: number;
+}
+
+export type DayStatus = "anchored" | "uncertain" | "eat_out" | "skip";
+
+export interface WeeklyBar {
+  id: string;
+  label: string;
+  short: string;
+  calories: number;
 }
 
 export interface DayMapModel {
@@ -81,7 +103,66 @@ export interface DayMapModel {
   proteinPlanned: number;
   proteinSuggested: number;
   headline: string;
+  goalLabel?: string | null;
+  weeklyBars: WeeklyBar[];
+  weeklyAvg: number;
   suggestions: unknown[];
+}
+
+export const SLOT_TIME_LABELS: Record<string, string> = {
+  breakfast: "7:00 AM",
+  lunch: "12:30 PM",
+  pre_workout: "4:30 PM",
+  dinner: "7:00 PM",
+  snack: "3:00 PM",
+};
+
+const WEEKDAYS = [
+  { id: "mon", label: "Mon", short: "M" },
+  { id: "tue", label: "Tue", short: "T" },
+  { id: "wed", label: "Wed", short: "W" },
+  { id: "thu", label: "Thu", short: "T" },
+  { id: "fri", label: "Fri", short: "F" },
+  { id: "sat", label: "Sat", short: "S" },
+  { id: "sun", label: "Sun", short: "S" },
+];
+
+function dayIdsOf(slot: DayMapSlot): string[] {
+  const days = (slot.days || []).map((d) => String(d).slice(0, 3).toLowerCase());
+  if (days.length) return days;
+  // No explicit days → treat as most weekdays for planning bars
+  return ["mon", "tue", "wed", "thu", "fri"];
+}
+
+export function dayStatusForSlot(section: SlotSection, dayId: string): DayStatus {
+  const anchors = section.anchors.filter((a) => a.kind === "anchor" || a.kind === "flexible");
+  const onDay = anchors.filter((a) => dayIdsOf(a).includes(dayId));
+  if (onDay.some((a) => a.mealKind === "individual" || (a.kind === "anchor" && !a.varies && !a.uncertain))) {
+    return "anchored";
+  }
+  if (onDay.some((a) => a.mealKind === "potential" || a.varies)) return "anchored";
+  if (onDay.some((a) => a.mealKind === "uncertain" || a.uncertain)) return "uncertain";
+  if (section.stance === "eat_out") return "eat_out";
+  if (section.stance === "uncertain") return "uncertain";
+  if (onDay.length) return "anchored";
+  return "skip";
+}
+
+export function buildWeeklyBars(sections: SlotSection[], allSlots: DayMapSlot[]): WeeklyBar[] {
+  return WEEKDAYS.map((d) => {
+    let calories = 0;
+    for (const slot of allSlots) {
+      if (!dayIdsOf(slot).includes(d.id)) continue;
+      if (slot.kind === "flexible") {
+        const min = slot.caloriesMin ?? 0;
+        const max = slot.caloriesMax ?? min;
+        calories += (min + max) / 2;
+      } else if (slot.calories) {
+        calories += slot.calories;
+      }
+    }
+    return { id: d.id, label: d.label, short: d.short, calories: Math.round(calories) };
+  });
 }
 
 function num(v: unknown, fallback = 0): number {
@@ -138,30 +219,85 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
     dinner: [],
     snack: [],
   };
+  const goTosBySlot: Record<string, DayMapSlot[]> = {
+    breakfast: [],
+    lunch: [],
+    pre_workout: [],
+    dinner: [],
+    snack: [],
+  };
 
   (plan.meal_anchors || []).forEach((anchor: MealAnchor, i) => {
-    const macros = sumFoods(anchor.foods || []);
-    anchorsCal += macros.calories;
-    anchorsPro += macros.protein;
+    const mealKind = mealAnchorKind(anchor);
+    const groups = mealFoodGroups(anchor.foods || []);
+    const macros =
+      mealKind === "individual"
+        ? sumGroupedFoodMacros(anchor.foods || [])
+        : sumFoods(anchor.foods || []);
     const foods = (anchor.foods || []).map((f) => f.name).filter(Boolean);
+    const displayFoods =
+      mealKind === "individual" && groups.length
+        ? groups.map((g) =>
+            g.names.length > 1 || g.matchSimilar
+              ? `${g.names[0]}${g.matchSimilar ? " (any similar)" : ` (+${g.names.length - 1})`}`
+              : g.names[0]
+          )
+        : foods;
+    const n = Math.max(foods.length, 1);
+    // Potential meals: count typical pick (~avg of options), not sum of all.
+    const cal = mealKind === "potential" ? macros.calories / n : macros.calories;
+    const pro = mealKind === "potential" ? macros.protein / n : macros.protein;
+    anchorsCal += cal;
+    anchorsPro += pro;
     const slotRaw = String(anchor.slot || "other");
     const primary = mapSlot(slotRaw) || "snack";
-    const days = (anchor.days || []).map(String);
+    // Materialize frequency-only anchors so the day grid matches what "daily" / "weekdays" mean.
+    let days = (anchor.days || [])
+      .map((d) => String(d).slice(0, 3).toLowerCase())
+      .filter((d) => WEEKDAYS.some((w) => w.id === d));
+    if (!days.length) {
+      const freq = String(anchor.frequency || "").toLowerCase();
+      if (freq === "daily") days = WEEKDAYS.map((w) => w.id);
+      else if (freq === "weekdays") days = ["mon", "tue", "wed", "thu", "fri"];
+      else if (freq === "weekends") days = ["sat", "sun"];
+    }
+    const placeBit = anchor.place?.trim() ? `at ${anchor.place.trim()}` : null;
+    let detail = displayFoods.join(", ") || "Meal";
+    if (mealKind === "potential") {
+      detail = [
+        placeBit || "Pick from options",
+        foods.length ? `${foods.length} options: ${foods.join(", ")}` : "add 3–4 options",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    } else if (mealKind === "uncertain") {
+      detail = [placeBit || "Undecided", foods.length ? `ideas: ${foods.join(", ")}` : "open day"]
+        .filter(Boolean)
+        .join(" · ");
+    }
     const mapped: DayMapSlot = {
       id: `anchor-${anchor.id || i}`,
       kind: "anchor",
       slot: primary,
       band: bandFor(primary),
       title: anchor.label || slotLabel(primary),
-      detail: foods.join(", ") || "Meal anchor",
-      calories: macros.calories || null,
-      protein: macros.protein || null,
-      foods,
+      detail,
+      calories: mealKind === "uncertain" ? null : cal || null,
+      protein: mealKind === "uncertain" ? null : pro || null,
+      foods: displayFoods,
       fillWith: foods,
+      foodGroups: groups.map((g) => ({
+        key: g.key,
+        names: g.names,
+        matchSimilar: g.matchSimilar,
+      })),
       days,
       daysText: daysLabel(days, anchor.frequency),
       sourceId: anchor.id,
       sourceIndex: i,
+      varies: mealKind === "potential",
+      uncertain: mealKind === "uncertain",
+      mealKind,
     };
     anchorsBySlot[primary].push(mapped);
     allSlots.push(mapped);
@@ -203,6 +339,42 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
     allSlots.push(mapped);
   });
 
+  let goToCal = 0;
+  let goToPro = 0;
+  const anchorFoodNames = (plan.meal_anchors || []).flatMap((a) =>
+    (a.foods || []).map((f) => String(f.name || "").trim()).filter(Boolean)
+  );
+  (plan.go_to_items || []).forEach((item, i) => {
+    const name = String(item.name || "").trim();
+    // Skip go-tos that are already a food inside an anchored meal.
+    if (name && anchorFoodNames.some((af) => foodNamesMatch(af, name))) {
+      return;
+    }
+    const primary = mapSlot(String(item.slot || "other")) || "snack";
+    const cal = num(item.calories);
+    const pro = num(item.protein);
+    goToCal += cal;
+    goToPro += pro;
+    const mapped: DayMapSlot = {
+      id: `goto-${item.id || i}`,
+      kind: "goto",
+      slot: primary,
+      band: bandFor(primary),
+      title: item.name || "Go-to",
+      detail: [item.amount, item.notes].filter(Boolean).join(" · ") || "Go-to item",
+      calories: cal || null,
+      protein: pro || null,
+      foods: item.name ? [item.name] : [],
+      fillWith: item.name ? [item.name] : [],
+      days: (item.days || []).map(String),
+      daysText: daysLabel(item.days),
+      sourceId: item.id,
+      sourceIndex: i,
+    };
+    goTosBySlot[primary].push(mapped);
+    allSlots.push(mapped);
+  });
+
   const sections: SlotSection[] = PRIMARY_SLOT_OPTIONS.map(({ id, label }) => {
     const profile = profileFor(plan, id);
     const places = (plan.fast_food_places || []).filter((p) =>
@@ -214,21 +386,31 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
       stance: (profile.stance as SlotStance) || "anchors",
       stanceNotes: profile.notes,
       anchors: anchorsBySlot[id] || [],
+      goTos: goTosBySlot[id] || [],
       places,
     };
   });
 
-  const used = anchorsCal + flexCal;
+  const used = anchorsCal + flexCal + goToCal;
   const free = target > 0 ? Math.max(0, target - used) : 0;
   const uncertain = sections.filter((s) => s.stance === "uncertain" || s.stance === "eat_out").length;
 
-  let headline = "Your day by meal — anchors, days, and eat-out slots.";
-  if (uncertain) {
+  const goal = String(plan.goal || "").toLowerCase();
+  let headline = "Your day by meal — anchors, go-tos, and eat-out slots.";
+  if (goal.includes("muscle") || goal.includes("recomp")) {
+    headline = "Build muscle, keep fat in check.";
+  } else if (goal.includes("cut") || goal.includes("loss") || goal.includes("lean")) {
+    headline = "Stay in a deficit without losing strength.";
+  } else if (goal.includes("bulk") || goal.includes("gain")) {
+    headline = "Fuel growth — hit protein every day.";
+  } else if (uncertain) {
     headline = `${uncertain} meal${uncertain === 1 ? "" : "s"} marked flexible / eat-out — add anchors where you can.`;
   } else if (target > 0 && free > 200) {
     headline = `About ${Math.round(free)} kcal still open across the day.`;
   } else if (target > 0 && free < 80) {
     headline = "Anchors cover most of your calorie target.";
+  } else if (plan.goal_detail?.trim()) {
+    headline = plan.goal_detail.trim();
   }
 
   const table: MealTargetRow[] = allSlots.map((slot) => {
@@ -257,9 +439,15 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
     };
   });
 
+  const weeklyBars = buildWeeklyBars(sections, allSlots);
+  const mappedDays = weeklyBars.filter((b) => b.calories > 0);
+  const weeklyAvg = mappedDays.length
+    ? Math.round(mappedDays.reduce((s, b) => s + b.calories, 0) / mappedDays.length)
+    : Math.round(used);
+
   return {
     slots: allSlots,
-    bands: sections.map((s) => ({ band: s.label, items: s.anchors })),
+    bands: sections.map((s) => ({ band: s.label, items: [...s.anchors, ...s.goTos] })),
     sections,
     table,
     stack: {
@@ -267,13 +455,16 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
       anchors: Math.round(anchorsCal),
       flexible: Math.round(flexCal),
       oneTime: 0,
-      suggested: 0,
+      suggested: Math.round(goToCal),
       free: Math.round(free),
     },
     proteinTarget,
-    proteinPlanned: Math.round(anchorsPro + flexPro),
-    proteinSuggested: 0,
+    proteinPlanned: Math.round(anchorsPro + flexPro + goToPro),
+    proteinSuggested: Math.round(goToPro),
     headline,
+    goalLabel: plan.goal || null,
+    weeklyBars,
+    weeklyAvg,
     suggestions: [],
   };
 }

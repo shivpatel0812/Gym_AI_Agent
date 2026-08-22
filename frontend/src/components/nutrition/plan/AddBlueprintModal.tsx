@@ -16,7 +16,8 @@ import {
   slotLabel,
 } from "../../../api/nutritionPlan";
 import { defaultMacrosForAdd, slotForBandAdd } from "../../../lib/dayMap";
-import { colors, spacing, borderRadius } from "../../../theme";
+import { bp, nutritionSheet } from "../../../lib/blueprintTheme";
+import { borderRadius, spacing } from "../../../theme";
 
 export type BlueprintPersistence = "anchor" | "flexible" | "one_time";
 
@@ -199,7 +200,7 @@ export default function AddBlueprintModal({
               value={label}
               onChangeText={setLabel}
               placeholder="e.g. Pre-workout banana"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={bp.muted2}
             />
 
             <Text style={styles.label}>Foods (comma-separated)</Text>
@@ -208,7 +209,7 @@ export default function AddBlueprintModal({
               value={foodsText}
               onChangeText={setFoodsText}
               placeholder="yogurt, oatmeal, protein shake"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={bp.muted2}
             />
 
             <View style={styles.macroRow}>
@@ -239,7 +240,7 @@ export default function AddBlueprintModal({
               onChangeText={setNotes}
               multiline
               placeholder="Around training, keep it light…"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={bp.muted2}
             />
           </ScrollView>
 
@@ -264,77 +265,48 @@ export default function AddBlueprintModal({
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    justifyContent: "flex-end",
-  },
+const local = StyleSheet.create({
   sheet: {
-    backgroundColor: colors.background,
-    borderTopLeftRadius: borderRadius.xl,
-    borderTopRightRadius: borderRadius.xl,
-    maxHeight: "90%",
+    backgroundColor: bp.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: "92%",
+    borderWidth: 1,
+    borderColor: bp.border,
     paddingBottom: spacing.lg,
   },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  title: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
-  link: { color: colors.accentPrimary, fontWeight: "700" },
   body: { padding: spacing.lg, gap: 4 },
-  label: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: colors.textMuted,
-    letterSpacing: 0.4,
-    marginTop: spacing.md,
-    marginBottom: 6,
-  },
-  hint: { fontSize: 12, color: colors.textSecondary, marginTop: 6, lineHeight: 16 },
   row: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.cardBackground,
-  },
   chipOn: {
-    borderColor: colors.accentPrimary,
-    backgroundColor: "rgba(255,107,53,0.16)",
+    borderColor: bp.accent,
+    backgroundColor: bp.accentSoft,
   },
-  chipText: { color: colors.textSecondary, fontWeight: "700", fontSize: 13 },
-  chipTextOn: { color: colors.accentPrimary },
   input: {
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: bp.border,
     borderRadius: borderRadius.md,
-    color: colors.textPrimary,
+    color: bp.text,
     padding: spacing.md,
-    backgroundColor: colors.cardBackground,
+    backgroundColor: bp.surface2,
+    fontSize: 14,
   },
   macroRow: { flexDirection: "row", gap: 10 },
   primary: {
     marginHorizontal: spacing.lg,
     marginTop: spacing.sm,
-    backgroundColor: colors.accentPrimary,
+    backgroundColor: bp.accent,
     borderRadius: borderRadius.md,
     paddingVertical: spacing.md,
     alignItems: "center",
   },
-  primaryText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  primaryText: { color: bp.onAccent, fontWeight: "800", fontSize: 15 },
   danger: {
     marginHorizontal: spacing.lg,
     marginTop: spacing.sm,
     paddingVertical: spacing.sm,
     alignItems: "center",
   },
-  dangerText: { color: "#FF453A", fontWeight: "700", fontSize: 14 },
+  dangerText: { color: bp.danger, fontWeight: "700", fontSize: 14 },
 });
+
+const styles = { ...nutritionSheet, ...local };

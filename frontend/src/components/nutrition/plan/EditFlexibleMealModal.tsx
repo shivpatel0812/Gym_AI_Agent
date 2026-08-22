@@ -12,7 +12,8 @@ import {
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { FlexibleMeal, FREQUENCY_OPTIONS } from "../../../api/nutritionPlan";
-import { colors, spacing, borderRadius } from "../../../theme";
+import { bp, nutritionSheet } from "../../../lib/blueprintTheme";
+import { spacing } from "../../../theme";
 
 interface Props {
   visible: boolean;
@@ -81,7 +82,7 @@ export default function EditFlexibleMealModal({
           <View style={styles.header}>
             <Text style={styles.title}>{meal?.id ? "Edit flexible meal" : "Add flexible meal"}</Text>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <MaterialCommunityIcons name="close" size={20} color={colors.textSecondary} />
+              <MaterialCommunityIcons name="close" size={20} color={bp.muted} />
             </TouchableOpacity>
           </View>
 
@@ -96,7 +97,7 @@ export default function EditFlexibleMealModal({
               value={draft.name}
               onChangeText={(v) => update({ name: v })}
               placeholder="Dinner"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={bp.muted2}
             />
 
             <Text style={styles.label}>How often</Text>
@@ -122,7 +123,7 @@ export default function EditFlexibleMealModal({
                 value={draft.calorie_min != null ? String(draft.calorie_min) : ""}
                 onChangeText={(v) => update({ calorie_min: v === "" ? null : Number(v) || 0 })}
                 placeholder="Min"
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor={bp.muted2}
               />
               <TextInput
                 style={[styles.input, { flex: 1 }]}
@@ -130,7 +131,7 @@ export default function EditFlexibleMealModal({
                 value={draft.calorie_max != null ? String(draft.calorie_max) : ""}
                 onChangeText={(v) => update({ calorie_max: v === "" ? null : Number(v) || 0 })}
                 placeholder="Max"
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor={bp.muted2}
               />
             </View>
 
@@ -142,7 +143,7 @@ export default function EditFlexibleMealModal({
                 value={draft.protein_min != null ? String(draft.protein_min) : ""}
                 onChangeText={(v) => update({ protein_min: v === "" ? null : Number(v) || 0 })}
                 placeholder="Min g"
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor={bp.muted2}
               />
               <TextInput
                 style={[styles.input, { flex: 1 }]}
@@ -150,7 +151,7 @@ export default function EditFlexibleMealModal({
                 value={draft.protein_max != null ? String(draft.protein_max) : ""}
                 onChangeText={(v) => update({ protein_max: v === "" ? null : Number(v) || 0 })}
                 placeholder="Max g"
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor={bp.muted2}
               />
             </View>
 
@@ -162,7 +163,7 @@ export default function EditFlexibleMealModal({
               <Switch
                 value={Boolean(draft.user_controls_food)}
                 onValueChange={(v) => update({ user_controls_food: v })}
-                trackColor={{ false: colors.border, true: colors.accentPrimary }}
+                trackColor={{ false: bp.border, true: bp.accent }}
               />
             </View>
 
@@ -172,7 +173,7 @@ export default function EditFlexibleMealModal({
               value={draft.notes || ""}
               onChangeText={(v) => update({ notes: v })}
               placeholder="e.g. Family dinner, calories are approximate"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={bp.muted2}
               multiline
             />
           </ScrollView>
@@ -205,69 +206,8 @@ export default function EditFlexibleMealModal({
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.65)",
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    backgroundColor: colors.cardBackground,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: "92%",
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.sm,
-  },
-  title: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
-  closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.background,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  body: { padding: spacing.lg, paddingBottom: spacing["2xl"], gap: 8 },
-  hint: { fontSize: 12, color: colors.textMuted, marginBottom: 8, lineHeight: 16 },
-  label: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: colors.textMuted,
-    marginTop: spacing.sm,
-    marginBottom: 4,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: borderRadius.md,
-    color: colors.textPrimary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    backgroundColor: colors.background,
-    fontSize: 14,
-  },
+const local = StyleSheet.create({
   row2: { flexDirection: "row", gap: 8 },
-  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: colors.background,
-  },
-  chipOn: { borderColor: colors.accentPrimary },
-  chipText: { fontSize: 12, color: colors.textSecondary, fontWeight: "600" },
-  chipTextOn: { color: colors.accentPrimary },
   switchRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -275,40 +215,8 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     paddingVertical: spacing.sm,
   },
-  switchLabel: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
-  switchHint: { fontSize: 12, color: colors.textMuted, marginTop: 2, lineHeight: 16 },
-  actions: {
-    flexDirection: "row",
-    gap: 10,
-    padding: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  primary: {
-    flex: 1,
-    backgroundColor: colors.accentPrimary,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
-    alignItems: "center",
-  },
-  primaryDisabled: { opacity: 0.4 },
-  primaryText: { color: "#fff", fontWeight: "700" },
-  secondary: {
-    flex: 1,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  secondaryText: { color: colors.textSecondary, fontWeight: "700" },
-  deleteBtn: {
-    flex: 1,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.4)",
-  },
-  deleteText: { color: colors.danger, fontWeight: "700" },
+  switchLabel: { fontSize: 14, fontWeight: "600", color: bp.text },
+  switchHint: { fontSize: 12, color: bp.muted2, marginTop: 2, lineHeight: 16 },
 });
+
+const styles = { ...nutritionSheet, ...local };

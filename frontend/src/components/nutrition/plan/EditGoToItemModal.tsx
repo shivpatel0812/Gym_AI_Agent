@@ -12,9 +12,10 @@ import {
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import apiClient from "../../../api/client";
 import foodDatabase, { FoodDbItem } from "../../../data/foodDatabase";
-import { GO_TO_SLOT_OPTIONS, GoToItem } from "../../../api/nutritionPlan";
+import { GO_TO_SLOT_OPTIONS, GoToItem, WEEKDAY_OPTIONS } from "../../../api/nutritionPlan";
 import { slotIcon } from "./EditMealAnchorModal";
-import { colors, spacing, borderRadius } from "../../../theme";
+import { bp, nutritionSheet } from "../../../lib/blueprintTheme";
+import { spacing } from "../../../theme";
 
 interface Props {
   visible: boolean;
@@ -63,7 +64,11 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
     if (!visible) return;
     setDraft(
       item
-        ? { slot: "other", ...item }
+        ? {
+            slot: "other",
+            ...item,
+            days: (item.days || []).map((d) => String(d).slice(0, 3).toLowerCase() as any),
+          }
         : emptyItem()
     );
     setQuery("");
@@ -110,6 +115,7 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
       carbs: Math.round(food.carbs * 10) / 10,
       fats: Math.round(food.fats * 10) / 10,
       fiber: food.fiber != null ? Math.round(food.fiber * 10) / 10 : null,
+      days: draft.days || [],
       notes: draft.notes,
     });
     setQuery("");
@@ -134,6 +140,7 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
         carbs: draft.carbs != null ? Number(draft.carbs) : null,
         fats: draft.fats != null ? Number(draft.fats) : null,
         fiber: draft.fiber != null ? Number(draft.fiber) : null,
+        days: draft.days || [],
         notes: draft.notes?.trim() || null,
       });
     } finally {
@@ -154,7 +161,7 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
           <View style={styles.header}>
             <Text style={styles.title}>{item?.id ? "Edit go-to item" : "Add go-to item"}</Text>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <MaterialCommunityIcons name="close" size={20} color={colors.textSecondary} />
+              <MaterialCommunityIcons name="close" size={20} color={bp.muted} />
             </TouchableOpacity>
           </View>
 
@@ -163,13 +170,13 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
             <Text style={styles.hint}>Pick from saved foods or the built-in catalog, then tweak the serving.</Text>
 
             <View style={styles.searchBox}>
-              <MaterialCommunityIcons name="magnify" size={18} color={colors.textMuted} />
+              <MaterialCommunityIcons name="magnify" size={18} color={bp.muted2} />
               <TextInput
                 style={styles.searchInput}
                 value={query}
                 onChangeText={setQuery}
                 placeholder="Search foods..."
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor={bp.muted2}
                 autoCorrect={false}
               />
             </View>
@@ -181,7 +188,7 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
                     {food.serving} · {Math.round(food.calories)} kcal · {Math.round(food.protein)}g P
                   </Text>
                 </View>
-                <MaterialCommunityIcons name="plus-circle" size={22} color={colors.accentPrimary} />
+                <MaterialCommunityIcons name="plus-circle" size={22} color={bp.accent} />
               </TouchableOpacity>
             ))}
 
@@ -196,13 +203,38 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
                   <MaterialCommunityIcons
                     name={slotIcon(s.id)}
                     size={14}
-                    color={(draft.slot || "other") === s.id ? colors.accentPrimary : colors.textMuted}
+                    color={(draft.slot || "other") === s.id ? bp.accent : bp.muted2}
                   />
                   <Text style={[styles.chipText, (draft.slot || "other") === s.id && styles.chipTextOn]}>
                     {s.label}
                   </Text>
                 </TouchableOpacity>
               ))}
+            </View>
+
+            <Text style={styles.label}>Days</Text>
+            <Text style={styles.hint}>Tap days this go-to usually shows up.</Text>
+            <View style={styles.chipRow}>
+              {WEEKDAY_OPTIONS.map((d) => {
+                const selected = (draft.days || []).map(String).includes(d.id);
+                return (
+                  <TouchableOpacity
+                    key={d.id}
+                    style={[styles.dayChip, selected && styles.dayChipOn]}
+                    onPress={() => {
+                      const cur = (draft.days || []).map(String);
+                      const next = selected
+                        ? cur.filter((x) => x !== d.id)
+                        : [...cur, d.id];
+                      update({ days: next as any });
+                    }}
+                  >
+                    <Text style={[styles.dayChipText, selected && styles.dayChipTextOn]}>
+                      {d.short}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
             <TouchableOpacity style={styles.customToggle} onPress={() => setShowCustom((v) => !v)}>
@@ -218,14 +250,14 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
                   value={draft.name}
                   onChangeText={(v) => update({ name: v })}
                   placeholder="Food name"
-                  placeholderTextColor={colors.textMuted}
+                  placeholderTextColor={bp.muted2}
                 />
                 <TextInput
                   style={styles.input}
                   value={draft.amount || ""}
                   onChangeText={(v) => update({ amount: v })}
                   placeholder="Amount (e.g. 1 scoop, 200g)"
-                  placeholderTextColor={colors.textMuted}
+                  placeholderTextColor={bp.muted2}
                 />
                 <View style={styles.macroEditRow}>
                   {(
@@ -246,7 +278,7 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
                           update({ [key]: v === "" ? null : Number(v) || 0 })
                         }
                         placeholder="0"
-                        placeholderTextColor={colors.textMuted}
+                        placeholderTextColor={bp.muted2}
                       />
                     </View>
                   ))}
@@ -277,7 +309,7 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
               value={draft.notes || ""}
               onChangeText={(v) => update({ notes: v })}
               placeholder="e.g. Post-workout, keep in fridge"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={bp.muted2}
               multiline
             />
           </ScrollView>
@@ -310,152 +342,31 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.65)",
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    backgroundColor: colors.cardBackground,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: "92%",
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.sm,
-  },
-  title: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
-  closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.background,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  body: { padding: spacing.lg, paddingBottom: spacing["2xl"], gap: 8 },
-  label: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: colors.textMuted,
-    marginTop: spacing.sm,
-    marginBottom: 4,
-  },
-  hint: { fontSize: 12, color: colors.textMuted, marginBottom: 8, lineHeight: 16 },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: borderRadius.md,
-    color: colors.textPrimary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    backgroundColor: colors.background,
-    fontSize: 14,
-  },
-  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: colors.background,
-  },
-  chipOn: { borderColor: colors.accentPrimary },
-  chipText: { fontSize: 12, color: colors.textSecondary, fontWeight: "600" },
-  chipTextOn: { color: colors.accentPrimary },
-  searchBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: borderRadius.md,
-    backgroundColor: colors.background,
-    paddingHorizontal: spacing.md,
-    marginTop: 4,
-  },
-  searchInput: { flex: 1, color: colors.textPrimary, paddingVertical: 12, fontSize: 14 },
-  resultRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  resultName: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
-  resultMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+const local = StyleSheet.create({
   customToggle: { paddingVertical: spacing.sm },
-  customToggleText: { color: colors.accentPrimary, fontWeight: "700", fontSize: 13 },
+  customToggleText: { color: bp.accent, fontWeight: "700", fontSize: 13 },
   customBox: { gap: 8, marginBottom: 8 },
   macroEditRow: { flexDirection: "row", gap: 6 },
   macroEditField: { flex: 1 },
-  macroEditLabel: { fontSize: 10, color: colors.textMuted, fontWeight: "700", marginBottom: 2 },
+  macroEditLabel: {
+    fontSize: 10,
+    color: bp.muted2,
+    fontWeight: "700",
+    marginBottom: 2,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
   macroEditInput: {
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: bp.border,
     borderRadius: 8,
-    color: colors.textPrimary,
+    color: bp.text,
     paddingHorizontal: 8,
     paddingVertical: 6,
-    backgroundColor: colors.cardBackground,
+    backgroundColor: bp.surface,
     fontSize: 13,
     textAlign: "center",
   },
-  pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 },
-  pill: {
-    backgroundColor: colors.background,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  pillText: { fontSize: 12, color: colors.textSecondary, fontWeight: "600" },
-  actions: {
-    flexDirection: "row",
-    gap: 10,
-    padding: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  primary: {
-    flex: 1,
-    backgroundColor: colors.accentPrimary,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
-    alignItems: "center",
-  },
-  primaryDisabled: { opacity: 0.4 },
-  primaryText: { color: "#fff", fontWeight: "700" },
-  secondary: {
-    flex: 1,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  secondaryText: { color: colors.textSecondary, fontWeight: "700" },
-  deleteBtn: {
-    flex: 1,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.4)",
-  },
-  deleteText: { color: colors.danger, fontWeight: "700" },
 });
+
+const styles = { ...nutritionSheet, ...local };

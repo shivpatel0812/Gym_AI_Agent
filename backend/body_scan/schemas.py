@@ -44,6 +44,17 @@ def _clamp_str(value: Any, allowed: tuple, default: str) -> str:
     return s if s in allowed else default
 
 
+def empty_photo_quality() -> Dict[str, Any]:
+    return {
+        "full_body_visible": False,
+        "lighting": "uncertain",
+        "pose_usable": False,
+        "clothing_obscures": True,
+        "views_match_labels": False,
+        "notes": None,
+    }
+
+
 def empty_observations() -> Dict[str, Any]:
     return {
         "regions": {
@@ -52,6 +63,7 @@ def empty_observations() -> Dict[str, Any]:
         },
         "asymmetries": [],
         "posture": {k: "uncertain" for k in POSTURE_KEYS},
+        "photo_quality": empty_photo_quality(),
         "overall_notes": None,
         "confidence": "low",
         "limitations": "Insufficient photo quality or pose consistency for a confident read.",
@@ -89,12 +101,38 @@ def normalize_observations(raw: Optional[Dict]) -> Dict[str, Any]:
         for k in POSTURE_KEYS
     }
 
+    quality_in = raw.get("photo_quality") if isinstance(raw.get("photo_quality"), dict) else {}
+    photo_quality = {
+        "full_body_visible": bool(quality_in.get("full_body_visible")),
+        "lighting": _clamp_str(
+            quality_in.get("lighting"), ("good", "dim", "harsh", "uncertain"), "uncertain"
+        ),
+        "pose_usable": bool(quality_in.get("pose_usable")),
+        "clothing_obscures": bool(quality_in.get("clothing_obscures", True)),
+        "views_match_labels": bool(quality_in.get("views_match_labels")),
+        "notes": str(quality_in.get("notes") or "").strip()[:300] or None,
+    }
+
     confidence = _clamp_str(raw.get("confidence"), ("low", "medium", "high"), "low")
+    # The model is told to derive confidence from photo_quality, but a stated
+    # rule is not a guarantee. Re-apply the ceiling here so downstream emphasis
+    # can never be driven by a "high" claimed over unusable photos.
+    blocking = (
+        not photo_quality["full_body_visible"]
+        or not photo_quality["pose_usable"]
+        or not photo_quality["views_match_labels"]
+    )
+    if blocking:
+        confidence = "low"
+    elif photo_quality["clothing_obscures"] or photo_quality["lighting"] in ("dim", "harsh"):
+        confidence = "medium" if confidence == "high" else confidence
+
     # Strip any hallucinated numeric BF% fields if the model sneaks them in
     return {
         "regions": regions,
         "asymmetries": asymmetries,
         "posture": posture,
+        "photo_quality": photo_quality,
         "overall_notes": str(raw.get("overall_notes") or "").strip()[:400] or None,
         "confidence": confidence,
         "limitations": str(raw.get("limitations") or "").strip()[:400] or None,

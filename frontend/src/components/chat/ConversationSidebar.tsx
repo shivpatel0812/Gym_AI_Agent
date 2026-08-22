@@ -235,7 +235,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 1,
     borderRadius: 999,
-    backgroundColor: "rgba(255,107,53,0.18)",
+    backgroundColor: "rgba(156, 192, 232,0.18)",
   },
   planBadgeText: {
     fontSize: 10,

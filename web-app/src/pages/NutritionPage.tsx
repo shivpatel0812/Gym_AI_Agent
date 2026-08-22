@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import apiClient from "../lib/api-client";
 import { MacroEntry, FoodItem, HydrationEntry } from "../types";
 import LogFoodForm, { MEALS } from "../components/nutrition/LogFoodModal";
@@ -278,7 +278,13 @@ function Ring({
 
 export default function NutritionPage() {
   const navigate = useNavigate();
-  const [hubTab, setHubTab] = useState<"today" | "plan" | "foods">("today");
+  // Chat deep-links here after staging plan suggestions: ?tab=plan&suggestions=1
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const [hubTab, setHubTab] = useState<"today" | "plan" | "foods">(
+    tabParam === "plan" || tabParam === "foods" ? tabParam : "today"
+  );
+  const focusSuggestions = searchParams.get("suggestions") === "1";
   const [guidance, setGuidance] = useState<TodayGuidance | null>(null);
   const [plan, setPlan] = useState<NutritionPlan | null>(null);
   const [loggingAnchor, setLoggingAnchor] = useState<string | null>(null);
@@ -297,6 +303,12 @@ export default function NutritionPage() {
   const [targetDraft, setTargetDraft] = useState<NutritionTargets>(loadCachedTargets);
   const [showTargets, setShowTargets] = useState(false);
   const [savingTargets, setSavingTargets] = useState(false);
+
+  useEffect(() => {
+    if (tabParam === "plan" || tabParam === "foods" || tabParam === "today") {
+      setHubTab(tabParam);
+    }
+  }, [tabParam]);
 
   const askNutritionCoach = (prompt: string) => {
     navigate(`/chatbot?mode=nutrition&prompt=${encodeURIComponent(prompt)}`);
@@ -693,7 +705,10 @@ export default function NutritionPage() {
       </div>
 
       {hubTab === "plan" ? (
-        <NutritionPlanTab onAskCoach={askNutritionCoach} />
+        <NutritionPlanTab
+          onAskCoach={askNutritionCoach}
+          focusSuggestions={focusSuggestions}
+        />
       ) : hubTab === "foods" ? (
         <SavedFoodsTab />
       ) : (

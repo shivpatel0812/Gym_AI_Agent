@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Iterator, Optional
 from openai import OpenAI
 
-from .coach_tools import CoachToolbox, TOOL_SCHEMAS
+from .coach_tools import CoachToolbox, tools_for_mode
 
 # Tool-loop budget. Rounds bound the request/response cycles; calls bound the
 # total lookups, so a confused model can't spend the whole budget on one tool.
@@ -351,6 +351,66 @@ RECENT DATA ({summary.get('analysis_period', 'monthly summary')}):
       val(lifestyle, 'high_stress_days', '{} high-stress days'))}
 """
 
+    def _build_body_scan_context(self, toolbox: Optional[CoachToolbox]) -> str:
+        """
+        A one-block summary of the latest body scan for the system prompt.
+
+        The coach used to reach physique data only by choosing to call a tool,
+        which meant it answered "why so many face pulls lately?" from the split
+        alone and never mentioned the scan that caused them. A headline here
+        makes the coach aware a scan exists; the tools remain for detail.
+        """
+        if toolbox is None:
+            return ""
+        try:
+            scan = toolbox.get_latest_body_scan()
+        except Exception:
+            return ""
+        if not isinstance(scan, dict) or scan.get("status") != "ok":
+            return ""
+
+        observations = scan.get("observations") or {}
+        synthesis = scan.get("synthesis") or {}
+        confidence = str(observations.get("confidence") or "low").lower()
+        when = str(scan.get("created_at") or "")[:10]
+
+        if confidence == "low":
+            return f"""
+BODY SCAN ({when}): photos were too unclear to read reliably.
+Treat its observations as inconclusive and suggest retaking rather than
+coaching from them. Emphasis was NOT applied to their training."""
+
+        emphasis = synthesis.get("emphasis") or {}
+        ranked = sorted(
+            emphasis.items(),
+            key=lambda kv: abs(int(str(kv[1]).replace("+", "") or 0)),
+            reverse=True,
+        )[:4]
+        emphasis_text = (
+            ", ".join(f"{g.replace('_', ' ')} {v}" for g, v in ranked)
+            if ranked else "none"
+        )
+        flags = [f for f in (synthesis.get("flags") or []) if "low_confidence" not in f][:4]
+
+        lines = [
+            f"\nBODY SCAN ({when}, confidence: {confidence}):",
+            f"Training emphasis: {emphasis_text}",
+        ]
+        if synthesis.get("volume_bias"):
+            lines.append(f"Volume bias: {synthesis['volume_bias']}")
+        if flags:
+            lines.append(f"Flags: {', '.join(flags)}")
+        lines.append(
+            f"Applied to their program: {'yes' if synthesis.get('applied') else 'not yet'}"
+        )
+        lines.append(
+            "This is appearance-based coaching from progress photos — not body "
+            "composition or medical assessment. Photos are never stored. If they ask "
+            "about progress over time, call get_body_scan_progress rather than "
+            "guessing from this single snapshot."
+        )
+        return "\n".join(lines)
+
     def _build_plan_mode_prompt(
         self,
         context: str,
@@ -427,6 +487,21 @@ How to run the interview:
 - Do NOT output a JSON plan or a full daily menu to activate. When you have enough, summarise the brief in a few bullets and tell them to tap Generate Nutrition Plan so it can be built and reviewed.
 - If they ask to generate now and you still have a critical gap, ask that one question first.
 
+Adjusting an ACTIVE plan (this is the common case):
+- When they ask for a specific change to a plan that already exists — lower breakfast
+  calories, add a post-workout shake, swap a meal, raise protein, drop a go-to — call
+  propose_nutrition_edits once, at the end of your reply, with just those changes.
+- Call get_nutrition_plan first and pass the real target_id for anything you are
+  updating or removing. Without the id the edit is rejected.
+- That tool does NOT change their plan. It stages suggestions on the Nutrition Plan
+  page. Say exactly that: describe the changes in plain language and tell them to
+  review and accept them there. Never say you have updated, changed, or saved
+  anything.
+- If the tool rejects an edit, tell them what you could not do and why. Do not paper
+  over it.
+- A whole-plan rebuild or a goal change is not an edit — for that, tell them to tap
+  Generate Nutrition Plan.
+
 Where a metric reads "not logged", say you don't have that data instead of guessing."""
 
         if toolbox is not None:
@@ -447,6 +522,8 @@ Use tools in this mode. Look up the nutrition plan, recent eating, and the train
     ) -> List[Dict[str, Any]]:
         """Assemble the message list shared by the buffered and streaming paths."""
         context = self._build_chatbot_context(summary)
+        # Appended once here so every mode (coach, plan, nutrition) inherits it
+        context += self._build_body_scan_context(toolbox)
         today = datetime.now()
         design_mode = _is_design_mode(mode)
 
@@ -477,7 +554,15 @@ Where a metric reads "not logged", say you don't have that data instead of guess
 The summary above is headline averages only. When the user asks about specific
 workouts, exercises, dates, personal bests, or what to train today, call the
 tools to look up the actual records rather than answering from the averages or
-guessing. If a tool returns no data, say so plainly."""
+guessing. If a tool returns no data, say so plainly.
+
+For anything about how they look, weak points, imbalance, posture, or why their
+program emphasizes a given muscle, call get_latest_body_scan. For whether their
+physique has actually changed, call get_body_scan_progress — never infer a trend
+from a single scan. Body scan data is appearance-based coaching from progress
+photos, not body composition: never quote or estimate a body-fat percentage, and
+if a scan reads low-confidence, say the photos were unclear instead of coaching
+from them."""
 
         history_limit = PLAN_MODE_HISTORY_MESSAGES if design_mode else MAX_HISTORY_MESSAGES
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_message}]
@@ -508,7 +593,7 @@ guessing. If a tool returns no data, say so plainly."""
         )
         kwargs["messages"] = messages
         if use_tools:
-            kwargs["tools"] = TOOL_SCHEMAS
+            kwargs["tools"] = tools_for_mode(mode)
         return kwargs
 
     def chat(
