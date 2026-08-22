@@ -159,6 +159,8 @@ def _nutrition_context_for_chat(user_id: str) -> dict:
             "preferences": plan.get("preferences"),
             "typical_day_notes": plan.get("typical_day_notes"),
             "food_priorities": plan.get("food_priorities"),
+            "health_focuses": plan.get("health_focuses") or [],
+            "health_notes": plan.get("health_notes"),
         }
     return {"training": training, "nutrition_plan": current}
 

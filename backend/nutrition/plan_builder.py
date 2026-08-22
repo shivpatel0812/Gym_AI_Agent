@@ -7,6 +7,7 @@ unavailable, a deterministic fallback still produces a usable plan from
 the answers the user already gave.
 """
 
+import copy
 import json
 import uuid
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,85 @@ VALID_FREQ = {"daily", "most_days", "weekdays", "weekends", "few_times_week", "o
 VALID_STYLE = {"strict", "flexible"}
 VALID_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 VALID_STANCES = {"anchors", "uncertain", "eat_out", "flexible"}
+
+# Optional health angles a plan can be shaped around. These are ordinary eating
+# patterns — more soluble fiber, steadier carbs — not treatment. Nothing here
+# diagnoses anything or replaces what a doctor or dietitian told the user; the
+# prompt and the UI both say so.
+HEALTH_FOCUSES: Dict[str, Dict[str, Any]] = {
+    "cholesterol": {
+        "label": "Lower cholesterol",
+        "aim": "more soluble fiber and unsaturated fat, less saturated fat",
+        "lean_on": [
+            "oats, barley, beans, lentils and fruit for soluble fiber",
+            "olive oil, nuts, seeds and avocado instead of butter",
+            "fish a couple of times a week",
+        ],
+        "go_easy_on": ["fatty and processed meat", "fried food and butter-heavy baking"],
+        "priorities": [
+            "Start the day with soluble fiber — oats, beans, or fruit",
+            "Use olive oil, nuts and fish in place of butter and fatty meat",
+        ],
+        "fiber_floor": 32,
+    },
+    "blood_sugar": {
+        "label": "Steadier blood sugar",
+        "aim": "carbs spread through the day, always paired with protein and fiber",
+        "lean_on": [
+            "protein and fiber alongside every carb serving",
+            "whole grains, beans and vegetables over refined starch",
+            "meals at fairly regular times",
+        ],
+        "go_easy_on": ["sugary drinks and juice", "large carb-only meals or snacks"],
+        "priorities": [
+            "Never eat carbs alone — pair them with protein or fiber",
+            "Spread carbs across meals instead of one large hit",
+        ],
+        "fiber_floor": 30,
+    },
+    "digestion": {
+        "label": "Easier digestion",
+        "aim": "a steady fiber intake, enough fluid, and regular meal spacing",
+        "lean_on": [
+            "fiber raised gradually rather than all at once",
+            "fermented foods like yogurt or kefir",
+            "water through the day, especially as fiber goes up",
+        ],
+        "go_easy_on": ["very large late meals", "big jumps in fiber from one day to the next"],
+        "priorities": [
+            "Raise fiber gradually and keep fluids up with it",
+            "Keep meals a similar size and spacing day to day",
+        ],
+        "fiber_floor": 30,
+    },
+    "blood_pressure": {
+        "label": "Blood pressure",
+        "aim": "less sodium, more potassium-rich whole foods",
+        "lean_on": [
+            "vegetables, fruit, beans and plain dairy",
+            "cooking at home where the salt is yours to control",
+        ],
+        "go_easy_on": ["restaurant and packaged food heavy in sodium", "salty snacks and cured meat"],
+        "priorities": [
+            "Cook more meals where you control the salt",
+            "Build meals around vegetables, fruit and beans",
+        ],
+    },
+}
+
+
+def _health_focus_list(value) -> List[str]:
+    """Keep only known focus ids, in catalog order, no duplicates."""
+    if isinstance(value, str):
+        value = [v.strip() for v in value.split(",")]
+    if not isinstance(value, list):
+        return []
+    picked = {str(v).strip().lower() for v in value if str(v).strip()}
+    return [key for key in HEALTH_FOCUSES if key in picked]
+
+
+def health_focus_labels(focuses: Optional[List[str]]) -> List[str]:
+    return [HEALTH_FOCUSES[f]["label"] for f in _health_focus_list(focuses)]
 
 
 def _new_id() -> str:
@@ -166,18 +246,20 @@ class NutritionPlanBuilder:
             answers["training_context"] = training_context
         answers["goal"] = infer_nutrition_goal(answers, training_context)
 
+        locked = self._locked_source(existing_plan, answers)
+
         if self.api_key:
             try:
                 raw = self._generate(
-                    answers, profile or {}, recent_nutrition or {}, training_context, existing_plan
+                    answers, profile or {}, recent_nutrition or {}, training_context, locked
                 )
                 plan = self.validate_plan(raw, answers)
-                return {"status": "success", "plan": self.preserve_existing(plan, existing_plan)}
+                return {"status": "success", "plan": self.preserve_existing(plan, locked)}
             except Exception as e:
                 print(f"Nutrition plan generation failed, using fallback: {e}")
 
         fallback = self.fallback_plan(answers, profile, recent_nutrition)
-        return {"status": "success", "plan": self.preserve_existing(fallback, existing_plan)}
+        return {"status": "success", "plan": self.preserve_existing(fallback, locked)}
 
     def _generate(
         self,
@@ -200,12 +282,39 @@ MEALS THE USER ALREADY SET (LOCKED — these stay in the plan exactly as they ar
     "fast_food_places": existing.get("fast_food_places") or [],
 }, indent=2, default=str)[:4000]}
 
-These are locked even if the user asked to "redesign" or "start over". Do NOT
-restate, rename, re-time, or replace them — they are added back automatically
-and any copy you return is discarded. Only return meal_anchors that are NEW
-additions sitting on top of the locked ones (a second breakfast option, a
-snack that closes a protein gap), and write the strategy as "keep your current
-anchors, and add ...".
+These are locked even if the user asked to "redesign" or "start over". Never
+rename, re-time, or replace them — they are added back automatically and any
+edit you make to one is discarded. The only reason to restate a locked meal is
+to fill in macro estimates for a food the user listed by name: keep its exact
+slot, label and food names and add calories/protein/carbs/fats. Everything else
+you return under meal_anchors must be a NEW addition sitting on top of the
+locked ones (a second breakfast option, a snack that closes a protein gap), and
+the strategy should read as "keep your current anchors, and add ...".
+"""
+
+        health = ""
+        focuses = _health_focus_list(answers.get("health_focuses"))
+        if focuses or answers.get("health_notes"):
+            lines = []
+            for key in focuses:
+                spec = HEALTH_FOCUSES[key]
+                lines.append(f"- {spec['label']}: {spec['aim']}")
+                lines.append(f"  lean on: {'; '.join(spec['lean_on'])}")
+                lines.append(f"  go easy on: {'; '.join(spec['go_easy_on'])}")
+            note = str(answers.get("health_notes") or "").strip()
+            if note:
+                lines.append(f"- In their words: {note[:400]}")
+            health = f"""
+HEALTH FOCUS the user asked to eat around:
+{chr(10).join(lines)}
+
+Shape the food choices, strategy and food_priorities around this focus, and say
+in the strategy how the day supports it in plain language. Hard limits: this is
+ordinary eating-pattern guidance, not treatment. Do not diagnose, interpret lab
+numbers, name a condition the user did not name, mention medication or
+supplements, or claim any food treats, cures, reverses or lowers anything.
+Write it as "meals built around X", and note once that anything their doctor or
+dietitian told them comes first.
 """
 
         client = OpenAI(api_key=self.api_key)
@@ -227,7 +336,7 @@ RECENT LOGGED NUTRITION (if any):
 
 ACTIVE TRAINING PLAN (align calories, protein, and strategy with this):
 {json.dumps(training or {"has_plan": False}, indent=2, default=str)}
-
+{health}
 Return JSON with exactly this shape:
 {{
   "goal": "fat_loss|maintain|muscle|lean_bulk|health",
@@ -350,6 +459,13 @@ Rules:
             )
         if training_goal:
             strategy += f" Align intake with your training goal: {training_goal}."
+        focus_labels = health_focus_labels(answers.get("health_focuses"))
+        if focus_labels:
+            aims = "; ".join(HEALTH_FOCUSES[f]["aim"] for f in _health_focus_list(answers.get("health_focuses")))
+            strategy += (
+                f" Built around {', '.join(focus_labels).lower()}: {aims}. "
+                "Anything your doctor or dietitian told you comes first."
+            )
 
         priorities = [
             "Prioritize protein in meals you control",
@@ -423,7 +539,27 @@ Rules:
         plan["typical_day_notes"] = (
             str(plan.get("typical_day_notes") or answers.get("typical_day") or "").strip()[:800] or None
         )
-        plan["food_priorities"] = _str_list(plan.get("food_priorities"))[:8]
+        plan["health_focuses"] = _health_focus_list(
+            plan.get("health_focuses") or answers.get("health_focuses")
+        )
+        plan["health_notes"] = str(
+            plan.get("health_notes") or answers.get("health_notes") or ""
+        ).strip()[:400] or None
+
+        # A focus that rests on fiber should not ship a 20g fiber target.
+        floor = max(
+            (HEALTH_FOCUSES[f].get("fiber_floor", 0) for f in plan["health_focuses"]),
+            default=0,
+        )
+        if floor and (plan["targets"].get("fiber") or 0) < floor:
+            plan["targets"]["fiber"] = int(_clamp(floor, 0, 80))
+
+        priorities = _str_list(plan.get("food_priorities"))
+        for focus in plan["health_focuses"]:
+            for line in HEALTH_FOCUSES[focus]["priorities"]:
+                if line not in priorities:
+                    priorities.insert(0, line)
+        plan["food_priorities"] = priorities[:8]
         plan["meal_anchors"] = NutritionPlanBuilder._normalize_anchors(
             plan.get("meal_anchors") or answers.get("meal_anchors")
         )
@@ -473,6 +609,70 @@ Rules:
     )
 
     @staticmethod
+    def _fill_missing_macros(kept: Dict[str, Any], ai_item: Dict[str, Any]) -> None:
+        """Borrow macro estimates for foods the user typed as a bare name."""
+        ai_foods = {
+            str(f.get("name") or "").strip().lower(): f
+            for f in (ai_item.get("foods") or [])
+            if isinstance(f, dict)
+        }
+        for food in kept.get("foods") or []:
+            if not isinstance(food, dict):
+                continue
+            source = ai_foods.get(str(food.get("name") or "").strip().lower())
+            if not source:
+                continue
+            for key in ("calories", "protein", "carbs", "fats", "fiber"):
+                if not food.get(key) and source.get(key):
+                    food[key] = source[key]
+            if not food.get("amount") and source.get("amount"):
+                food["amount"] = source["amount"]
+
+    @staticmethod
+    def _locked_source(
+        existing: Optional[Dict[str, Any]], answers: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Everything the user owns going into a generation: the plan they are
+        already running, plus anything they typed into this session's wizard.
+
+        Without the second half, a wizard anchor is only a fallback the model
+        is free to overwrite — someone who lists their breakfast and taps
+        Generate could get a different breakfast back.
+        """
+        existing = existing or {}
+        answers = answers or {}
+        key_fns = {field: key_fn for field, key_fn, _ in NutritionPlanBuilder.CARRYOVER_LISTS}
+        normalizers = {
+            "meal_anchors": NutritionPlanBuilder._normalize_anchors,
+            "flexible_meals": NutritionPlanBuilder._normalize_flexible,
+            "go_to_items": NutritionPlanBuilder._normalize_go_to_items,
+        }
+
+        locked: Dict[str, Any] = {
+            field: [copy.deepcopy(i) for i in (existing.get(field) or []) if isinstance(i, dict)]
+            for field, _, _ in NutritionPlanBuilder.CARRYOVER_LISTS
+        }
+        for field, normalize in normalizers.items():
+            key_fn = key_fns[field]
+            seen = {key_fn(i) for i in locked[field]}
+            for item in normalize(answers.get(field)):
+                if key_fn(item) in seen:
+                    continue
+                seen.add(key_fn(item))
+                locked[field].append(item)
+
+        for field in ("slot_profiles", "preferences", "health_focuses", "health_notes"):
+            if existing.get(field):
+                locked[field] = copy.deepcopy(existing[field])
+
+        if not any(locked.get(field) for field, _, _ in NutritionPlanBuilder.CARRYOVER_LISTS) and not (
+            locked.get("health_focuses") or locked.get("health_notes")
+        ):
+            return None
+        return locked
+
+    @staticmethod
     def preserve_existing(plan: Dict[str, Any], existing: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Keep everything the user already entered; the AI may only add on top.
@@ -490,9 +690,10 @@ Rules:
         added: List[str] = []
 
         for field, key_fn, cap in NutritionPlanBuilder.CARRYOVER_LISTS:
-            kept = [dict(i) for i in (existing.get(field) or []) if isinstance(i, dict)]
+            kept = [copy.deepcopy(i) for i in (existing.get(field) or []) if isinstance(i, dict)]
             seen_ids = {str(i.get("id")) for i in kept if i.get("id")}
-            seen_keys = {key_fn(i) for i in kept}
+            by_key = {key_fn(i): i for i in kept}
+            seen_keys = set(by_key)
             extras = []
             for item in plan.get(field) or []:
                 if not isinstance(item, dict):
@@ -501,6 +702,11 @@ Rules:
                     continue
                 key = key_fn(item)
                 if key in seen_keys:
+                    # The model re-stated a meal the user already owns. Their
+                    # version wins, but a macro estimate for a food they only
+                    # typed the name of is worth keeping.
+                    if field == "meal_anchors":
+                        NutritionPlanBuilder._fill_missing_macros(by_key[key], item)
                     continue
                 seen_keys.add(key)
                 item = dict(item)
@@ -518,6 +724,12 @@ Rules:
             # Existing entries come first, so a cap can only ever drop an
             # AI addition — never something the user wrote.
             plan[field] = (kept + extras)[:cap]
+
+        # The health angle is the user's call, not the model's — a regenerate
+        # keeps it unless the user picked a different one this time.
+        for field in ("health_focuses", "health_notes"):
+            if existing.get(field) and not plan.get(field):
+                plan[field] = copy.deepcopy(existing[field])
 
         # Stances are per slot and the user sets them by hand.
         if existing.get("slot_profiles"):
@@ -539,12 +751,12 @@ Rules:
 
         if added:
             plan["carryover_note"] = (
-                "Your current anchors stay exactly as you set them — follow those first. "
+                "The meals you set stay exactly as you entered them — follow those first. "
                 f"Added on top: {', '.join(added[:6])}."
             )[:400]
         else:
             plan["carryover_note"] = (
-                "Your current anchors stay exactly as you set them — follow those first. "
+                "The meals you set stay exactly as you entered them — follow those first. "
                 "This update only changes targets and strategy."
             )
         return plan

@@ -23,6 +23,9 @@ import {
   deleteNutritionPlan,
   frequencyLabel,
   goalLabel,
+  HEALTH_FOCUS_DISCLAIMER,
+  HEALTH_FOCUS_OPTIONS,
+  healthFocusLabels,
   proposeNutritionPlan,
 } from "../../../api/nutritionPlan";
 import { colors, spacing, borderRadius } from "../../../theme";
@@ -75,6 +78,8 @@ export default function CreateNutritionPlanModal({
   const [step, setStep] = useState<Step>("goal");
   const [goal, setGoal] = useState<NutritionGoal>("maintain");
   const [goalNotes, setGoalNotes] = useState("");
+  const [healthFocuses, setHealthFocuses] = useState<string[]>([]);
+  const [healthNotes, setHealthNotes] = useState("");
   const [typicalDay, setTypicalDay] = useState("");
   const [anchors, setAnchors] = useState<MealAnchor[]>([]);
   const [anchorDraft, setAnchorDraft] = useState(emptyAnchor());
@@ -116,6 +121,8 @@ export default function CreateNutritionPlanModal({
     setDraft(null);
     setGoal("maintain");
     setGoalNotes("");
+    setHealthFocuses([]);
+    setHealthNotes("");
     setTypicalDay("");
     setAnchors([]);
     setAnchorDraft(emptyAnchor());
@@ -200,6 +207,8 @@ export default function CreateNutritionPlanModal({
       const plan = await proposeNutritionPlan({
         goal,
         goal_notes: goalNotes.trim() || undefined,
+        health_focuses: healthFocuses.length ? healthFocuses : undefined,
+        health_notes: healthNotes.trim() || undefined,
         typical_day: typicalDay.trim() || undefined,
         meal_anchors: anchors,
         flexible_meals: flexible,
@@ -280,6 +289,15 @@ export default function CreateNutritionPlanModal({
                     ? ` · range ${draft.targets.calories_min}–${draft.targets.calories_max}`
                     : ""}
                 </Text>
+                {healthFocusLabels(draft.health_focuses).length ? (
+                  <>
+                    <Text style={styles.sub}>Built around</Text>
+                    <Text style={styles.bodyText}>
+                      {healthFocusLabels(draft.health_focuses).join(" · ")}
+                    </Text>
+                    <Text style={styles.hint}>{HEALTH_FOCUS_DISCLAIMER}</Text>
+                  </>
+                ) : null}
                 {draft.carryover_note ? (
                   <View style={styles.carryover}>
                     <Text style={styles.carryoverText}>{draft.carryover_note}</Text>
@@ -365,6 +383,41 @@ export default function CreateNutritionPlanModal({
                       placeholderTextColor={colors.textMuted}
                       multiline
                     />
+                    <Text style={styles.sub}>Eating around a health focus? (optional)</Text>
+                    <Text style={styles.hint}>{HEALTH_FOCUS_DISCLAIMER}</Text>
+                    <View style={styles.focusWrap}>
+                      {HEALTH_FOCUS_OPTIONS.map((option) => {
+                        const on = healthFocuses.includes(option.id);
+                        return (
+                          <TouchableOpacity
+                            key={option.id}
+                            style={[styles.focusChip, on && styles.focusChipOn]}
+                            onPress={() =>
+                              setHealthFocuses((prev) =>
+                                prev.includes(option.id)
+                                  ? prev.filter((id) => id !== option.id)
+                                  : [...prev, option.id]
+                              )
+                            }
+                          >
+                            <Text style={[styles.focusChipText, on && styles.focusChipTextOn]}>
+                              {option.label}
+                            </Text>
+                            <Text style={styles.focusChipAim}>{option.aim}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    {healthFocuses.length ? (
+                      <TextInput
+                        style={styles.input}
+                        value={healthNotes}
+                        onChangeText={setHealthNotes}
+                        placeholder="Anything your doctor or dietitian told you to do?"
+                        placeholderTextColor={colors.textMuted}
+                        multiline
+                      />
+                    ) : null}
                     <Text style={styles.sub}>AI model</Text>
                     <View style={styles.modelRow}>
                       {AI_MODEL_OPTIONS.map((opt) => {
@@ -683,6 +736,18 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   carryoverText: { fontSize: 13, color: "#5EEAD4", lineHeight: 19, fontWeight: "600" },
+  focusWrap: { gap: spacing.sm, marginTop: spacing.sm },
+  focusChip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    gap: 2,
+  },
+  focusChipOn: { borderColor: "#5EEAD4", backgroundColor: "rgba(94,234,212,0.10)" },
+  focusChipText: { fontSize: 14, fontWeight: "700", color: colors.textPrimary },
+  focusChipTextOn: { color: "#5EEAD4" },
+  focusChipAim: { fontSize: 12, color: colors.textMuted, lineHeight: 17 },
   hint: { fontSize: 13, color: colors.textSecondary, lineHeight: 18 },
   bodyText: { fontSize: 14, color: colors.textSecondary, lineHeight: 20 },
   planName: { fontSize: 24, fontWeight: "700", color: colors.textPrimary },

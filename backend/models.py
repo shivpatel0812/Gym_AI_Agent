@@ -407,6 +407,9 @@ class NutritionPlan(BaseModel):
     typical_day_notes: Optional[str] = None
     # "Your current anchors stay — added on top: ..." after an AI regenerate.
     carryover_note: Optional[str] = None
+    # Eating-pattern focus, e.g. ["cholesterol"]. Guidance, never treatment.
+    health_focuses: List[str] = []
+    health_notes: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     ended_at: Optional[str] = None

@@ -372,4 +372,82 @@ def test_preserve_existing_drops_ai_copies_of_the_same_meal():
 
     assert len(merged["meal_anchors"]) == 1
     assert [f["name"] for f in merged["meal_anchors"][0]["foods"]] == ["Greek yogurt"]
-    assert "stay exactly as you set them" in merged["carryover_note"]
+    assert "stay exactly as you entered them" in merged["carryover_note"]
+
+
+def test_wizard_anchors_survive_a_model_that_ignores_them():
+    """No live plan yet — the meals typed into the wizard are still locked."""
+    answers = {
+        "goal": "muscle",
+        "meal_anchors": [
+            {"slot": "breakfast", "label": "Breakfast", "foods": [{"name": "Greek yogurt"}]}
+        ],
+    }
+    locked = NutritionPlanBuilder._locked_source(None, answers)
+    model_output = NutritionPlanBuilder.validate_plan({
+        "goal": "muscle",
+        "meal_anchors": [
+            # Same meal, re-costed — plus one the model invented.
+            {
+                "slot": "breakfast",
+                "label": "Breakfast",
+                "foods": [{"name": "Greek yogurt", "amount": "1 cup", "calories": 150, "protein": 20}],
+            },
+            {"slot": "snack", "label": "Cottage cheese", "foods": [{"name": "cottage cheese"}]},
+        ],
+    })
+
+    merged = NutritionPlanBuilder.preserve_existing(model_output, locked)
+
+    labels = [a["label"] for a in merged["meal_anchors"]]
+    assert labels == ["Breakfast", "Cottage cheese"]
+    # The user's food kept its identity but picked up the model's estimate.
+    yogurt = merged["meal_anchors"][0]["foods"][0]
+    assert yogurt["name"] == "Greek yogurt"
+    assert yogurt["calories"] == 150
+    assert yogurt["amount"] == "1 cup"
+
+
+def test_cold_start_with_no_user_input_has_no_carryover_note():
+    assert NutritionPlanBuilder._locked_source(None, {"goal": "muscle"}) is None
+    plan = NutritionPlanBuilder.validate_plan({"goal": "muscle"})
+    assert NutritionPlanBuilder.preserve_existing(plan, None)["carryover_note"] is None
+
+
+def test_health_focus_shapes_priorities_and_fiber_floor():
+    plan = NutritionPlanBuilder.validate_plan({
+        "goal": "maintain",
+        "targets": {"calories": 2200, "protein": 160, "fiber": 18},
+        "health_focuses": ["cholesterol", "not_a_real_focus"],
+        "health_notes": "  Doctor flagged my LDL  ",
+        "food_priorities": ["Prioritize protein in meals you control"],
+    })
+
+    assert plan["health_focuses"] == ["cholesterol"]
+    assert plan["health_notes"] == "Doctor flagged my LDL"
+    assert plan["targets"]["fiber"] >= 32
+    assert any("soluble fiber" in p for p in plan["food_priorities"])
+    assert "Prioritize protein in meals you control" in plan["food_priorities"]
+
+
+def test_health_focus_accepted_from_answers_and_kept_through_regenerate():
+    plan = NutritionPlanBuilder.fallback_plan({
+        "goal": "maintain",
+        "health_focuses": ["blood_sugar"],
+    })
+    assert plan["health_focuses"] == ["blood_sugar"]
+    assert "doctor or dietitian" in (plan["strategy"] or "")
+
+    # A later regenerate that says nothing about health keeps the focus.
+    locked = NutritionPlanBuilder._locked_source(plan, {})
+    regenerated = NutritionPlanBuilder.validate_plan({"goal": "maintain"})
+    assert NutritionPlanBuilder.preserve_existing(regenerated, locked)["health_focuses"] == [
+        "blood_sugar"
+    ]
+
+
+def test_health_focus_labels_ignore_unknown_ids():
+    from nutrition.plan_builder import health_focus_labels
+
+    assert health_focus_labels(["digestion", "cancer"]) == ["Easier digestion"]
+    assert health_focus_labels(None) == []

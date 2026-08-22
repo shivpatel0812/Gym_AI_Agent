@@ -14,7 +14,12 @@ import os
 
 from auth import get_user_id
 from db import db
-from nutrition.plan_builder import NutritionPlanBuilder, GOAL_KEYS, suggest_nutrition_goal
+from nutrition.plan_builder import (
+    HEALTH_FOCUSES,
+    NutritionPlanBuilder,
+    GOAL_KEYS,
+    suggest_nutrition_goal,
+)
 from nutrition.plan_store import (
     NutritionPlanStore,
     STATUS_ACTIVE,
@@ -44,6 +49,9 @@ router = APIRouter(prefix="/api/nutrition-plan", tags=["nutrition-plan"])
 class ProposeNutritionPlanRequest(BaseModel):
     goal: Optional[str] = None
     goal_notes: Optional[str] = None
+    # e.g. ["cholesterol", "blood_sugar"] — eating-pattern focus, not treatment.
+    health_focuses: Optional[List[str]] = None
+    health_notes: Optional[str] = None
     typical_day: Optional[str] = None
     meal_anchors: Optional[List[dict]] = None
     flexible_meals: Optional[List[dict]] = None
@@ -84,6 +92,8 @@ class UpdateNutritionPlanRequest(BaseModel):
     goal_detail: Optional[str] = None
     strategy: Optional[str] = None
     carryover_note: Optional[str] = None
+    health_focuses: Optional[List[str]] = None
+    health_notes: Optional[str] = None
     typical_day_notes: Optional[str] = None
     targets: Optional[dict] = None
     meal_anchors: Optional[List[dict]] = None
@@ -244,6 +254,10 @@ def _remove_usual_items(user_id: str, date: str, usual_id: str) -> None:
 async def get_nutrition_goals():
     return {
         "goals": [{"id": key, "label": label} for key, label in GOAL_KEYS.items()],
+        "health_focuses": [
+            {"id": key, "label": spec["label"], "aim": spec["aim"]}
+            for key, spec in HEALTH_FOCUSES.items()
+        ],
         "frequencies": [
             {"id": "daily", "label": "Every day"},
             {"id": "most_days", "label": "Most days"},
@@ -285,6 +299,8 @@ async def propose_nutrition_plan(
     answers = {
         "goal": request.goal,
         "goal_notes": request.goal_notes,
+        "health_focuses": request.health_focuses or [],
+        "health_notes": request.health_notes,
         "typical_day": request.typical_day,
         "meal_anchors": request.meal_anchors or [],
         "flexible_meals": request.flexible_meals or [],
@@ -499,6 +515,7 @@ async def toggle_usual(
 
 PATCHABLE_FIELDS = (
     "goal", "goal_detail", "targets", "strategy", "typical_day_notes", "carryover_note",
+    "health_focuses", "health_notes",
     "meal_anchors", "flexible_meals", "go_to_items", "blueprint_extras",
     "slot_profiles", "fast_food_places",
     "preferences", "food_priorities",

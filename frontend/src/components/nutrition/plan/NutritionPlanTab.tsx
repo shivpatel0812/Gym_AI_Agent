@@ -35,6 +35,8 @@ import {
   getPendingSuggestions,
   getActiveNutritionPlan,
   goalLabel,
+  HEALTH_FOCUS_DISCLAIMER,
+  healthFocusLabels,
   pauseNutritionPlan,
   resumeNutritionPlan,
   slotLabel,
@@ -982,6 +984,15 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           </TouchableOpacity>
         </View>
 
+        {healthFocusLabels(plan.health_focuses).length ? (
+          <View style={styles.focusBanner}>
+            <Text style={styles.focusBannerTitle}>
+              Built around {healthFocusLabels(plan.health_focuses).join(" · ").toLowerCase()}
+            </Text>
+            <Text style={styles.focusBannerBody}>{HEALTH_FOCUS_DISCLAIMER}</Text>
+          </View>
+        ) : null}
+
         {plan.carryover_note ? (
           <View style={styles.carryover}>
             <Text style={styles.carryoverText}>{plan.carryover_note}</Text>
@@ -1226,6 +1237,16 @@ const styles = StyleSheet.create({
   macroDot: { width: 6, height: 6, borderRadius: 3 },
   macroValue: { fontSize: 13, fontWeight: "700", color: colors.textPrimary },
   macroLabel: { fontSize: 11, color: colors.textMuted, fontWeight: "600" },
+  focusBanner: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: 3,
+  },
+  focusBannerTitle: { fontSize: 13, fontWeight: "700", color: colors.textPrimary },
+  focusBannerBody: { fontSize: 12, color: colors.textMuted, lineHeight: 17 },
   carryover: {
     borderWidth: 1,
     borderColor: "rgba(94,234,212,0.35)",
