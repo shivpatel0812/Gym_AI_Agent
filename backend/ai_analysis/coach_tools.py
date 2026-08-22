@@ -301,6 +301,10 @@ class CoachToolbox:
             "goal_detail": plan.get("goal_detail"),
             "strategy": plan.get("strategy"),
             "targets": plan.get("targets"),
+            # Eating-pattern focus the user chose. Respect it in suggestions;
+            # it is not a diagnosis and must not be treated as one.
+            "health_focuses": plan.get("health_focuses") or [],
+            "health_notes": plan.get("health_notes"),
             "meal_anchors": [
                 {
                     "id": a.get("id"),

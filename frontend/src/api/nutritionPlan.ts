@@ -212,6 +212,9 @@ export interface NutritionPlan {
   strategy?: string | null;
   /** Set when a regenerate kept the user's anchors and added on top. */
   carryover_note?: string | null;
+  /** Eating-pattern focus, e.g. ["cholesterol"]. Guidance, never treatment. */
+  health_focuses?: string[];
+  health_notes?: string | null;
   meal_anchors: MealAnchor[];
   flexible_meals: FlexibleMeal[];
   go_to_items?: GoToItem[];
@@ -288,6 +291,45 @@ export const EMPTY_USUALS: UsualsPayload = {
   usuals: [],
   remaining: null,
 };
+
+export type HealthFocusId = "cholesterol" | "blood_sugar" | "digestion" | "blood_pressure";
+
+/**
+ * Optional eating angles a plan can be built around. Mirrors HEALTH_FOCUSES in
+ * backend/nutrition/plan_builder.py. These shape food choices — they are not
+ * treatment and never replace what a doctor or dietitian said.
+ */
+export const HEALTH_FOCUS_OPTIONS: { id: HealthFocusId; label: string; aim: string }[] = [
+  {
+    id: "cholesterol",
+    label: "Lower cholesterol",
+    aim: "More soluble fiber and unsaturated fat, less saturated fat",
+  },
+  {
+    id: "blood_sugar",
+    label: "Steadier blood sugar",
+    aim: "Carbs spread through the day, always paired with protein and fiber",
+  },
+  {
+    id: "digestion",
+    label: "Easier digestion",
+    aim: "Steady fiber, enough fluid, regular meal spacing",
+  },
+  {
+    id: "blood_pressure",
+    label: "Blood pressure",
+    aim: "Less sodium, more potassium-rich whole foods",
+  },
+];
+
+export const HEALTH_FOCUS_DISCLAIMER =
+  "General eating guidance, not medical advice. Anything your doctor or dietitian told you comes first.";
+
+export function healthFocusLabels(ids?: string[] | null): string[] {
+  return (ids || [])
+    .map((id) => HEALTH_FOCUS_OPTIONS.find((o) => o.id === id)?.label)
+    .filter((label): label is string => !!label);
+}
 
 export const GOAL_OPTIONS: { id: NutritionGoal; label: string }[] = [
   { id: "fat_loss", label: "Lose fat" },
@@ -396,6 +438,8 @@ export function goalLabel(id?: string | null) {
 export async function proposeNutritionPlan(answers: {
   goal?: string;
   goal_notes?: string;
+  health_focuses?: string[];
+  health_notes?: string;
   typical_day?: string;
   meal_anchors?: Partial<MealAnchor>[];
   flexible_meals?: Partial<FlexibleMeal>[];
