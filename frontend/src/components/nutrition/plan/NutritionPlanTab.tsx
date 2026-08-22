@@ -49,6 +49,7 @@ import {
 } from "../../../api/nutritionPlan";
 import { buildDayMap } from "../../../lib/dayMap";
 import { LoggedMealPattern } from "../../../lib/recentMeals";
+import { groupEditsBySlot, pendingTargetIds } from "../../../lib/planSuggestionSlots";
 import { AI_MODEL_STORAGE_KEY, normalizeAiModel } from "../../../lib/aiModels";
 import apiClient from "../../../api/client";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -238,6 +239,7 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           uncertain: kind === "uncertain",
           place: local?.place ?? a.place,
           days: local?.days ?? a.days,
+          source: local?.source ?? a.source,
         };
       };
       let mealAnchors = updated.meal_anchors ?? patch.meal_anchors ?? plan.meal_anchors;
@@ -271,11 +273,17 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           updated.fast_food_places ?? patch.fast_food_places ?? plan.fast_food_places,
       });
       return true;
-    } catch {
+    } catch (error: any) {
       // A newer save is already in flight — let it own the outcome instead of
       // reloading the plan out from under it.
       if (seq !== saveSeq.current) return true;
-      Alert.alert("Error", "Could not save that change.");
+      // The server explains limits ("a plan holds up to 24 meal anchors") —
+      // showing that beats a generic failure the user cannot act on.
+      const detail = error?.response?.data?.detail;
+      Alert.alert(
+        "Error",
+        typeof detail === "string" && detail ? detail : "Could not save that change."
+      );
       return false;
     }
   };
@@ -781,6 +789,7 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       frequency: "most_days",
       days: (idea.days as any) || ["mon", "tue", "wed", "thu", "fri"],
       notes: idea.notes || null,
+      source: "ai_slot",
     });
     setEditingAnchorIndex(null);
     setAnchorEditorOpen(true);
@@ -811,6 +820,7 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       varies: false,
       uncertain: false,
       notes: pattern.count > 1 ? `Logged ${pattern.count}× in the last month` : null,
+      source: "logged",
     });
     setEditingAnchorIndex(null);
     setAnchorEditorOpen(true);
@@ -929,7 +939,58 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     ]);
   };
 
-  const dayMap = useMemo(() => (plan ? buildDayMap(plan) : null), [plan]);
+  const dayMap = useMemo(() => {
+    if (!plan) return null;
+    return buildDayMap(plan, {
+      pendingTargetIds: pendingTargetIds(suggestions?.edits),
+    });
+  }, [plan, suggestions]);
+
+  const { bySlot: coachEditsBySlot, general: generalCoachEdits } = useMemo(
+    () => groupEditsBySlot(suggestions?.edits),
+    [suggestions]
+  );
+
+  const coachEditCounts = useMemo(() => {
+    const counts: Partial<Record<PrimaryMealSlot, number>> = {};
+    (Object.keys(coachEditsBySlot) as PrimaryMealSlot[]).forEach((slot) => {
+      const n = (coachEditsBySlot[slot] || []).filter((e) => e.status === "pending").length;
+      if (n) counts[slot] = n;
+    });
+    return counts;
+  }, [coachEditsBySlot]);
+
+  const mealPendingCount = useMemo(
+    () => Object.values(coachEditCounts).reduce((sum, n) => sum + (n || 0), 0),
+    [coachEditCounts]
+  );
+
+  // Top banner: plan-wide edits (targets/strategy) in full. Meal edits are
+  // reviewed under breakfast / lunch / dinner on the DayMap — only a summary
+  // + Accept all sits up top when those exist.
+  const topSuggestionSet = useMemo(() => {
+    if (!suggestions) return null;
+    const mealScoped = (suggestions.edits || []).filter((e) => {
+      if (e.status !== "pending" && e.status !== "stale") return false;
+      return !generalCoachEdits.some((g) => g.id === e.id);
+    });
+    if (!generalCoachEdits.length && !mealScoped.length) return null;
+    if (!generalCoachEdits.length) {
+      return {
+        ...suggestions,
+        edits: [],
+        summary:
+          mealPendingCount > 0
+            ? `${mealPendingCount} meal update${mealPendingCount === 1 ? "" : "s"} under breakfast / lunch / dinner below`
+            : suggestions.summary,
+      } as NutritionSuggestionSet;
+    }
+    return {
+      ...suggestions,
+      edits: generalCoachEdits,
+      summary: suggestions.summary,
+    } as NutritionSuggestionSet;
+  }, [suggestions, generalCoachEdits, mealPendingCount]);
 
   if (loading) {
     return (
@@ -1022,11 +1083,15 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           </View>
         ) : null}
 
-        {suggestions ? (
+        {topSuggestionSet ? (
           <PlanSuggestions
-            set={suggestions}
+            set={topSuggestionSet}
             planChangedSince={planChangedSince}
             busy={suggestionsBusy}
+            showAcceptAll={
+              mealPendingCount > 0 ||
+              generalCoachEdits.some((e) => e.status === "pending")
+            }
             onAccept={acceptSuggestions}
             onDismiss={rejectSuggestions}
             onEdit={editSuggestion}
@@ -1059,6 +1124,12 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
             suggestingPlaceId={suggestingPlaceId}
             orderSuggestions={orderSuggestions}
             onLogOrder={logSuggestedOrder}
+            coachEditsBySlot={coachEditsBySlot}
+            coachEditCounts={coachEditCounts}
+            suggestionsBusy={suggestionsBusy}
+            onAcceptCoachEdit={(editId) => acceptSuggestions([editId])}
+            onDismissCoachEdit={(editId) => rejectSuggestions([editId])}
+            onEditCoachEdit={editSuggestion}
           />
         ) : (
           <>

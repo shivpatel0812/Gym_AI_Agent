@@ -356,7 +356,8 @@ def apply_edits(
                 # Already applied once — accepting again would duplicate it.
                 outcomes[edit_id] = EDIT_STATUS_STALE
                 continue
-            items.append(payload)
+            # Stamp so the plan page can label coach-added meals.
+            items.append({**payload, "source": payload.get("source") or "ai_coach"})
             patch[spec.field] = items
             outcomes[edit_id] = EDIT_STATUS_APPLIED
             continue
@@ -369,7 +370,12 @@ def apply_edits(
         if action == "remove":
             items.pop(index)
         else:
-            items[index] = {**items[index], **payload, "id": items[index].get("id")}
+            items[index] = {
+                **items[index],
+                **payload,
+                "id": items[index].get("id"),
+                "source": "ai_coach",
+            }
         patch[spec.field] = items
         outcomes[edit_id] = EDIT_STATUS_APPLIED
 

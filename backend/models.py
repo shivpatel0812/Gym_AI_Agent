@@ -208,6 +208,9 @@ class UserProfile(BaseModel):
     preferred_workout_frequency: Optional[str] = None
     coaching_style_preference: Optional[str] = None
     dietary_preference: Optional[str] = None
+    # IANA zone reported by the device, e.g. "America/New_York". Used for
+    # server-side date defaults; never asked of the user.
+    timezone: Optional[str] = None
     dietary_preference_other: Optional[str] = None
     willingness_to_track: Optional[str] = None
     progress_feeling: Optional[str] = None

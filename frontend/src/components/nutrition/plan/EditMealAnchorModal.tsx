@@ -305,6 +305,7 @@ export default function EditMealAnchorModal({
           uncertain: kind === "uncertain",
           place: place.trim() || null,
           foods: foods.length ? foods : kind === "individual" ? [{ name: nextLabel }] : [],
+          source: anchor?.source || undefined,
         })
       );
     } finally {

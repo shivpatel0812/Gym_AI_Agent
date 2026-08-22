@@ -8,8 +8,10 @@ around what has already been eaten and which meals are still flexible.
 from typing import Any, Dict, List, Optional, Tuple
 
 from nutrition.meal_math import (
+    DAY_KEYS,
     anchor_kind,
     anchor_macros,
+    day_keys,
     grouped_macros,
     items_for_weekday,
 )
@@ -120,6 +122,60 @@ def _anchor_totals(anchors: List[Dict]) -> Dict[str, float]:
     return totals
 
 
+def _extra_macros(extra: Dict) -> Dict[str, float]:
+    """A blueprint extra's cost: explicit macros, a range midpoint, or its foods."""
+    calories = _num(extra.get("calories"))
+    protein = _num(extra.get("protein"))
+    if not calories:
+        low, high = _num(extra.get("calorie_min")), _num(extra.get("calorie_max"))
+        calories = (low + high) / 2 if (low and high) else (low or high)
+    if not protein:
+        low, high = _num(extra.get("protein_min")), _num(extra.get("protein_max"))
+        protein = (low + high) / 2 if (low and high) else (low or high)
+    if not calories and not protein:
+        return grouped_macros(extra.get("foods"))
+    return {"calories": calories, "protein": protein}
+
+
+def _anchor_food_names(plan: Dict) -> List[str]:
+    names = []
+    for anchor in plan.get("meal_anchors") or []:
+        for food in anchor.get("foods") or []:
+            name = str(food.get("name") or "").strip().lower()
+            if name:
+                names.append(name)
+    return names
+
+
+def _scheduled_go_tos(plan: Dict, weekday: Optional[int]) -> List[Dict]:
+    """
+    Go-to items the user actually mapped onto this day.
+
+    A go-to with no days set is an option to reach for, not a commitment, so it
+    is deliberately not charged against the budget — only ones pinned to
+    weekdays count. Anything that is already a food inside an anchor is skipped
+    so the same yogurt is not paid for twice.
+    """
+    anchor_names = _anchor_food_names(plan)
+    scheduled = []
+    for item in plan.get("go_to_items") or []:
+        if not isinstance(item, dict):
+            continue
+        keys = day_keys(item.get("days"))
+        if not keys:
+            continue
+        if weekday is None:
+            if len(keys) < 7:
+                continue
+        elif DAY_KEYS[weekday] not in keys:
+            continue
+        name = str(item.get("name") or "").strip().lower()
+        if name and any(name in other or other in name for other in anchor_names if len(other) > 2):
+            continue
+        scheduled.append(item)
+    return scheduled
+
+
 def _join_names(names: List[str]) -> str:
     names = [n for n in names if n]
     if not names:
@@ -159,7 +215,7 @@ def _protein_suggestions(plan: Dict, logged_names: set) -> List[str]:
     return names[:3]
 
 
-def plan_coverage(plan: Dict[str, Any]) -> Dict[str, Any]:
+def plan_coverage(plan: Dict[str, Any], weekday: Optional[int] = None) -> Dict[str, Any]:
     """
     Whether the plan's own structure can reach its own calorie/protein targets.
 
@@ -171,7 +227,19 @@ def plan_coverage(plan: Dict[str, Any]) -> Dict[str, Any]:
     cal_target = _num(targets.get("calories"))
     protein_target = _num(targets.get("protein"))
 
-    anchors = _anchor_totals(plan.get("meal_anchors"))
+    anchors = _anchor_totals(items_for_weekday(plan.get("meal_anchors"), weekday))
+
+    # Blueprint extras are part of the planned day, and so are go-tos the user
+    # pinned to weekdays. Leaving them out made the plan look like it had a
+    # hole where the user had already filled one.
+    for extra in plan.get("blueprint_extras") or []:
+        part = _extra_macros(extra)
+        anchors["calories"] += part["calories"]
+        anchors["protein"] += part["protein"]
+    for item in _scheduled_go_tos(plan, weekday):
+        anchors["calories"] += _num(item.get("calories"))
+        anchors["protein"] += _num(item.get("protein"))
+
     flex_cal_min = flex_cal_max = 0.0
     flex_protein_min = flex_protein_max = 0.0
     for meal in plan.get("flexible_meals") or []:
@@ -249,7 +317,24 @@ def build_today_guidance(
     # Calories/protein the still-unlogged regular meals are already spoken for.
     # Without this the headline claims the whole leftover is free for dinner.
     pending_anchors = _anchor_totals(remaining_anchors)
-    anchor_names = _join_names([a.get("label") for a in remaining_anchors])
+    pending_labels = [a.get("label") for a in remaining_anchors]
+
+    for extra in plan.get("blueprint_extras") or []:
+        if _meal_logged(extra.get("label") or "", logged_names, logged_foods):
+            continue
+        part = _extra_macros(extra)
+        pending_anchors["calories"] += part["calories"]
+        pending_anchors["protein"] += part["protein"]
+        pending_labels.append(extra.get("label"))
+
+    for item in _scheduled_go_tos(plan, weekday):
+        if _meal_logged(item.get("name") or "", logged_names, logged_foods):
+            continue
+        pending_anchors["calories"] += _num(item.get("calories"))
+        pending_anchors["protein"] += _num(item.get("protein"))
+        pending_labels.append(item.get("name"))
+
+    anchor_names = _join_names(pending_labels)
     nothing_logged = logged["calories"] == 0 and logged["protein"] == 0
 
     if remaining_cal is not None:
@@ -321,7 +406,7 @@ def build_today_guidance(
             messages.append(f"{lead}. {option} would close the gap.")
 
     style = (plan.get("preferences") or {}).get("guidance_style")
-    coverage = plan_coverage(plan)
+    coverage = plan_coverage(plan, weekday)
     # A plan whose own meals cannot reach its own target is a planning problem,
     # not a today problem — say so rather than letting the user just miss daily.
     cal_gap = coverage.get("calorie_gap")

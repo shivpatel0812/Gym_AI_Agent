@@ -16,10 +16,12 @@ from auth import get_user_id
 from db import db
 from nutrition.plan_builder import (
     HEALTH_FOCUSES,
+    PLAN_LIST_LIMITS,
     NutritionPlanBuilder,
     GOAL_KEYS,
     suggest_nutrition_goal,
 )
+import user_time
 from nutrition import idea_cache
 from nutrition.plan_store import (
     NutritionPlanStore,
@@ -129,9 +131,15 @@ def _builder(model: Optional[str] = None) -> NutritionPlanBuilder:
 
 
 def _recent_nutrition(user_id: str) -> dict:
+    """
+    Recent intake used to set targets — completed days only.
+
+    Deliberately not the rolling coach summary: that one ends today, and a plan
+    built at 10am would average in a half-logged day and hand the user lower
+    calorie and protein targets than they actually eat.
+    """
     try:
-        summary = FitnessDataAnalyzer(db, user_id).build_rolling_summary(window_days=14)
-        return summary.get("nutrition") or {}
+        return FitnessDataAnalyzer(db, user_id).build_planning_nutrition(window_days=14) or {}
     except Exception as e:
         print(f"Warning: nutrition history unavailable: {e}")
         return {}
@@ -184,7 +192,7 @@ def _logged_foods(user_id: str, date: str) -> List[dict]:
 
 def _recent_macro_entries(user_id: str, days: int = 21) -> List[dict]:
     """Recent days of logged food, for learning someone's repeat meals."""
-    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    cutoff = (user_time.now(db, user_id) - timedelta(days=days)).strftime("%Y-%m-%d")
     col = _macros_ref(user_id)
     try:
         docs = list(col.where("date", ">=", cutoff).stream())
@@ -216,7 +224,9 @@ def _usuals_payload(user_id: str, date: str, hour: Optional[int]) -> dict:
         active,
         foods,
         history=_recent_macro_entries(user_id),
-        hour=hour if hour is not None else datetime.now().hour,
+        # The client sends its own hour; the stored timezone covers the callers
+        # that cannot, so the current meal slot is never a UTC guess.
+        hour=hour if hour is not None else user_time.now(db, user_id).hour,
         weekday=_weekday(date),
     )
     # Home shows what a tap did to the day's budget, so it rides along here
@@ -455,7 +465,7 @@ async def get_today_guidance(
     date: Optional[str] = Query(None),
     user_id: str = Depends(get_user_id),
 ):
-    day = date or datetime.now().strftime("%Y-%m-%d")
+    day = date or user_time.today(db, user_id)
     plan = _store(user_id).get_active()
     if not plan or plan.get("status") != STATUS_ACTIVE:
         return {"status": "success", "guidance": {"has_plan": False}}
@@ -479,7 +489,7 @@ async def get_usuals(
     hour comes from the client so the "current" meal slot follows the user's
     clock rather than the server's timezone.
     """
-    day = date or datetime.now().strftime("%Y-%m-%d")
+    day = date or user_time.today(db, user_id)
     return {"status": "success", "date": day, "usuals": _usuals_payload(user_id, day, hour)}
 
 
@@ -490,7 +500,7 @@ async def toggle_usual(
     user_id: str = Depends(get_user_id),
 ):
     """Log a usual into today's macros, or undo a previous tap."""
-    day = request.date or datetime.now().strftime("%Y-%m-%d")
+    day = request.date or user_time.today(db, user_id)
     payload = _usuals_payload(user_id, day, request.hour)
     usual = find_usual(payload, usual_id)
     if not usual:
@@ -531,6 +541,26 @@ PATCHABLE_FIELDS = (
 )
 
 
+def _check_list_limits(patch: dict) -> None:
+    """
+    Reject an edit that would not fit rather than truncating it.
+
+    The normalizers cap each list so a model cannot flood the plan, but a user
+    hitting that cap by hand used to watch their newest meal disappear on save
+    with no explanation.
+    """
+    for field, limit in PLAN_LIST_LIMITS.items():
+        value = patch.get(field)
+        if isinstance(value, list) and len(value) > limit:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"A plan holds up to {limit} {field.replace('_', ' ')}. "
+                    f"Remove {len(value) - limit} before saving."
+                ),
+            )
+
+
 def _apply_patch(user_id: str, plan_id: str, patch: dict) -> Optional[dict]:
     """
     Merge a patch into a plan through the same validation every edit uses.
@@ -558,6 +588,7 @@ async def update_nutrition_plan(
     user_id: str = Depends(get_user_id),
 ):
     patch = {k: v for k, v in request.dict(exclude_unset=True).items() if v is not None}
+    _check_list_limits(patch)
     updated = _apply_patch(user_id, plan_id, patch)
     if updated is None:
         raise HTTPException(status_code=404, detail="Nutrition plan not found")

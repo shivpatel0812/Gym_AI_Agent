@@ -16,6 +16,11 @@ from .workout_recommender.exercise_metadata import resolve_exercise_metadata
 DEFAULT_SESSIONS_PER_WEEK = 4.5
 
 
+# A logged day under this is an abandoned log, not a day of eating. Averaging
+# it in drags planning targets below what the user actually eats.
+PARTIAL_DAY_CALORIES = 500
+
+
 def numeric_values(records: List[Dict], field: str) -> List[float]:
     """
     Collect numeric values for a field across records.
@@ -213,12 +218,43 @@ class FitnessDataAnalyzer:
         start_date, end_date = self._get_month_date_range(year, month)
         return self._nutrition_summary(start_date, end_date, f"{calendar.month_name[month]} {year}")
 
-    def _nutrition_summary(self, start_date: str, end_date: str, label: str) -> Dict[str, Any]:
-        """Build nutrition metrics for an arbitrary date range."""
+    def _nutrition_summary(
+        self,
+        start_date: str,
+        end_date: str,
+        label: str,
+        exclude_dates: Optional[set] = None,
+        min_calories: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Build nutrition metrics for an arbitrary date range.
+
+        `exclude_dates` drops specific days, and `min_calories` drops days whose
+        total is too low to be a real day of eating. Both exist for planning:
+        averaging in a day that is still being logged pulls the average down and
+        the plan sets targets below what the user actually eats.
+        """
         macros = self._fetch_collection_data('macros', start_date, end_date)
 
         if not macros:
             return {"error": "No nutrition data available"}
+
+        excluded = 0
+        if exclude_dates or min_calories:
+            kept = []
+            for row in macros:
+                if exclude_dates and str(row.get('date') or '')[:10] in exclude_dates:
+                    excluded += 1
+                    continue
+                if min_calories is not None:
+                    total = row.get('total_calories')
+                    if not isinstance(total, (int, float)) or total < min_calories:
+                        excluded += 1
+                        continue
+                kept.append(row)
+            macros = kept
+            if not macros:
+                return {"error": "No nutrition data available", "days_excluded": excluded}
 
         calories = numeric_values(macros, 'total_calories')
         protein = numeric_values(macros, 'total_protein')
@@ -237,6 +273,7 @@ class FitnessDataAnalyzer:
         return {
             "time_window": label,
             "days_logged": len(macros),
+            "days_excluded": excluded,
             "avg_calories": round(avg_calories),
             "calories_range": [min(calories), max(calories)],
             "avg_protein": round(avg_protein),
@@ -245,6 +282,33 @@ class FitnessDataAnalyzer:
             "consistency": consistency,
             "protein_ratio": round((avg_protein * 4 / avg_calories) * 100, 1) if avg_calories > 0 else 0
         }
+
+    def build_planning_nutrition(self, window_days: int = 14) -> Dict[str, Any]:
+        """
+        Recent intake as a basis for setting targets — completed days only.
+
+        The day in progress is excluded: a plan generated at 10am would
+        otherwise average in a single logged breakfast and set the user a lower
+        calorie and protein target than they actually eat. Days under
+        PARTIAL_DAY_CALORIES go too, since those are almost always a log
+        someone abandoned rather than a day they ate 300 calories.
+        """
+        import user_time
+
+        today = user_time.today(self.db, self.user_id)
+        end = datetime.strptime(today, '%Y-%m-%d') - timedelta(days=1)
+        start = end - timedelta(days=window_days - 1)
+        start_str, end_str = start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
+
+        summary = self._nutrition_summary(
+            start_str,
+            end_str,
+            f"last {window_days} completed days ({start_str} to {end_str})",
+            exclude_dates={today},
+            min_calories=PARTIAL_DAY_CALORIES,
+        )
+        summary["excludes_today"] = True
+        return summary
 
     def build_recovery_summary(self, year: int, month: int) -> Dict[str, Any]:
         """Build recovery metrics summary for a specific month."""

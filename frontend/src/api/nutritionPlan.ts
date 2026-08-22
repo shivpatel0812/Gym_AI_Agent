@@ -66,6 +66,8 @@ export interface MealAnchor {
   uncertain?: boolean;
   /** Place or context when potential/uncertain — e.g. "Fannie Mae". */
   place?: string | null;
+  /** Where this meal came from — used to label AI / logged items on the plan. */
+  source?: "ai_coach" | "ai_slot" | "logged" | "user" | string | null;
 }
 
 export function mealAnchorKind(

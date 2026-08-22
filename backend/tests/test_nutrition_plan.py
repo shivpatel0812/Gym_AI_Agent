@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from nutrition.plan_builder import (
     NutritionPlanBuilder,
+    GOAL_DEFAULTS,
     GOAL_KEYS,
     infer_nutrition_goal,
     suggest_nutrition_goal,
@@ -548,3 +549,165 @@ def test_uncertain_meals_are_flagged_not_silently_free():
     }
     guidance = build_today_guidance(plan, [], weekday=0)
     assert any("undecided" in m for m in guidance["messages"])
+
+
+def test_go_tos_pinned_to_today_count_against_the_budget():
+    plan = {
+        "status": "active",
+        "targets": {"calories": 2000, "protein": 150},
+        "meal_anchors": [],
+        "flexible_meals": [],
+        "go_to_items": [
+            # Pinned to Monday, so it is a commitment on Monday.
+            {"id": "g1", "name": "Rice cakes", "calories": 200, "days": ["mon"]},
+            # No days: an option to reach for, never charged to the day.
+            {"id": "g2", "name": "Beef jerky", "calories": 300},
+        ],
+    }
+    monday = " ".join(build_today_guidance(plan, [], weekday=0)["messages"])
+    tuesday = " ".join(build_today_guidance(plan, [], weekday=1)["messages"])
+
+    assert "1800" in monday or "1,800" in monday
+    assert "2000" in tuesday or "2,000" in tuesday
+
+
+def test_blueprint_extras_count_toward_the_planned_day():
+    plan = {
+        "status": "active",
+        "targets": {"calories": 2000, "protein": 150},
+        "meal_anchors": [],
+        "flexible_meals": [],
+        "blueprint_extras": [
+            {"id": "e1", "band": "Evening", "label": "Protein shake", "calories": 250, "protein": 30},
+            # Range-only extra: the midpoint is what the day should reserve.
+            {"id": "e2", "band": "Late", "label": "Snack", "calorie_min": 100, "calorie_max": 300},
+        ],
+    }
+    assert plan_coverage(plan)["planned_calories_max"] == 450
+
+
+def test_go_to_matching_an_anchor_food_is_not_double_counted():
+    plan = {
+        "status": "active",
+        "targets": {"calories": 2000, "protein": 150},
+        "meal_anchors": [
+            {
+                "id": "a",
+                "slot": "breakfast",
+                "label": "Breakfast",
+                "days": list(("mon", "tue", "wed", "thu", "fri", "sat", "sun")),
+                "foods": [{"name": "Greek yogurt", "calories": 150, "protein": 20}],
+            }
+        ],
+        "flexible_meals": [],
+        "go_to_items": [
+            {
+                "id": "g",
+                "name": "Greek yogurt",
+                "calories": 150,
+                "days": list(("mon", "tue", "wed", "thu", "fri", "sat", "sun")),
+            }
+        ],
+    }
+    # The yogurt is already inside the anchor — it is paid for once.
+    assert plan_coverage(plan)["planned_calories_max"] == 150
+
+
+def test_plan_list_limits_are_generous_and_named():
+    from nutrition.plan_builder import PLAN_LIST_LIMITS
+
+    # The old inline cap was 10 anchors, which a full week blueprint hits.
+    assert PLAN_LIST_LIMITS["meal_anchors"] >= 24
+    anchors = [
+        {"slot": "snack", "label": f"Snack {i}", "foods": [{"name": f"food {i}"}]}
+        for i in range(PLAN_LIST_LIMITS["meal_anchors"])
+    ]
+    kept = NutritionPlanBuilder._normalize_anchors(anchors)
+    assert len(kept) == PLAN_LIST_LIMITS["meal_anchors"]
+
+
+def test_thin_logging_history_does_not_set_targets():
+    """One logged day is not an eating pattern — the goal defaults win."""
+    thin = NutritionPlanBuilder.fallback_plan(
+        {"goal": "muscle"}, None, {"avg_calories": 1400, "days_logged": 1}
+    )
+    assert thin["targets"]["calories"] == GOAL_DEFAULTS["muscle"]["calories"]
+
+    real = NutritionPlanBuilder.fallback_plan(
+        {"goal": "muscle"}, None, {"avg_calories": 2500, "days_logged": 10}
+    )
+    # 2500 average with a muscle goal → a modest surplus, not the flat default.
+    assert real["targets"]["calories"] == round(2500 * 1.08)
+
+
+class _FakeMacroDb:
+    """Firestore stub: one macros collection plus an empty user profile."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self._path = []
+
+    def collection(self, name):
+        self._path.append(name)
+        return self
+
+    def document(self, name):
+        self._path.append(name)
+        return self
+
+    def where(self, field, op, value):
+        self._filters = getattr(self, "_filters", [])
+        self._filters.append((field, op, value))
+        return self
+
+    def stream(self):
+        filters = getattr(self, "_filters", [])
+        self._filters = []
+        rows = self.rows
+        for field, op, value in filters:
+            if field == "date" and op == ">=":
+                rows = [r for r in rows if r["date"] >= value]
+            if field == "date" and op == "<=":
+                rows = [r for r in rows if r["date"] <= value]
+        return [_FakeDoc(r) for r in rows]
+
+    # user_time reads the profile doc; no timezone stored means UTC.
+    def get(self):
+        return _FakeDoc(None)
+
+
+class _FakeDoc:
+    def __init__(self, data):
+        self._data = data
+        self.exists = data is not None
+        self.id = "doc"
+
+    def to_dict(self):
+        return self._data
+
+
+def test_planning_nutrition_drops_today_and_abandoned_logs():
+    from datetime import datetime, timedelta
+
+    from ai_analysis.data_analyzer import FitnessDataAnalyzer
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+    two_days = (datetime.utcnow() - timedelta(days=2)).strftime("%Y-%m-%d")
+    three_days = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
+
+    rows = [
+        # Today, half logged — the case that lowered the user's targets.
+        {"date": today, "total_calories": 600, "total_protein": 40},
+        {"date": yesterday, "total_calories": 2800, "total_protein": 190},
+        {"date": two_days, "total_calories": 2900, "total_protein": 200},
+        # An abandoned log: one snack and nothing else.
+        {"date": three_days, "total_calories": 220, "total_protein": 10},
+    ]
+    summary = FitnessDataAnalyzer(_FakeMacroDb(rows), "u1").build_planning_nutrition(window_days=14)
+
+    assert summary["days_logged"] == 2
+    assert summary["days_excluded"] == 1  # today is outside the range already
+    assert summary["avg_calories"] == 2850
+    assert summary["avg_protein"] == 195
+    assert summary["excludes_today"] is True

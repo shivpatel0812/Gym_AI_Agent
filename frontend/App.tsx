@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "./src/firebase";
+import { syncTimezone } from "./src/api/timezone";
 import Login from "./src/components/Login";
 import Dashboard from "./src/components/Dashboard";
 import Home from "./src/components/home/Home";
@@ -221,6 +222,9 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
       setLoading(false);
+      // Report the device's timezone once per change, so server-side date
+      // defaults use this user's calendar day rather than the server's.
+      if (user) syncTimezone();
     });
     return () => unsubscribe();
   }, []);

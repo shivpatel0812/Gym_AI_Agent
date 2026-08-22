@@ -51,6 +51,10 @@ export interface DayMapSlot {
   uncertain?: boolean;
   /** individual | potential | uncertain */
   mealKind?: "individual" | "potential" | "uncertain";
+  /** ai_coach | ai_slot | logged | user — labels the meal row on the plan. */
+  source?: string | null;
+  /** A pending coach edit targets this meal. */
+  aiPending?: boolean;
 }
 
 export interface MealTargetRow {
@@ -204,7 +208,14 @@ export function bandFor(slot: string): string {
   return "Late";
 }
 
-export function buildDayMap(plan: NutritionPlan): DayMapModel {
+export function buildDayMap(
+  plan: NutritionPlan,
+  options?: { pendingTargetIds?: Set<string> | string[] }
+): DayMapModel {
+  const pendingIds =
+    options?.pendingTargetIds instanceof Set
+      ? options.pendingTargetIds
+      : new Set(options?.pendingTargetIds || []);
   const target = num(plan.targets?.calories);
   const proteinTarget = num(plan.targets?.protein);
 
@@ -298,6 +309,8 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
       varies: mealKind === "potential",
       uncertain: mealKind === "uncertain",
       mealKind,
+      source: anchor.source || null,
+      aiPending: Boolean(anchor.id && pendingIds.has(String(anchor.id))),
     };
     anchorsBySlot[primary].push(mapped);
     allSlots.push(mapped);
@@ -391,7 +404,26 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
     };
   });
 
-  const used = anchorsCal + flexCal + goToCal;
+  // Blueprint extras are planned calories too — the stack had a slot for them
+  // that was always zero, so the day read lighter than the plan actually was.
+  let extraCal = 0;
+  let extraPro = 0;
+  (plan.blueprint_extras || []).forEach((extra) => {
+    const cal =
+      num(extra.calories) ||
+      (num(extra.calorie_min) && num(extra.calorie_max)
+        ? (num(extra.calorie_min) + num(extra.calorie_max)) / 2
+        : num(extra.calorie_min) || num(extra.calorie_max));
+    const pro =
+      num(extra.protein) ||
+      (num(extra.protein_min) && num(extra.protein_max)
+        ? (num(extra.protein_min) + num(extra.protein_max)) / 2
+        : num(extra.protein_min) || num(extra.protein_max));
+    extraCal += cal;
+    extraPro += pro;
+  });
+
+  const used = anchorsCal + flexCal + goToCal + extraCal;
   const free = target > 0 ? Math.max(0, target - used) : 0;
   const uncertain = sections.filter((s) => s.stance === "uncertain" || s.stance === "eat_out").length;
 
@@ -454,12 +486,12 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
       target: target || used || 1,
       anchors: Math.round(anchorsCal),
       flexible: Math.round(flexCal),
-      oneTime: 0,
+      oneTime: Math.round(extraCal),
       suggested: Math.round(goToCal),
       free: Math.round(free),
     },
     proteinTarget,
-    proteinPlanned: Math.round(anchorsPro + flexPro + goToPro),
+    proteinPlanned: Math.round(anchorsPro + flexPro + goToPro + extraPro),
     proteinSuggested: Math.round(goToPro),
     headline,
     goalLabel: plan.goal || null,
