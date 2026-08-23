@@ -18,7 +18,7 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [formData, setFormData] = useState<StressEntry>({
     date: new Date().toISOString().split('T')[0],
-    stress_level: 5,
+    level: 5,
     description: '',
   });
 
@@ -56,7 +56,7 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
       }
       setFormData({
         date: new Date().toISOString().split('T')[0],
-        stress_level: 5,
+        level: 5,
         description: '',
       });
       setEditingEntryId(null);
@@ -93,7 +93,7 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
   const handleCancel = () => {
     setFormData({
       date: new Date().toISOString().split('T')[0],
-      stress_level: 5,
+      level: 5,
       description: '',
     });
     setEditingEntryId(null);
@@ -134,14 +134,14 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
 
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
-                Stress Level: {formData.stress_level}
+                Stress Level: {formData.level}
               </label>
               <input
                 type="range"
                 min="1"
                 max="10"
-                value={formData.stress_level}
-                onChange={(e) => setFormData({ ...formData, stress_level: parseInt(e.target.value) })}
+                value={formData.level}
+                onChange={(e) => setFormData({ ...formData, level: parseInt(e.target.value) })}
                 className="w-full"
               />
               <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
@@ -182,8 +182,8 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
                   <div className="flex-1">
                     <h3 className="text-base font-semibold text-[#FFFFFF] mb-1">{entry.date}</h3>
                     <div className="flex items-center gap-2">
-                      <span className={`text-2xl font-bold ${getStressTextColor(entry.stress_level)}`}>
-                        {entry.stress_level}
+                      <span className={`text-2xl font-bold ${getStressTextColor(entry.level)}`}>
+                        {entry.level}
                       </span>
                       <span className="text-sm text-[#8E8E93]">/10</span>
                     </div>
@@ -198,8 +198,8 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
                 
                 <div className="w-full bg-[#2A2D35] rounded-full h-2.5 mb-3">
                   <div
-                    className={`${getStressColor(entry.stress_level)} h-2.5 rounded-full transition-all duration-300`}
-                    style={{ width: `${(entry.stress_level / 10) * 100}%` }}
+                    className={`${getStressColor(entry.level)} h-2.5 rounded-full transition-all duration-300`}
+                    style={{ width: `${(entry.level / 10) * 100}%` }}
                   />
                 </div>
                 

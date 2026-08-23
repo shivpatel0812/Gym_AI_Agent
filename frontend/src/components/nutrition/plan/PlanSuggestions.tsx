@@ -12,6 +12,8 @@ interface Props {
   /** The plan moved since these were proposed, so some may no longer apply. */
   planChangedSince?: boolean;
   busy?: boolean;
+  /** When meal edits live under DayMap, still offer Accept all from this banner. */
+  showAcceptAll?: boolean;
   onAccept: (editIds?: string[]) => void;
   onDismiss: (editIds?: string[]) => void;
   /** Opens the matching editor prefilled, so a suggestion can be tweaked first. */
@@ -115,6 +117,7 @@ export default function PlanSuggestions({
   set,
   planChangedSince,
   busy,
+  showAcceptAll,
   onAccept,
   onDismiss,
   onEdit,
@@ -126,7 +129,11 @@ export default function PlanSuggestions({
     (e) => e.status === "pending" || e.status === "stale"
   );
   const acceptable = visible.filter((e) => e.status === "pending");
-  if (!visible.length) return null;
+  // Meal-scoped edits may live under breakfast/lunch/dinner — this banner can
+  // still show Accept all even when the row list is empty.
+  const canAcceptAll = showAcceptAll ?? acceptable.length > 0;
+
+  if (!visible.length && !set.summary) return null;
 
   return (
     <View style={styles.card}>
@@ -134,7 +141,9 @@ export default function PlanSuggestions({
         <MaterialCommunityIcons name="auto-fix" size={18} color={colors.ai} />
         <View style={styles.headerBody}>
           <Text style={styles.headerTitle}>
-            Coach suggested {visible.length} {visible.length === 1 ? "update" : "updates"}
+            {visible.length
+              ? `Coach suggested ${visible.length} ${visible.length === 1 ? "update" : "updates"}`
+              : "Coach suggested plan updates"}
           </Text>
           <Text style={styles.headerSummary}>{set.summary}</Text>
           {planChangedSince ? (
@@ -143,12 +152,14 @@ export default function PlanSuggestions({
             </Text>
           ) : null}
         </View>
-        <TouchableOpacity onPress={() => setExpanded((v) => !v)} hitSlop={8}>
-          <Text style={styles.headerToggle}>{expanded ? "Hide" : "Review"}</Text>
-        </TouchableOpacity>
+        {visible.length ? (
+          <TouchableOpacity onPress={() => setExpanded((v) => !v)} hitSlop={8}>
+            <Text style={styles.headerToggle}>{expanded ? "Hide" : "Review"}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
-      {expanded ? (
+      {expanded && visible.length ? (
         <>
           {visible.map((edit) => (
             <SuggestionRow
@@ -160,31 +171,31 @@ export default function PlanSuggestions({
               onEdit={onEdit ? () => onEdit(edit) : undefined}
             />
           ))}
-
-          <View style={styles.footer}>
-            {acceptable.length ? (
-              <TouchableOpacity
-                style={styles.acceptAll}
-                onPress={() => onAccept()}
-                disabled={busy}
-              >
-                {busy ? (
-                  <ActivityIndicator size="small" color="#070708" />
-                ) : (
-                  <Text style={styles.acceptAllText}>Accept all</Text>
-                )}
-              </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity
-              style={[styles.dismissAll, !acceptable.length && styles.dismissAllWide]}
-              onPress={() => onDismiss()}
-              disabled={busy}
-            >
-              <Text style={styles.dismissAllText}>Dismiss all</Text>
-            </TouchableOpacity>
-          </View>
         </>
       ) : null}
+
+      <View style={styles.footer}>
+        {canAcceptAll ? (
+          <TouchableOpacity
+            style={styles.acceptAll}
+            onPress={() => onAccept()}
+            disabled={busy}
+          >
+            {busy ? (
+              <ActivityIndicator size="small" color="#070708" />
+            ) : (
+              <Text style={styles.acceptAllText}>Accept all</Text>
+            )}
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          style={[styles.dismissAll, !canAcceptAll && styles.dismissAllWide]}
+          onPress={() => onDismiss()}
+          disabled={busy}
+        >
+          <Text style={styles.dismissAllText}>Dismiss all</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }

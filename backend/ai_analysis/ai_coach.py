@@ -332,8 +332,23 @@ Format your response with clear section headers."""
             present = [p for p in parts if p]
             return f"{label}: {', '.join(present)}" if present else f"{label}: not logged"
 
+        def baseline(source: Dict[str, Any], key: str, template: str) -> Optional[str]:
+            """
+            Render a personal baseline, or nothing at all when it was cancelled.
+
+            A baseline built on too few logged days is omitted rather than
+            softened with a hedge — given a number the model will reason from
+            it, so the only safe way to express "we don't know your normal" is
+            to not mention a normal.
+            """
+            data = source.get(key) or {}
+            if data.get("status") != "ok" or data.get("target") is None:
+                return None
+            return template.format(data["target"])
+
         return f"""USER PROFILE:
 {json.dumps(self.user_profile, indent=2, default=str)}
+{self._build_focus_context(summary)}
 
 RECENT DATA ({summary.get('analysis_period', 'monthly summary')}):
 {line('Training',
@@ -344,11 +359,53 @@ RECENT DATA ({summary.get('analysis_period', 'monthly summary')}):
       val(nutrition, 'avg_protein', '~{}g protein/day'))}
 {line('Recovery',
       val(recovery, 'avg_sleep_hours', '{}h sleep'),
+      baseline(recovery, 'sleep_baseline', 'usual ~{}h'),
       val(recovery, 'sleep_trend', 'sleep trend {}'),
       val(recovery, 'avg_fatigue', 'fatigue {}/10'))}
 {line('Lifestyle',
       val(lifestyle, 'avg_stress', 'stress {}/10'),
       val(lifestyle, 'high_stress_days', '{} high-stress days'))}
+"""
+
+    def _build_focus_context(self, summary: Dict[str, Any]) -> str:
+        """
+        The shared priority, as stance rather than instruction.
+
+        These levers are ranked deterministically in user_state, so the model
+        is told the order and asked not to re-derive it. That is the whole
+        point of the shared layer: Home, the plan and this conversation should
+        argue for the same priority, and a model that reorders the list between
+        Tuesday and Thursday breaks that.
+        """
+        state = summary.get("user_state") or {}
+        levers = state.get("next_levers") or []
+        if not levers:
+            return ""
+
+        lines = []
+        for index, lever in enumerate(levers[:3], start=1):
+            label = lever.get("label") or lever.get("metric")
+            value, target, unit = lever.get("value"), lever.get("target"), lever.get("unit") or ""
+            detail = ""
+            if isinstance(value, (int, float)) and isinstance(target, (int, float)):
+                detail = f" — most recently {value:g}{unit} against {target:g}{unit}"
+            lines.append(f"  {index}. {label}{detail}")
+
+        readiness = ""
+        if state.get("readiness_source") == "computed":
+            drivers = ", ".join(state.get("readiness_drivers") or []) or "no single driver"
+            readiness = (
+                f"\nRecovery signal: {state.get('readiness')} of 1.0 ({drivers})."
+                "\nIf this is low, do not suggest adding training volume."
+            )
+
+        return f"""
+CURRENT FOCUS: {state.get('current_focus')}
+
+RANKED LEVERS (computed from the user's own logs — this ordering is already
+decided; explain it, do not re-rank it, and do not promote something further
+down because the conversation drifted there):
+{chr(10).join(lines)}{readiness}
 """
 
     def _build_body_scan_context(self, toolbox: Optional[CoachToolbox]) -> str:

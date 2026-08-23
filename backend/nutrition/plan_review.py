@@ -280,7 +280,6 @@ def build_plan_review(
 
             resolved = resolve_model(model)
             response = OpenAI(api_key=os.getenv("OPENAI_API_KEY")).chat.completions.create(
-                model=resolved,
                 messages=[
                     {
                         "role": "system",

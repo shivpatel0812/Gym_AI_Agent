@@ -149,8 +149,56 @@ export interface NutritionPlan {
   preferences: NutritionPlanPreferences;
   food_priorities: string[];
   typical_day_notes?: string | null;
+  pacing?: NutritionPacing | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export type PacingStyle =
+  | "steady"
+  | "hold"
+  | "diet_break"
+  | "refeed"
+  | "alternate_day"
+  | "aggressive"
+  | string;
+
+export interface NutritionPacing {
+  style: PacingStyle;
+  label?: string;
+  blurb?: string;
+  weekly_step: number;
+  hold_weeks?: number;
+  break_every_n_weeks?: number;
+  refeed_days?: string[];
+  training_day_bump?: number;
+  last_reviewed_at?: string | null;
+}
+
+export interface PacingStyleInfo {
+  style: PacingStyle;
+  label: string;
+  blurb: string;
+  weekly_step: number;
+}
+
+export interface PacingOption {
+  id: string;
+  title: string;
+  why: string;
+  how: string;
+  recommended?: boolean;
+  style: PacingStyle;
+  label: string;
+}
+
+export interface ProgressVerdictInfo {
+  verdict: string;
+  weight_delta_lb?: number | null;
+  calorie_delta?: number | null;
+  days_logged?: number;
+  goal?: string;
+  reason?: string | null;
 }
 
 export interface TodayGuidance {
@@ -343,6 +391,50 @@ export async function activateNutritionPlan(planId: string): Promise<NutritionPl
 export async function getActiveNutritionPlan(): Promise<NutritionPlan | null> {
   const res = await apiClient.get("/api/nutrition-plan/active");
   return res.data?.plan ?? null;
+}
+
+export async function getPacingCatalog(planId: string): Promise<{
+  pacing: NutritionPacing;
+  styles: PacingStyleInfo[];
+}> {
+  const res = await apiClient.get(`/api/nutrition-plan/${planId}/pacing`);
+  return { pacing: res.data.pacing, styles: res.data.styles || [] };
+}
+
+export async function fetchPacingOptions(
+  planId: string,
+  opts?: { currentWeightLb?: number }
+): Promise<{
+  progress: ProgressVerdictInfo;
+  pacing: NutritionPacing;
+  options: PacingOption[];
+}> {
+  const res = await apiClient.post(`/api/nutrition-plan/${planId}/pacing/options`, {
+    current_weight_lb: opts?.currentWeightLb,
+  });
+  return {
+    progress: res.data?.progress,
+    pacing: res.data?.pacing,
+    options: res.data?.options || [],
+  };
+}
+
+export async function setPacing(
+  planId: string,
+  body: Partial<NutritionPacing> & { calorie_delta?: number }
+): Promise<NutritionPlan> {
+  const res = await apiClient.post(`/api/nutrition-plan/${planId}/pacing`, body);
+  return res.data.plan;
+}
+
+export async function stagePacingOption(
+  planId: string,
+  optionId: string
+): Promise<{ suggestion: unknown; option?: PacingOption }> {
+  const res = await apiClient.post(`/api/nutrition-plan/${planId}/pacing/stage`, {
+    option_id: optionId,
+  });
+  return { suggestion: res.data?.suggestion, option: res.data?.option };
 }
 
 export async function getTodayGuidance(date?: string): Promise<TodayGuidance> {

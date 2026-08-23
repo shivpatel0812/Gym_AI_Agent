@@ -4,6 +4,7 @@ from datetime import datetime
 from models import SleepEntry
 from auth import get_user_id
 from db import db
+from ai_analysis.data_analyzer import FitnessDataAnalyzer
 
 router = APIRouter(prefix="/api/sleep", tags=["sleep"])
 
@@ -16,6 +17,22 @@ async def get_sleep_entries(user_id: str = Depends(get_user_id), date_filter: Op
         sleep_entries = list(sleep_ref.order_by("date").stream())
         sleep_entries.reverse()
     return [{"id": entry.id, **entry.to_dict()} for entry in sleep_entries]
+
+@router.get("/baseline")
+async def get_sleep_baseline(
+    user_id: str = Depends(get_user_id),
+    window_days: int = Query(28, ge=7, le=180),
+):
+    """
+    The user's personal sleep target, inferred from their own logged nights.
+
+    Returns status "insufficient_data" when too few nights have been logged to
+    infer one — callers should hide the target entirely in that case rather
+    than substituting a default, since a made-up target reads to the user as
+    something the app knows about them.
+    """
+    return FitnessDataAnalyzer(db, user_id).build_sleep_baseline(window_days=window_days)
+
 
 @router.post("")
 async def create_sleep_entry(sleep: SleepEntry, user_id: str = Depends(get_user_id)):

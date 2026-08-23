@@ -17,7 +17,9 @@ import {
   SlotSection,
 } from "../../../lib/dayMap";
 import {
+  AnchorVerdict,
   FastFoodPlace,
+  NutritionPlanEdit,
   PrimaryMealSlot,
   WEEKDAY_OPTIONS,
 } from "../../../api/nutritionPlan";
@@ -32,6 +34,7 @@ import {
   extractPreviousGrouped,
   listRecentWeekWindows,
 } from "../../../lib/recentMeals";
+import { describeEditBullet } from "../../../lib/planSuggestionSlots";
 
 export type SlotIdea = {
   label: string;
@@ -88,6 +91,25 @@ interface Props {
     order: { name: string; items?: string[]; calories?: number; protein?: number },
     slot: PrimaryMealSlot
   ) => void;
+  /**
+   * The coach's advisory read on meals the user built, keyed by anchor id.
+   * Never removes or rewrites a meal — it labels one that already works and
+   * names the fix on one that does not.
+   */
+  anchorVerdicts?: Record<string, AnchorVerdict>;
+  /** One sentence of AI guidance for the focused slot, if it has been fetched. */
+  slotGuidance?: Partial<Record<PrimaryMealSlot, string | null>>;
+  /** Several logged meals the AI grouped into one rotating "options" meal. */
+  optionsAnchors?: Partial<Record<PrimaryMealSlot, SlotIdea | null>>;
+  onAddOptionsAnchor?: (idea: SlotIdea, slot: PrimaryMealSlot) => void;
+  /** Coach-staged edits keyed by meal slot (breakfast / lunch / dinner…). */
+  coachEditsBySlot?: Partial<Record<PrimaryMealSlot, NutritionPlanEdit[]>>;
+  /** Counts of pending coach edits per slot — drives the tab dots. */
+  coachEditCounts?: Partial<Record<PrimaryMealSlot, number>>;
+  suggestionsBusy?: boolean;
+  onAcceptCoachEdit?: (editId: string) => void;
+  onDismissCoachEdit?: (editId: string) => void;
+  onEditCoachEdit?: (edit: NutritionPlanEdit) => void;
 }
 
 const serif = Platform.select({ ios: "Georgia", android: "serif", default: "serif" });
@@ -185,6 +207,16 @@ export default function DayMap({
   suggestingPlaceId,
   orderSuggestions,
   onLogOrder,
+  anchorVerdicts,
+  slotGuidance,
+  optionsAnchors,
+  onAddOptionsAnchor,
+  coachEditsBySlot,
+  coachEditCounts,
+  suggestionsBusy,
+  onAcceptCoachEdit,
+  onDismissCoachEdit,
+  onEditCoachEdit,
 }: Props) {
   const theme = THEME;
   const [focusSlot, setFocusSlot] = useState<PrimaryMealSlot>(
@@ -285,7 +317,11 @@ export default function DayMap({
                 color={on ? "#fff" : theme.muted}
               />
               <Text style={[styles.slotTabText, on && styles.slotTabTextOn]}>{s.label}</Text>
-              {on ? (
+              {(coachEditCounts?.[s.slot] || 0) > 0 ? (
+                <View style={[styles.slotTabBadge, { backgroundColor: theme.ai }]}>
+                  <Text style={styles.slotTabBadgeText}>{coachEditCounts?.[s.slot]}</Text>
+                </View>
+              ) : on ? (
                 <View style={[styles.slotTabDot, { backgroundColor: theme.accent }]} />
               ) : null}
             </TouchableOpacity>
@@ -375,6 +411,15 @@ export default function DayMap({
           suggestingPlaceId={suggestingPlaceId}
           orderSuggestions={orderSuggestions}
           onLogOrder={onLogOrder}
+          anchorVerdicts={anchorVerdicts}
+          aiGuidance={slotGuidance?.[section.slot] || null}
+          optionsAnchor={optionsAnchors?.[section.slot] || null}
+          onAddOptionsAnchor={onAddOptionsAnchor}
+          coachEdits={coachEditsBySlot?.[section.slot] || []}
+          suggestionsBusy={suggestionsBusy}
+          onAcceptCoachEdit={onAcceptCoachEdit}
+          onDismissCoachEdit={onDismissCoachEdit}
+          onEditCoachEdit={onEditCoachEdit}
         />
       ) : null}
 
@@ -502,6 +547,15 @@ function SlotFocus({
   suggestingPlaceId,
   orderSuggestions,
   onLogOrder,
+  anchorVerdicts,
+  aiGuidance,
+  optionsAnchor,
+  onAddOptionsAnchor,
+  coachEdits,
+  suggestionsBusy,
+  onAcceptCoachEdit,
+  onDismissCoachEdit,
+  onEditCoachEdit,
 }: {
   theme: BlueprintTheme;
   section: SlotSection;
@@ -520,6 +574,15 @@ function SlotFocus({
   suggestingPlaceId?: string | null;
   orderSuggestions?: Props["orderSuggestions"];
   onLogOrder?: Props["onLogOrder"];
+  anchorVerdicts?: Record<string, AnchorVerdict>;
+  aiGuidance?: string | null;
+  optionsAnchor?: SlotIdea | null;
+  onAddOptionsAnchor?: (idea: SlotIdea, slot: PrimaryMealSlot) => void;
+  coachEdits?: NutritionPlanEdit[];
+  suggestionsBusy?: boolean;
+  onAcceptCoachEdit?: (editId: string) => void;
+  onDismissCoachEdit?: (editId: string) => void;
+  onEditCoachEdit?: (edit: NutritionPlanEdit) => void;
 }) {
   const showFastFood = section.slot === "lunch" || section.slot === "dinner";
   const [placeDraft, setPlaceDraft] = useState("");
@@ -576,6 +639,16 @@ function SlotFocus({
     (weekBuckets || []).find((w) => w.id === weekId)?.items || [];
   const previousList = weekId ? weekItems : loggedPatterns || [];
 
+  const logSuggestions = useMemo(() => {
+    return (loggedPatterns || [])
+      .filter((p) => !p.matchedAnchor && !p.inPlanFood)
+      .slice(0, 4);
+  }, [loggedPatterns]);
+
+  const pendingCoach = (coachEdits || []).filter(
+    (e) => e.status === "pending" || e.status === "stale"
+  );
+
   const toggleExpand = (key: string) => {
     setExpandedLogKey((cur) => (cur === key ? null : key));
   };
@@ -618,6 +691,66 @@ function SlotFocus({
           </TouchableOpacity>
         ) : null}
       </View>
+
+      {section.targetHeadline || section.description ? (
+        <View
+          style={[
+            styles.slotTargetCard,
+            { borderColor: `${theme.accent}44`, backgroundColor: `${theme.accent}0F` },
+          ]}
+        >
+          <View style={styles.slotTargetTop}>
+            <Text style={[styles.slotTargetLabel, { color: theme.muted }]}>
+              THIS MEAL SHOULD CARRY
+            </Text>
+            {section.targetHeadline ? (
+              <Text style={[styles.slotTargetHeadline, { color: theme.accent }]}>
+                {section.targetHeadline}
+              </Text>
+            ) : null}
+          </View>
+          {section.description ? (
+            <Text style={styles.slotTargetDescription}>{section.description}</Text>
+          ) : null}
+          {aiGuidance ? (
+            <View style={styles.slotGuidanceRow}>
+              <MaterialCommunityIcons name="auto-fix" size={12} color={theme.ai} />
+              <Text style={[styles.slotGuidanceText, { color: theme.ai }]}>{aiGuidance}</Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {optionsAnchor ? (
+        <TouchableOpacity
+          style={[
+            styles.optionsAnchorCard,
+            { borderColor: `${theme.potential}66`, backgroundColor: theme.potentialSoft },
+          ]}
+          onPress={() => onAddOptionsAnchor?.(optionsAnchor, section.slot)}
+          activeOpacity={0.8}
+        >
+          <View style={styles.optionsAnchorHead}>
+            <MaterialCommunityIcons name="shuffle-variant" size={13} color={theme.potential} />
+            <Text style={[styles.optionsAnchorTitle, { color: theme.potential }]}>
+              {optionsAnchor.label || "Meals you rotate"}
+            </Text>
+            <Text style={[styles.optionsAnchorAdd, { color: theme.potential }]}>Add →</Text>
+          </View>
+          <Text style={styles.optionsAnchorBody} numberOfLines={3}>
+            {(optionsAnchor.foods || [])
+              .map((f) => f.name)
+              .filter(Boolean)
+              .join(" · ")}
+          </Text>
+          <Text style={styles.optionsAnchorHint}>
+            {optionsAnchor.notes ||
+              `One ${section.label.toLowerCase()} meal with ${
+                (optionsAnchor.foods || []).length
+              } options — pick whichever you feel like.`}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
 
       <View style={styles.stanceRow}>
         {(
@@ -764,6 +897,104 @@ function SlotFocus({
             <Text style={styles.blockTitle}>YOUR PLAN</Text>
             <Text style={styles.blockHint}>Saved meals · tap day · tap to edit</Text>
           </View>
+
+          {pendingCoach.length ? (
+            <View style={styles.coachBullets}>
+              <View style={styles.coachBulletsHead}>
+                <MaterialCommunityIcons name="auto-fix" size={13} color={theme.ai} />
+                <Text style={[styles.coachBulletsTitle, { color: theme.ai }]}>
+                  AI SUGGESTIONS · {pendingCoach.length}
+                </Text>
+              </View>
+              {pendingCoach.map((edit) => {
+                const stale = edit.status === "stale";
+                return (
+                  <View key={edit.id} style={styles.coachBulletRow}>
+                    <Text style={[styles.coachBulletDot, { color: theme.ai }]}>·</Text>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.coachBulletText}>{describeEditBullet(edit)}</Text>
+                      {edit.rationale ? (
+                        <Text style={styles.coachBulletWhy} numberOfLines={2}>
+                          {edit.rationale}
+                        </Text>
+                      ) : null}
+                      {stale ? (
+                        <Text style={styles.coachBulletStale}>No longer matches plan</Text>
+                      ) : null}
+                    </View>
+                    <View style={styles.coachBulletActions}>
+                      {onEditCoachEdit && !stale ? (
+                        <TouchableOpacity
+                          onPress={() => onEditCoachEdit(edit)}
+                          disabled={suggestionsBusy}
+                          hitSlop={6}
+                        >
+                          <MaterialCommunityIcons
+                            name="pencil-outline"
+                            size={15}
+                            color={theme.muted}
+                          />
+                        </TouchableOpacity>
+                      ) : null}
+                      <TouchableOpacity
+                        onPress={() => onDismissCoachEdit?.(edit.id)}
+                        disabled={suggestionsBusy}
+                        hitSlop={6}
+                      >
+                        <MaterialCommunityIcons name="close" size={15} color={theme.muted} />
+                      </TouchableOpacity>
+                      {!stale ? (
+                        <TouchableOpacity
+                          style={[styles.coachAccept, { backgroundColor: theme.ai }]}
+                          onPress={() => onAcceptCoachEdit?.(edit.id)}
+                          disabled={suggestionsBusy}
+                        >
+                          <Text style={styles.coachAcceptText}>Accept</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          ) : null}
+
+          {logSuggestions.length && onAddLoggedMeal ? (
+            <View style={styles.coachBullets}>
+              <View style={styles.coachBulletsHead}>
+                <MaterialCommunityIcons name="history" size={13} color={theme.ai} />
+                <Text style={[styles.coachBulletsTitle, { color: theme.ai }]}>
+                  FROM YOUR LOGS · add to plan
+                </Text>
+              </View>
+              {logSuggestions.map((p) => (
+                <TouchableOpacity
+                  key={p.key}
+                  style={styles.coachBulletRow}
+                  onPress={() => onAddLoggedMeal(p, section.slot)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[styles.coachBulletDot, { color: theme.ai }]}>·</Text>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.coachBulletText} numberOfLines={1}>
+                      {p.name}
+                      {p.count > 1 ? ` · ${p.count}×` : ""}
+                    </Text>
+                    <Text style={styles.coachBulletWhy} numberOfLines={1}>
+                      {[
+                        p.calories ? `${Math.round(p.calories)} kcal` : null,
+                        p.protein ? `${Math.round(p.protein)}g P` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || "Tap to add as a plan meal"}
+                    </Text>
+                  </View>
+                  <Text style={[styles.coachAddHint, { color: theme.ai }]}>Add →</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
+
           <DayColHeader theme={theme} />
           {visibleMeals.map((slot) => {
             const mk = mealKindOf(slot);
@@ -777,6 +1008,7 @@ function SlotFocus({
                 showOptions={mk === "potential"}
                 onPress={() => onPressSlot?.(slot)}
                 onToggleDay={onToggleDay}
+                verdict={slot.sourceId ? anchorVerdicts?.[String(slot.sourceId)] : undefined}
               />
             );
           })}
@@ -1119,6 +1351,7 @@ function MealRow({
   showOptions,
   onPress,
   onToggleDay,
+  verdict,
 }: {
   theme: BlueprintTheme;
   slot: DayMapSlot;
@@ -1127,6 +1360,8 @@ function MealRow({
   showOptions?: boolean;
   onPress?: () => void;
   onToggleDay?: (slot: DayMapSlot, dayId: string) => void;
+  /** Advisory only — the coach's read on a meal the user chose to keep. */
+  verdict?: AnchorVerdict | null;
 }) {
   const cal = calorieText(slot);
   const pro = proteinText(slot);
@@ -1135,6 +1370,16 @@ function MealRow({
   const potential = Boolean(slot.varies || slot.mealKind === "potential");
   const mark = uncertain ? theme.uncertain : potential ? theme.potential : accent;
   const optionCount = (slot.foods || []).length;
+  const sourceLabel =
+    slot.aiPending
+      ? "AI update"
+      : slot.source === "ai_coach"
+        ? "AI coach"
+        : slot.source === "ai_slot"
+          ? "AI idea"
+          : slot.source === "logged"
+            ? "From logs"
+            : null;
 
   return (
     <View style={styles.mealRow}>
@@ -1145,6 +1390,20 @@ function MealRow({
             <Text style={styles.mealTitle} numberOfLines={1}>
               {slot.title}
             </Text>
+            {sourceLabel ? (
+              <View
+                style={[
+                  styles.uncertainPill,
+                  {
+                    backgroundColor: slot.aiPending ? `${theme.ai}33` : theme.aiSoft,
+                    borderWidth: 1,
+                    borderColor: `${theme.ai}66`,
+                  },
+                ]}
+              >
+                <Text style={[styles.uncertainPillText, { color: theme.ai }]}>{sourceLabel}</Text>
+              </View>
+            ) : null}
             {uncertain ? (
               <View style={[styles.uncertainPill, { backgroundColor: `${theme.uncertain}29` }]}>
                 <Text style={[styles.uncertainPillText, { color: theme.uncertain }]}>
@@ -1159,12 +1418,52 @@ function MealRow({
                 </Text>
               </View>
             ) : null}
+            {verdict ? (
+              <View
+                style={[
+                  styles.uncertainPill,
+                  {
+                    backgroundColor:
+                      verdict.verdict === "solid" ? theme.aiSoft : theme.potentialSoft,
+                    borderWidth: 1,
+                    borderColor:
+                      verdict.verdict === "solid" ? `${theme.ai}66` : `${theme.potential}66`,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.uncertainPillText,
+                    { color: verdict.verdict === "solid" ? theme.ai : theme.potential },
+                  ]}
+                >
+                  {verdict.verdict === "solid" ? "AI approved" : "AI: adjust"}
+                </Text>
+              </View>
+            ) : null}
           </View>
           <Text style={styles.mealMacros} numberOfLines={1}>
             {showOptions && optionCount
               ? `${optionCount} options · ${[cal, pro].filter(Boolean).join(" · ") || "avg macros"}`
               : [cal, pro].filter(Boolean).join(" · ") || (uncertain ? "Open / TBD" : "Set macros")}
           </Text>
+          {verdict?.advice ? (
+            <View style={styles.verdictRow}>
+              <MaterialCommunityIcons
+                name={verdict.verdict === "solid" ? "check-circle-outline" : "lightbulb-outline"}
+                size={11}
+                color={verdict.verdict === "solid" ? theme.ai : theme.potential}
+              />
+              <Text
+                style={[
+                  styles.verdictText,
+                  { color: verdict.verdict === "solid" ? theme.ai : theme.potential },
+                ]}
+              >
+                {verdict.advice}
+              </Text>
+            </View>
+          ) : null}
         </View>
       </TouchableOpacity>
       <View style={styles.dotGrid}>
@@ -1212,6 +1511,44 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     marginLeft: 2,
   },
+  slotTabBadge: {
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 2,
+  },
+  slotTabBadgeText: { color: "#070708", fontSize: 10, fontWeight: "800" },
+  coachBullets: {
+    gap: 8,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(94,234,212,0.35)",
+    backgroundColor: "rgba(94,234,212,0.06)",
+  },
+  coachBulletsHead: { flexDirection: "row", alignItems: "center", gap: 6 },
+  coachBulletsTitle: { fontSize: 11, fontWeight: "800", letterSpacing: 0.6 },
+  coachBulletRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+  },
+  coachBulletDot: { fontSize: 18, lineHeight: 20, fontWeight: "800" },
+  coachBulletText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  coachBulletWhy: { color: "#8E8E93", fontSize: 11, marginTop: 2 },
+  coachBulletStale: { color: "#F59E0B", fontSize: 11, marginTop: 2 },
+  coachBulletActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  coachAccept: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  coachAcceptText: { color: "#070708", fontSize: 11, fontWeight: "800" },
+  coachAddHint: { fontSize: 12, fontWeight: "700", marginTop: 2 },
   heroHead: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   kicker: {
     fontSize: 11,
@@ -1301,6 +1638,48 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  slotTargetCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  slotTargetTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  slotTargetLabel: { fontSize: 9, fontWeight: "800", letterSpacing: 0.8 },
+  slotTargetHeadline: { fontSize: 13, fontWeight: "800" },
+  slotTargetDescription: {
+    color: "#B7C2D0",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "500",
+  },
+  slotGuidanceRow: { flexDirection: "row", alignItems: "flex-start", gap: 6 },
+  slotGuidanceText: { flex: 1, fontSize: 12, lineHeight: 17, fontWeight: "600" },
+  optionsAnchorCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  optionsAnchorHead: { flexDirection: "row", alignItems: "center", gap: 6 },
+  optionsAnchorTitle: { flex: 1, fontSize: 12, fontWeight: "800" },
+  optionsAnchorAdd: { fontSize: 12, fontWeight: "800" },
+  optionsAnchorBody: { color: "#fff", fontSize: 13, fontWeight: "700", lineHeight: 18 },
+  optionsAnchorHint: { color: "#8E99A8", fontSize: 11, fontWeight: "600", lineHeight: 15 },
+  verdictRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 5,
+    marginTop: 3,
+  },
+  verdictText: { flex: 1, fontSize: 11, fontWeight: "600", lineHeight: 15 },
   stanceRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   stanceChip: {
     flexDirection: "row",

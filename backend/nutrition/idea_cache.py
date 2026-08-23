@@ -3,9 +3,12 @@ Cache for AI slot ideas on the day blueprint.
 
 The plan page preloads ideas for whichever meal tab is in focus, so switching
 between Breakfast and Lunch a few times used to bill a model call every time —
-and remounting the tab threw the results away. Ideas only go stale when the
-plan itself changes, so they are cached against the plan's version number and
-dropped automatically when it moves.
+and remounting the tab threw the results away. Ideas are cached against the
+plan's version number and dropped automatically when it moves.
+
+Suggestions are also built on what the user logged recently, which the version
+number cannot see. MAX_AGE is what covers that: a day-old idea is still a fair
+idea, and an explicit refresh always regenerates.
 
 Never load-bearing: every failure path falls back to "no cache", which just
 means the caller generates fresh ideas the way it always did.

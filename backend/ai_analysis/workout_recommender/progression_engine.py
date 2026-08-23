@@ -6,11 +6,25 @@ Given exercise history + user goal, computes exact weight/reps for next session.
 """
 
 from dataclasses import dataclass, field
+import os
 from enum import Enum
 from typing import List, Dict, Optional, Any
 import math
+from statistics import median
 
 from .goal_configs import get_goal_config, resolve_goal_config, GoalConfig, RepRangeConfig
+from .prescription import (
+    Branch,
+    count_regressions,
+    typical_reps,
+    ProgressionStrategy,
+    SessionOutcome,
+    describe_band,
+    evaluate_session,
+    near_top_streak,
+    same_load,
+    select_strategy,
+)
 from .exercise_metadata import (
     get_exercise_metadata,
     resolve_exercise_metadata,
@@ -27,12 +41,27 @@ from .weight_estimator import (
 )
 
 
+# Readiness thresholds for the demotion ladder. Placeholders: nobody knows
+# how much a night of poor sleep should move a top set, so these are a
+# starting point to be validated against real logs, not a finding.
+READINESS_FULL = 0.90    # at or above: change nothing
+READINESS_REDUCED = 0.75 # between: one step down. below: two.
+
+# Demotion is off until the thresholds have been checked against outcomes.
+# While off, the engine still records what it *would* have done, so the
+# decision can be validated before it ever changes a user's session.
+READINESS_DEMOTION_ENABLED = os.getenv("READINESS_DEMOTION_ENABLED", "").lower() in (
+    "1", "true", "yes",
+)
+
+
 class Decision(str, Enum):
     FIRST_SESSION = "first_session"
     NEEDS_STARTING_WEIGHT = "needs_starting_weight"
     INCREASE_WEIGHT = "increase_weight"
     INCREASE_REPS = "increase_reps"
     MAINTAIN = "maintain"
+    FILL_BAND = "fill_band"
     DELOAD = "deload"
     LIGHT_DAY = "light_day"
     CARDIO_PROGRESS = "cardio_progress"
@@ -45,8 +74,26 @@ class RecommendedSet:
     reps: int
     weight: float
 
+    # The band this set should land in. `reps` stays the single number to hit
+    # (it equals rep_low) so older clients that render one figure keep working;
+    # clients that understand a band read these two instead.
+    rep_low: Optional[int] = None
+    rep_high: Optional[int] = None
+    # "straight" | "top" | "backoff" — what this set is for, under TOP_SET.
+    role: str = "straight"
+
     def to_dict(self) -> Dict:
-        return {"set_number": self.set_number, "reps": self.reps, "weight": self.weight}
+        payload = {
+            "set_number": self.set_number,
+            "reps": self.reps,
+            "weight": self.weight,
+            "role": self.role,
+        }
+        if self.rep_low is not None:
+            payload["rep_low"] = self.rep_low
+        if self.rep_high is not None:
+            payload["rep_high"] = self.rep_high
+        return payload
 
 
 @dataclass
@@ -60,6 +107,12 @@ class ProgressionResult:
     time: Optional[int] = None
     speed: Optional[float] = None
 
+    # Which shape of prescription this is, and the "if this, then that" the
+    # user reads mid-set. Absent on the states where no branch makes sense
+    # (needs-starting-weight, cardio, a first session with no history).
+    strategy: Optional[str] = None
+    branch: Optional[Branch] = None
+
     def to_dict(self) -> Dict:
         result = {
             "sets": [s.to_dict() for s in self.sets],
@@ -70,6 +123,10 @@ class ProgressionResult:
             result["time"] = self.time
         if self.speed is not None:
             result["speed"] = self.speed
+        if self.strategy is not None:
+            result["strategy"] = self.strategy
+        if self.branch is not None:
+            result["branch"] = self.branch.to_dict()
         return result
 
 
@@ -95,10 +152,14 @@ class ProgressionEngine:
         stale_last_session: Optional[Dict] = None,
         focus_goal: Optional[str] = None,
         rep_range_override: Optional[tuple] = None,
+        readiness: Optional[Any] = None,
     ) -> ProgressionResult:
         """
         Compute a recommendation, then record whether a per-exercise focus
         changed the goal config that applied.
+
+        `readiness` is an optional ReadinessContext. Omitted or neutral, the
+        result is byte-identical to what it would have been without it.
 
         Wraps the computation rather than threading the flag through each of
         its return paths.
@@ -126,6 +187,21 @@ class ProgressionEngine:
                 "focus_goal": applied_config.name,
                 "base_goal": base_config.name,
             }
+
+        # Applied here rather than inside _compute_recommendation because that
+        # method returns from a dozen places; the wrapper is the one point every
+        # decision passes through.
+        result = self._apply_readiness(
+            result,
+            readiness=readiness,
+            exercise_id=exercise_id,
+            exercise_name=exercise_name,
+            recent_sessions=recent_sessions,
+            num_sets=num_sets,
+            goal_config=applied_config,
+            exercise_record=exercise_record,
+            rep_range_override=rep_range_override,
+        )
         return result
 
     def _compute_recommendation(
@@ -232,6 +308,13 @@ class ProgressionEngine:
                 latest_sets, num_sets, rep_range, increment, heavy_day_weight, metadata
             )
 
+        # How did the last session land against the band it was working in?
+        # This replaces a total-volume comparison against the previous session,
+        # which scored a successful weight increase as a failure and bounced the
+        # user between two loads indefinitely.
+        outcome = evaluate_session(latest_sets, rep_range)
+        strategy = select_strategy(metadata, goal_config)
+
         # 6. Check difficulty ratings
         difficulties = [s.get("difficulty") for s in latest_sets if s.get("difficulty")]
         if difficulties:
@@ -248,7 +331,7 @@ class ProgressionEngine:
             if (
                 all(d == "easy" for d in difficulties)
                 and goal_config.double_increment_on_easy
-                and self._all_sets_at_top(latest_sets, rep_range)
+                and outcome == SessionOutcome.SWEPT_TOP
             ):
                 # DOCUMENTED EXCEPTION TO 10% JUMP GUARD:
                 # When ALL sets are rated "easy" AND at the top of the rep range,
@@ -271,32 +354,44 @@ class ProgressionEngine:
                     result.reasoning_context["has_implausible_data"] = True
                 return result
 
-        # 7. ALL sets hit rep_range.high? → INCREASE_WEIGHT
-        if self._all_sets_at_top(latest_sets, rep_range):
+        # 7. Swept the ceiling → the weight has been earned outright.
+        if outcome == SessionOutcome.SWEPT_TOP:
             result = self._handle_increase_weight(
-                latest_sets, num_sets, rep_range, increment, metadata
+                latest_sets, num_sets, rep_range, increment, metadata, strategy
             )
             if has_implausible:
                 result.confidence = "low"
                 result.reasoning_context["has_implausible_data"] = True
             return result
 
-        # 8. Matched or beat previous session? → INCREASE_REPS
-        if len(recent_sessions) >= 2:
-            prev_sets = recent_sessions[1].get("sets", [])
-            if self._matched_or_beat(latest_sets, prev_sets):
-                result = self._handle_increase_reps(
-                    latest_sets, num_sets, rep_range, metadata
+        # 7b. Brushing the ceiling two sessions running also earns it. Demanding
+        # a flawless sweep is what pinned real lifters — the ones who land
+        # 10,9,10 week after week — at the same load indefinitely.
+        if outcome == SessionOutcome.AT_TOP:
+            streak = near_top_streak(recent_sessions, rep_range)
+            if streak >= 2:
+                result = self._handle_increase_weight(
+                    latest_sets, num_sets, rep_range, increment, metadata, strategy
                 )
-            else:
-                # Failed to match — check consecutive failures
-                result = self._handle_failure(
-                    recent_sessions, num_sets, rep_range, increment, goal_config, metadata
-                )
+                result.reasoning_context["earned_by_streak"] = streak
+                if has_implausible:
+                    result.confidence = "low"
+                    result.reasoning_context["has_implausible_data"] = True
+                return result
+
+        # 8. Going backwards at a fixed load is still a failure, even when the
+        # individual session technically sits inside the band. A band judges
+        # one session; a decline is only visible across several.
+        regressions = count_regressions(recent_sessions, rep_range)
+
+        if outcome == SessionOutcome.BELOW or regressions >= 1:
+            result = self._handle_failure(
+                recent_sessions, num_sets, rep_range, increment, goal_config,
+                metadata, regressions=regressions,
+            )
         else:
-            # Only one session — try to increase reps
-            result = self._handle_increase_reps(
-                latest_sets, num_sets, rep_range, metadata
+            result = self._handle_band_work(
+                latest_sets, num_sets, rep_range, increment, metadata, outcome, strategy
             )
 
         if has_implausible:
@@ -307,6 +402,7 @@ class ProgressionEngine:
             Decision.DELOAD,
             Decision.LIGHT_DAY,
             Decision.MAINTAIN,
+            Decision.FILL_BAND,
             Decision.NEEDS_STARTING_WEIGHT,
             Decision.FIRST_SESSION,
         )
@@ -317,6 +413,127 @@ class ProgressionEngine:
         return result
 
     # === Private Methods ===
+
+    # Each step down the ladder. A decision not listed here is already
+    # conservative (deload, light day, a first session, a failure response) and
+    # readiness has nothing to add to it.
+    _DEMOTION_LADDER = {
+        Decision.INCREASE_WEIGHT: Decision.INCREASE_REPS,
+        Decision.INCREASE_REPS: Decision.MAINTAIN,
+    }
+
+    def _demoted_decision(self, decision, score: float):
+        """Where this decision lands after `score` steps of demotion."""
+        steps = 0
+        if score < READINESS_REDUCED:
+            steps = 2
+        elif score < READINESS_FULL:
+            steps = 1
+
+        current = decision
+        for _ in range(steps):
+            nxt = self._DEMOTION_LADDER.get(current)
+            if nxt is None:
+                break
+            current = nxt
+        return current
+
+    def _apply_readiness(
+        self,
+        result: ProgressionResult,
+        readiness: Optional[Any],
+        exercise_id: str,
+        exercise_name: str,
+        recent_sessions: List[Dict],
+        num_sets: int,
+        goal_config,
+        exercise_record: Optional[Dict],
+        rep_range_override: Optional[tuple],
+    ) -> ProgressionResult:
+        """
+        Let recovery hold a recommendation back, never push it forward.
+
+        Readiness demotes the *decision* rather than editing the numbers. That
+        matters: _ensure_progressed rewrites any result identical to the last
+        session into a rep increase, so a hand-lowered weight would be silently
+        undone. MAINTAIN is already in that method's skip list, which is why
+        moving down the ladder holds and adjusting weights directly does not.
+
+        Asymmetric on purpose. Pushing someone who is wrecked risks injury;
+        holding someone who feels great costs one boring session.
+        """
+        if readiness is None or not getattr(readiness, "usable", False):
+            return result
+
+        score = float(getattr(readiness, "score", 1.0))
+        target = self._demoted_decision(result.decision, score)
+        if target == result.decision:
+            return result
+
+        drivers = list(getattr(readiness, "drivers", []) or [])
+        shadow = {
+            "readiness_score": round(score, 3),
+            "readiness_drivers": drivers,
+            "readiness_would_demote_to": target.value,
+            "readiness_applied": False,
+        }
+
+        if not READINESS_DEMOTION_ENABLED:
+            # Shadow mode: record the decision that would have been taken so it
+            # can be checked against real outcomes before it changes anything.
+            result.reasoning_context = {**(result.reasoning_context or {}), **shadow}
+            return result
+
+        latest_sets = (recent_sessions[0].get("sets") if recent_sessions else None) or []
+        if not latest_sets:
+            result.reasoning_context = {**(result.reasoning_context or {}), **shadow}
+            return result
+
+        metadata = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
+        rep_range = (
+            RepRangeConfig(low=rep_range_override[0], high=rep_range_override[1])
+            if rep_range_override
+            else self._get_rep_range(metadata, goal_config)
+        )
+
+        if target == Decision.INCREASE_REPS:
+            demoted = self._handle_increase_reps(latest_sets, num_sets, rep_range, metadata)
+        elif target == Decision.MAINTAIN:
+            demoted = self._handle_maintain(latest_sets, num_sets, metadata)
+        else:
+            return result
+
+        shadow["readiness_applied"] = True
+        demoted.reasoning_context = {
+            **(demoted.reasoning_context or {}),
+            **shadow,
+            "readiness_demoted_from": result.decision.value,
+        }
+        demoted.confidence = result.confidence
+        return demoted
+
+    def _handle_maintain(
+        self, latest_sets: List[Dict], num_sets: int, metadata: ExerciseMetadata
+    ) -> ProgressionResult:
+        """Repeat the last session. Reached only via readiness demotion."""
+        template = latest_sets[: num_sets] or latest_sets
+        sets = []
+        for i in range(num_sets):
+            source = template[i] if i < len(template) else template[-1]
+            sets.append(
+                RecommendedSet(
+                    set_number=i + 1,
+                    reps=int(source.get("reps") or 0),
+                    weight=float(source.get("weight") or 0),
+                )
+            )
+        return ProgressionResult(
+            sets=sets,
+            decision=Decision.MAINTAIN,
+            confidence="medium",
+            reasoning_context={"reason": "readiness_hold"},
+        )
+
 
     def _get_rep_range(self, metadata: ExerciseMetadata, goal_config: GoalConfig) -> RepRangeConfig:
         """Get the appropriate rep range based on compound/isolation classification."""
@@ -701,27 +918,181 @@ class ProgressionEngine:
         rep_range: RepRangeConfig,
         increment: float,
         metadata: ExerciseMetadata,
+        strategy: ProgressionStrategy = ProgressionStrategy.BAND,
     ) -> ProgressionResult:
-        """All sets at top of rep range → increase weight, reset to low reps."""
+        """Ceiling reached → move the load up and re-enter the band at its floor."""
         max_weight = max((s.get("weight", 0) for s in latest_sets), default=0)
         # Round to weight resolution (5 lbs for all standard equipment)
         resolution = self._weight_resolution(metadata)
         new_weight = self._round_to_increment(max_weight + increment, resolution)
 
-        sets = [
-            RecommendedSet(set_number=i + 1, reps=rep_range.low, weight=new_weight)
-            for i in range(num_sets)
-        ]
+        if strategy == ProgressionStrategy.TOP_SET:
+            sets, branch = self._top_set_shape(
+                num_sets, rep_range, new_weight, metadata, aim=rep_range.low
+            )
+        else:
+            sets = self._straight_sets(num_sets, rep_range, new_weight, aim=rep_range.low)
+            branch = Branch(
+                condition=f"All {num_sets} sets at {rep_range.high} reps",
+                action=f"Move up to {new_weight + increment:g} lbs next session",
+                kind="earn_weight",
+            )
+
         return ProgressionResult(
             sets=sets,
             decision=Decision.INCREASE_WEIGHT,
             confidence="high",
+            strategy=strategy.value,
+            branch=branch,
             reasoning_context={
                 "reason": "increase_weight",
                 "prev_weight": max_weight,
                 "new_weight": new_weight,
                 "increment": increment,
                 "reset_reps": rep_range.low,
+                "rep_range": (rep_range.low, rep_range.high),
+            },
+        )
+
+    def _straight_sets(
+        self,
+        num_sets: int,
+        rep_range: RepRangeConfig,
+        weight: float,
+        aim: int,
+    ) -> List[RecommendedSet]:
+        """One load, one aim, one band across every set."""
+        return [
+            RecommendedSet(
+                set_number=i + 1,
+                reps=aim,
+                weight=weight,
+                rep_low=rep_range.low,
+                rep_high=rep_range.high,
+                role="straight",
+            )
+            for i in range(num_sets)
+        ]
+
+    def _top_set_shape(
+        self,
+        num_sets: int,
+        rep_range: RepRangeConfig,
+        top_weight: float,
+        metadata: ExerciseMetadata,
+        aim: int,
+    ) -> tuple:
+        """
+        One heavy set to chase, the rest backed off — and an explicit
+        instruction for the likely case where the top set does not go.
+        """
+        resolution = self._weight_resolution(metadata)
+        backoff_weight = self._round_to_increment(top_weight * 0.9, resolution)
+        # A backoff that rounds onto the top set is not a backoff.
+        if backoff_weight >= top_weight:
+            backoff_weight = max(0.0, top_weight - resolution)
+
+        sets = [
+            RecommendedSet(
+                set_number=1,
+                reps=aim,
+                weight=top_weight,
+                rep_low=rep_range.low,
+                rep_high=rep_range.high,
+                role="top",
+            )
+        ]
+        for i in range(1, num_sets):
+            sets.append(
+                RecommendedSet(
+                    set_number=i + 1,
+                    reps=rep_range.high,
+                    weight=backoff_weight,
+                    rep_low=rep_range.low,
+                    rep_high=rep_range.high,
+                    role="backoff",
+                )
+            )
+
+        branch = Branch(
+            condition=f"If set 1 stops short of {aim} reps",
+            action=(
+                f"Drop to {backoff_weight:g} lbs and finish at {rep_range.high} reps"
+                if num_sets > 1
+                else f"Drop to {backoff_weight:g} lbs for {rep_range.high} reps"
+            ),
+            kind="miss_drop",
+        )
+        return sets, branch
+
+    def _handle_band_work(
+        self,
+        latest_sets: List[Dict],
+        num_sets: int,
+        rep_range: RepRangeConfig,
+        increment: float,
+        metadata: ExerciseMetadata,
+        outcome: SessionOutcome,
+        strategy: ProgressionStrategy,
+    ) -> ProgressionResult:
+        """
+        Hold the load and work the band. The aim moves with where the last
+        session actually landed, rather than adding one rep to every set every
+        time regardless of what happened.
+        """
+        resolution = self._weight_resolution(metadata)
+        weight = self._round_to_increment(
+            max((s.get("weight", 0) for s in latest_sets), default=0), resolution
+        )
+        reps = [int(s.get("reps") or 0) for s in latest_sets if (s.get("reps") or 0) > 0]
+        lowest = min(reps) if reps else rep_range.low
+        typical = int(median(reps)) if reps else rep_range.low
+
+        if outcome == SessionOutcome.AT_TOP:
+            # One clean sweep away from earning the weight — say exactly that.
+            aim = rep_range.high
+            decision = Decision.INCREASE_REPS
+            reason = "close_out_band"
+        elif outcome == SessionOutcome.IN_BAND:
+            # Anchored to the typical set, not the worst one. Anchoring to the
+            # worst set strands anyone who reliably drops a rep somewhere in
+            # the session: their weakest set never improves, so the aim never
+            # moves, and they sit at one number for months.
+            aim = min(typical + 1, rep_range.high)
+            decision = Decision.INCREASE_REPS
+            reason = "advance_in_band"
+        else:  # PARTIAL — some sets fell through the floor
+            aim = rep_range.low
+            decision = Decision.FILL_BAND
+            reason = "fill_band"
+
+        if strategy == ProgressionStrategy.TOP_SET:
+            sets, branch = self._top_set_shape(
+                num_sets, rep_range, weight, metadata, aim=aim
+            )
+        else:
+            sets = self._straight_sets(num_sets, rep_range, weight, aim=aim)
+            branch = Branch(
+                condition=f"All {num_sets} sets at {rep_range.high} reps",
+                action=f"Move up to {weight + increment:g} lbs next session",
+                kind="earn_weight" if outcome != SessionOutcome.PARTIAL else "fill_band",
+            )
+
+        return ProgressionResult(
+            sets=sets,
+            decision=decision,
+            confidence="high",
+            strategy=strategy.value,
+            branch=branch,
+            reasoning_context={
+                "reason": reason,
+                "outcome": outcome.value,
+                "weight": weight,
+                "aim": aim,
+                "prev_reps": [int(s.get("reps") or 0) for s in latest_sets[:num_sets]],
+                "lowest_last_session": lowest,
+                "rep_range": (rep_range.low, rep_range.high),
+                "band": describe_band(rep_range.low, rep_range.high),
             },
         )
 
@@ -777,18 +1148,21 @@ class ProgressionEngine:
         goal_config: GoalConfig,
         metadata: ExerciseMetadata,
         force_failure: bool = False,
+        regressions: Optional[int] = None,
     ) -> ProgressionResult:
         """
-        Handle failure to match previous session.
+        Handle a session that went backwards.
         Count consecutive failures — if >= threshold, hold (MAINTAIN).
-        Below threshold, retry same target.
+        Below threshold, go again at this load for what was managed last time.
         """
         threshold = goal_config.consecutive_failures_to_hold
 
         if force_failure:
             consecutive_failures = threshold  # Treat as immediate hold
+        elif regressions is not None:
+            consecutive_failures = regressions
         else:
-            consecutive_failures = self._count_consecutive_failures(recent_sessions)
+            consecutive_failures = count_regressions(recent_sessions, rep_range)
 
         latest_sets = recent_sessions[0].get("sets", [])
         max_weight = max((s.get("weight", 0) for s in latest_sets), default=0)
@@ -824,47 +1198,61 @@ class ProgressionEngine:
                 },
             )
         else:
-            # Retry: use previous target (try to match what we attempted)
-            if len(recent_sessions) >= 2:
-                prev_sets = recent_sessions[1].get("sets", [])
-            else:
-                prev_sets = latest_sets
-            # Pad with last available set for consistency
-            last_prev = prev_sets[-1] if prev_sets else {}
-
+            # One step back, not yet often enough to hold. Stay at this load and
+            # go for what was managed the session before.
+            #
+            # This used to re-serve the *previous* session's weights as well as
+            # its reps, which is how a lifter who had just moved up got handed
+            # back the load they had outgrown. The load they last worked is the
+            # right one to try again; only the rep target rewinds.
             resolution = self._weight_resolution(metadata)
-            sets = []
-            for i in range(num_sets):
-                if i < len(prev_sets):
-                    weight = prev_sets[i].get("weight", max_weight)
-                    reps = prev_sets[i].get("reps", rep_range.low)
-                else:
-                    weight = last_prev.get("weight", max_weight)
-                    reps = last_prev.get("reps", rep_range.low)
-                weight = self._round_to_increment(weight, resolution)
-                sets.append(RecommendedSet(set_number=i + 1, reps=reps, weight=weight))
+            weight = self._round_to_increment(max_weight, resolution)
+
+            prev_typical = None
+            if len(recent_sessions) >= 2:
+                prev_typical = typical_reps(recent_sessions[1].get("sets") or [])
+            current_typical = typical_reps(latest_sets)
+            target = prev_typical if prev_typical is not None else current_typical
+            aim = int(target) if target is not None else rep_range.low
+            aim = max(rep_range.low, min(aim, rep_range.high))
+
+            sets = self._straight_sets(num_sets, rep_range, weight, aim=aim)
 
             return ProgressionResult(
                 sets=sets,
                 decision=Decision.INCREASE_REPS,
                 confidence="medium",
+                strategy=ProgressionStrategy.BAND.value,
+                branch=Branch(
+                    condition=f"If {aim} reps will not go again",
+                    action="Hold this load once more before backing it off",
+                    kind="fill_band",
+                ),
                 reasoning_context={
                     "reason": "retry_after_failure",
                     "consecutive_failures": consecutive_failures,
                     "threshold": threshold,
+                    "weight": max_weight,
+                    "aim": aim,
+                    "rep_range": (rep_range.low, rep_range.high),
                 },
             )
 
-    def _count_consecutive_failures(self, recent_sessions: List[Dict]) -> int:
+    def _count_consecutive_failures(
+        self, recent_sessions: List[Dict], rep_range: RepRangeConfig
+    ) -> int:
         """
-        Count how many consecutive sessions failed to improve over the one before.
-        Starts from most recent, going backwards.
+        Count consecutive recent sessions that fell through the band floor.
+
+        Judged against the band rather than against the previous session's
+        total volume: dropping volume because the load went up is not a
+        failure, and counting it as one is what used to roll a lifter back to
+        the weight they had just outgrown.
         """
         failures = 0
-        for i in range(len(recent_sessions) - 1):
-            current = recent_sessions[i].get("sets", [])
-            previous = recent_sessions[i + 1].get("sets", [])
-            if not self._matched_or_beat(current, previous):
+        for session in recent_sessions:
+            outcome = evaluate_session(session.get("sets") or [], rep_range)
+            if outcome == SessionOutcome.BELOW:
                 failures += 1
             else:
                 break
@@ -911,7 +1299,14 @@ class ProgressionEngine:
         )
         if not identical:
             return result
-        if self._all_sets_at_top(latest_sets[:n], rep_range):
+        # Identical numbers are only a problem when there is headroom left in
+        # the band. A prescription already sitting at the ceiling has nowhere
+        # to go on reps, and inventing a bump there is how the engine ended up
+        # telling people to "add a rep" at a cap they had already hit.
+        if evaluate_session(latest_sets[:n], rep_range) in (
+            SessionOutcome.SWEPT_TOP,
+            SessionOutcome.AT_TOP,
+        ):
             return self._handle_increase_weight(
                 latest_sets, num_sets, rep_range, increment, metadata
             )
@@ -954,40 +1349,3 @@ class ProgressionEngine:
         # Use math.floor(x + 0.5) to avoid Python's banker's rounding
         return math.floor(weight / increment + 0.5) * increment
 
-    def _apply_safety_guards(
-        self, sets: List[RecommendedSet], latest_sets: List[Dict], increment: float
-    ) -> List[RecommendedSet]:
-        """
-        Apply safety guards:
-        - No weight jump > 10% of last session's max
-        - No weight < 80% of last session's max (unless deloading)
-        - All weights rounded to valid increments
-        - Sets ordered heaviest-first
-        """
-        if not latest_sets:
-            return sets
-
-        max_prev_weight = max((s.get("weight", 0) for s in latest_sets), default=0)
-        if max_prev_weight <= 0:
-            return sets
-
-        guarded = []
-        for s in sets:
-            weight = s.weight
-            # No jump > 10%
-            if weight > max_prev_weight * 1.10:
-                weight = self._round_to_increment(max_prev_weight * 1.10, increment)
-            # No drop below 80% (unless weight is already low)
-            if weight < max_prev_weight * 0.80 and weight > 0:
-                weight = self._round_to_increment(max_prev_weight * 0.80, increment)
-            # Round to increment
-            weight = self._round_to_increment(weight, increment)
-            guarded.append(RecommendedSet(set_number=s.set_number, reps=s.reps, weight=weight))
-
-        # Order heaviest-first
-        guarded.sort(key=lambda s: s.weight, reverse=True)
-        # Re-number
-        for i, s in enumerate(guarded):
-            s.set_number = i + 1
-
-        return guarded

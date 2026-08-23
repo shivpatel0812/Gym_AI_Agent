@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from models import UserProfile, TopLiftEntry
 from auth import get_user_id
 from db import db
+from user_time import get_timezone, set_timezone
 from datetime import datetime
 from typing import Optional, Union
 from pydantic import BaseModel
@@ -26,7 +27,17 @@ class NutritionTargetsRequest(BaseModel):
     water: Optional[float] = None
 
 
-PROFILE_KEEP_KEYS = ("created_at", "top_lifts", "top_lifts_updated", "nutrition_targets")
+PROFILE_KEEP_KEYS = (
+    "created_at", "top_lifts", "top_lifts_updated", "nutrition_targets",
+    # Reported by the device, not edited in the profile form — a full profile
+    # save must not wipe it and send the server back to guessing in UTC.
+    "timezone", "timezone_updated_at",
+)
+
+
+class TimezoneRequest(BaseModel):
+    """IANA zone name from the device, e.g. "America/New_York"."""
+    timezone: str
 
 
 def _clean_top_lifts(payload: TopLiftsRequest) -> dict:
@@ -136,6 +147,26 @@ async def update_nutrition_targets(
         merge=True,
     )
     return merged
+
+@router.put("/timezone")
+async def update_timezone(
+    request: TimezoneRequest,
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Record the device's timezone so server-side date defaults use the user's
+    calendar day. Sent silently by the app; never asked of the user.
+    """
+    stored = set_timezone(db, user_id, request.timezone)
+    if not stored:
+        raise HTTPException(status_code=422, detail="Unknown timezone name.")
+    return {"status": "success", "timezone": stored}
+
+
+@router.get("/timezone")
+async def read_timezone(user_id: str = Depends(get_user_id)):
+    return {"status": "success", "timezone": get_timezone(db, user_id)}
+
 
 @router.get("")
 async def get_user_profile(user_id: str = Depends(get_user_id)):

@@ -80,6 +80,15 @@ module.exports = {
             "GymAI uses your camera for meal photos and optional guided progress photos for AI body-scan coaching. Photos used for body scan are analyzed and then deleted.",
         },
       ],
+      // Reminders are scheduled on the device, so no push credentials are
+      // needed and nothing about them leaves the phone.
+      [
+        "expo-notifications",
+        {
+          icon: "./assets/adaptive-icon.png",
+          color: "#070708",
+        },
+      ],
     ],
     extra: {
       apiBaseUrl:

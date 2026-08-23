@@ -568,16 +568,16 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                   </h4>
                   <div className="space-y-2">
                     {dayData.logs.wellness.map((entry: any) => {
-                      const category = entry.stress_level !== undefined ? 'stress' :
-                                     entry.description && !entry.fatigue_level ? 'body-feelings' :
+                      const category = entry.level !== undefined ? 'stress' :
+                                     entry.description && !entry.fatigue ? 'body-feelings' :
                                      'wellness-survey';
                       return (
                         <Card key={entry.id} className="p-3">
                           <div className="flex items-start justify-between">
                             <div className="flex-1 text-sm">
-                              {entry.stress_level !== undefined && (
+                              {entry.level !== undefined && (
                                 <p className="font-semibold text-white text-xs mb-1">
-                                  Stress: {entry.stress_level}/10
+                                  Stress: {entry.level}/10
                                 </p>
                               )}
                               {entry.description && (
@@ -877,24 +877,24 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                 </h4>
                 <div className="space-y-3">
                     {dayData.logs.wellness.map((entry: any) => {
-                      const category = entry.stress_level !== undefined ? 'stress' :
-                                     entry.description && !entry.fatigue_level ? 'body-feelings' :
+                      const category = entry.level !== undefined ? 'stress' :
+                                     entry.description && !entry.fatigue ? 'body-feelings' :
                                      'wellness-survey';
                       return (
                         <Card key={entry.id} className="p-4">
                           <div className="flex items-start justify-between">
                             <div className="flex-1">
-                              {entry.stress_level !== undefined && (
+                              {entry.level !== undefined && (
                                 <p className="font-semibold text-white mb-1">
-                                  Stress Level: {entry.stress_level}/10
+                                  Stress Level: {entry.level}/10
                                 </p>
                               )}
                               {entry.description && (
                                 <p className="text-sm text-[#8E8E93]">{entry.description}</p>
                               )}
-                              {entry.fatigue_level !== undefined && (
+                              {entry.fatigue !== undefined && (
                                 <p className="text-sm text-[#8E8E93]">
-                                  Fatigue: {entry.fatigue_level}/10
+                                  Fatigue: {entry.fatigue}/10
                                 </p>
                               )}
                             </div>

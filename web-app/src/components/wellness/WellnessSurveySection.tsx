@@ -18,9 +18,9 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [formData, setFormData] = useState<WellnessSurvey>({
     date: new Date().toISOString().split('T')[0],
-    fatigue_level: 5,
-    aches_level: 5,
-    energy_level: 5,
+    fatigue: 5,
+    body_aches: 5,
+    energy: 5,
     sleep_quality: 5,
     mood: 5,
   });
@@ -59,9 +59,9 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
       }
       setFormData({
         date: new Date().toISOString().split('T')[0],
-        fatigue_level: 5,
-        aches_level: 5,
-        energy_level: 5,
+        fatigue: 5,
+        body_aches: 5,
+        energy: 5,
         sleep_quality: 5,
         mood: 5,
       });
@@ -96,9 +96,9 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
   const handleCancel = () => {
     setFormData({
       date: new Date().toISOString().split('T')[0],
-      fatigue_level: 5,
-      aches_level: 5,
-      energy_level: 5,
+      fatigue: 5,
+      body_aches: 5,
+      energy: 5,
       sleep_quality: 5,
       mood: 5,
     });
@@ -141,14 +141,14 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
             {/* Fatigue (reverse scoring) */}
             <div>
             <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
-              Fatigue Level: {formData.fatigue_level}
+              Fatigue Level: {formData.fatigue}
             </label>
             <input
               type="range"
               min="1"
               max="10"
-              value={formData.fatigue_level}
-              onChange={(e) => setFormData({ ...formData, fatigue_level: parseInt(e.target.value) })}
+              value={formData.fatigue}
+              onChange={(e) => setFormData({ ...formData, fatigue: parseInt(e.target.value) })}
               className="w-full"
             />
             <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
@@ -160,14 +160,14 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
             {/* Aches (reverse scoring) */}
             <div>
             <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
-              Body Aches: {formData.aches_level}
+              Body Aches: {formData.body_aches}
             </label>
             <input
               type="range"
               min="1"
               max="10"
-              value={formData.aches_level}
-              onChange={(e) => setFormData({ ...formData, aches_level: parseInt(e.target.value) })}
+              value={formData.body_aches}
+              onChange={(e) => setFormData({ ...formData, body_aches: parseInt(e.target.value) })}
               className="w-full"
             />
             <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
@@ -179,14 +179,14 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
             {/* Energy (normal scoring) */}
             <div>
             <label className="block text-xs sm:text-sm font-semibold text-[#FFFFFF] mb-1.5 sm:mb-2">
-              Energy Level: {formData.energy_level}
+              Energy Level: {formData.energy}
             </label>
             <input
               type="range"
               min="1"
               max="10"
-              value={formData.energy_level || 5}
-              onChange={(e) => setFormData({ ...formData, energy_level: parseInt(e.target.value) })}
+              value={formData.energy || 5}
+              onChange={(e) => setFormData({ ...formData, energy: parseInt(e.target.value) })}
               className="w-full"
             />
             <div className="flex justify-between text-[10px] sm:text-xs text-[#8E8E93] mt-1">
@@ -267,37 +267,37 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
                   <div>
                     <div className="flex justify-between mb-1.5">
                       <span className="text-xs text-[#8E8E93] font-medium">Fatigue</span>
-                      <span className="text-xs text-[#FFFFFF] font-semibold">{entry.fatigue_level}/10</span>
+                      <span className="text-xs text-[#FFFFFF] font-semibold">{entry.fatigue}/10</span>
                     </div>
                     <div className="w-full bg-[#2A2D35] rounded-full h-2">
                       <div
-                        className={`${getColor(entry.fatigue_level, true)} h-2 rounded-full transition-all duration-300`}
-                        style={{ width: `${(entry.fatigue_level / 10) * 100}%` }}
+                        className={`${getColor(entry.fatigue, true)} h-2 rounded-full transition-all duration-300`}
+                        style={{ width: `${(entry.fatigue / 10) * 100}%` }}
                       />
                     </div>
                   </div>
                   <div>
                     <div className="flex justify-between mb-1.5">
                       <span className="text-xs text-[#8E8E93] font-medium">Aches</span>
-                      <span className="text-xs text-[#FFFFFF] font-semibold">{entry.aches_level}/10</span>
+                      <span className="text-xs text-[#FFFFFF] font-semibold">{entry.body_aches}/10</span>
                     </div>
                     <div className="w-full bg-[#2A2D35] rounded-full h-2">
                       <div
-                        className={`${getColor(entry.aches_level, true)} h-2 rounded-full transition-all duration-300`}
-                        style={{ width: `${(entry.aches_level / 10) * 100}%` }}
+                        className={`${getColor(entry.body_aches, true)} h-2 rounded-full transition-all duration-300`}
+                        style={{ width: `${(entry.body_aches / 10) * 100}%` }}
                       />
                     </div>
                   </div>
-                  {entry.energy_level && (
+                  {entry.energy && (
                     <div>
                       <div className="flex justify-between mb-1.5">
                         <span className="text-xs text-[#8E8E93] font-medium">Energy</span>
-                        <span className="text-xs text-[#FFFFFF] font-semibold">{entry.energy_level}/10</span>
+                        <span className="text-xs text-[#FFFFFF] font-semibold">{entry.energy}/10</span>
                       </div>
                       <div className="w-full bg-[#2A2D35] rounded-full h-2">
                         <div
-                          className={`${getColor(entry.energy_level)} h-2 rounded-full transition-all duration-300`}
-                          style={{ width: `${(entry.energy_level / 10) * 100}%` }}
+                          className={`${getColor(entry.energy)} h-2 rounded-full transition-all duration-300`}
+                          style={{ width: `${(entry.energy / 10) * 100}%` }}
                         />
                       </div>
                     </div>

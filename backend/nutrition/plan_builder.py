@@ -36,6 +36,22 @@ VALID_STYLE = {"strict", "flexible"}
 VALID_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 VALID_STANCES = {"anchors", "uncertain", "eat_out", "flexible"}
 
+# How many entries each plan list holds. These used to be inline slices, and a
+# blueprint with more meals than the slice allowed lost the overflow silently
+# on save — the user saw their 11th anchor vanish with no error. The normalizers
+# still truncate (a model can return anything), but a hand edit that would go
+# over the limit is rejected with a message instead.
+# Below this many completed days, recent intake is a sample, not a pattern.
+MIN_DAYS_FOR_AVERAGE = 3
+
+PLAN_LIST_LIMITS = {
+    "meal_anchors": 24,
+    "flexible_meals": 12,
+    "go_to_items": 40,
+    "blueprint_extras": 24,
+    "fast_food_places": 16,
+}
+
 # Optional health angles a plan can be shaped around. These are ordinary eating
 # patterns — more soluble fiber, steadier carbs — not treatment. Nothing here
 # diagnoses anything or replaces what a doctor or dietitian told the user; the
@@ -331,7 +347,8 @@ QUESTIONNAIRE ANSWERS:
 USER PROFILE:
 {json.dumps(profile, indent=2, default=str)}
 
-RECENT LOGGED NUTRITION (if any):
+RECENT LOGGED NUTRITION (completed days only — today is excluded on purpose,
+and days that look like an abandoned log are dropped):
 {json.dumps(recent, indent=2, default=str)}
 
 ACTIVE TRAINING PLAN (align calories, protein, and strategy with this):
@@ -387,16 +404,35 @@ Return JSON with exactly this shape:
   "food_priorities": [
     "Keep breakfast and daytime meals high in protein",
     "Leave calorie flexibility for dinner"
+  ],
+  "slot_profiles": [
+    {{
+      "slot": "breakfast|lunch|pre_workout|dinner|snack",
+      "stance": "anchors|uncertain|eat_out|flexible",
+      "calorie_min": 500,
+      "calorie_max": 700,
+      "protein_min": 40,
+      "notes": "why this slot carries this share, in one short line"
+    }}
   ]
 }}
 
 Rules:
+- slot_profiles splits the daily calorie and protein target across the meals this
+  person actually eats, so each meal has its own number to hit. Only include
+  slots they use. The calorie bands should add up to roughly the daily target,
+  and the protein floors to roughly the daily protein. Put the biggest share
+  where their day actually is — training time, work schedule, and the meal they
+  said is largest all matter more than an even split.
 - Keep meal_anchors the user listed. You may estimate missing macros; do not invent a totally different breakfast.
 - Never remove or rewrite a locked meal. New meal_anchors must be additions the
   user can take or leave, and each one should say in "notes" how it fits next to
   what they already eat.
 - Keep flexible meals they listed. Ranges can be rough.
 - Targets should be realistic given their recent intake if provided, and the goal.
+- days_logged says how much that average rests on. With only a day or two behind
+  it, lean on the goal defaults rather than fitting the target to a thin sample,
+  and never set a target below what they already eat unless the goal is fat loss.
 - If a training plan is present, align the nutrition goal and targets with it
   (strength/hypertrophy → enough protein and calories to progress key lifts;
   a cut → a modest deficit that still supports training). Mention the training
@@ -430,7 +466,13 @@ Rules:
     ) -> Dict[str, Any]:
         goal = answers.get("goal") if answers.get("goal") in GOAL_KEYS else "maintain"
         defaults = dict(GOAL_DEFAULTS[goal])
-        avg_cal = _num((recent or {}).get("avg_calories"))
+        recent = recent or {}
+        avg_cal = _num(recent.get("avg_calories"))
+        # One or two logged days is not an eating pattern. Anchoring targets to
+        # that thin a sample is how a plan ends up below what someone actually
+        # eats, so under MIN_DAYS_FOR_AVERAGE the goal defaults win.
+        if int(_num(recent.get("days_logged")) or 0) < MIN_DAYS_FOR_AVERAGE:
+            avg_cal = None
         if avg_cal and 1200 <= avg_cal <= 4500:
             if goal == "fat_loss":
                 defaults["calories"] = int(round(avg_cal * 0.85))
@@ -584,6 +626,10 @@ Rules:
         if isinstance(plan.get("preferences"), dict):
             merged_prefs.update({k: v for k, v in plan["preferences"].items() if v not in (None, [], "")})
         plan["preferences"] = NutritionPlanBuilder._normalize_preferences(merged_prefs)
+
+        from nutrition.pacing import normalize_pacing
+        plan["pacing"] = normalize_pacing(plan.get("pacing") or answers.get("pacing"), goal)
+
         return plan
 
     # Fields the user owns. A regenerate may add to these lists, never rewrite
@@ -592,20 +638,28 @@ Rules:
         (
             "meal_anchors",
             lambda i: (str(i.get("slot") or "").lower(), str(i.get("label") or "").strip().lower()),
-            10,
+            PLAN_LIST_LIMITS["meal_anchors"],
         ),
-        ("flexible_meals", lambda i: str(i.get("name") or "").strip().lower(), 6),
+        (
+            "flexible_meals",
+            lambda i: str(i.get("name") or "").strip().lower(),
+            PLAN_LIST_LIMITS["flexible_meals"],
+        ),
         (
             "go_to_items",
             lambda i: (str(i.get("slot") or "").lower(), str(i.get("name") or "").strip().lower()),
-            20,
+            PLAN_LIST_LIMITS["go_to_items"],
         ),
         (
             "blueprint_extras",
             lambda i: (str(i.get("band") or "").lower(), str(i.get("label") or "").strip().lower()),
-            16,
+            PLAN_LIST_LIMITS["blueprint_extras"],
         ),
-        ("fast_food_places", lambda i: str(i.get("name") or "").strip().lower(), 12),
+        (
+            "fast_food_places",
+            lambda i: str(i.get("name") or "").strip().lower(),
+            PLAN_LIST_LIMITS["fast_food_places"],
+        ),
     )
 
     @staticmethod
@@ -765,7 +819,7 @@ Rules:
     def _normalize_anchors(raw) -> List[Dict]:
         items = raw if isinstance(raw, list) else []
         out = []
-        for item in items[:10]:
+        for item in items[:PLAN_LIST_LIMITS["meal_anchors"]]:
             if not isinstance(item, dict):
                 continue
             foods_in = item.get("foods") if isinstance(item.get("foods"), list) else []
@@ -831,6 +885,8 @@ Rules:
             varies = kind_raw == "potential"
             uncertain = kind_raw == "uncertain"
             place = str(item.get("place") or "").strip()[:80] or None
+            source_raw = str(item.get("source") or "").strip().lower()
+            source = source_raw if source_raw in ("ai_coach", "ai_slot", "logged", "user") else None
             out.append({
                 "id": str(item.get("id") or _new_id()),
                 "slot": slot,
@@ -843,6 +899,7 @@ Rules:
                 "varies": varies,
                 "uncertain": uncertain,
                 "place": place,
+                "source": source,
             })
         return out
 
@@ -850,7 +907,7 @@ Rules:
     def _normalize_flexible(raw) -> List[Dict]:
         items = raw if isinstance(raw, list) else []
         out = []
-        for item in items[:6]:
+        for item in items[:PLAN_LIST_LIMITS["flexible_meals"]]:
             if isinstance(item, str) and item.strip():
                 item = {"name": item.strip()}
             if not isinstance(item, dict):
@@ -886,7 +943,7 @@ Rules:
     def _normalize_go_to_items(raw) -> List[Dict]:
         items = raw if isinstance(raw, list) else []
         out = []
-        for item in items[:20]:
+        for item in items[:PLAN_LIST_LIMITS["go_to_items"]]:
             if isinstance(item, str) and item.strip():
                 item = {"name": item.strip()}
             if not isinstance(item, dict):
@@ -921,6 +978,12 @@ Rules:
                     }.items()
                     if v is not None
                 },
+                **(
+                    {"source": str(item.get("source")).strip().lower()}
+                    if str(item.get("source") or "").strip().lower()
+                    in ("ai_coach", "ai_slot", "logged", "user")
+                    else {}
+                ),
             })
         return out
 
@@ -929,7 +992,7 @@ Rules:
         """One-time / band extras on the day blueprint (not forever anchors)."""
         items = raw if isinstance(raw, list) else []
         out = []
-        for item in items[:16]:
+        for item in items[:PLAN_LIST_LIMITS["blueprint_extras"]]:
             if not isinstance(item, dict):
                 continue
             label = str(item.get("label") or item.get("name") or "").strip()[:60]
@@ -999,10 +1062,22 @@ Rules:
             stance = str(item.get("stance") or "anchors").strip().lower()
             if stance not in VALID_STANCES:
                 stance = "anchors"
+            # Per-slot calorie/protein targets. Only what the coach or the user
+            # actually set is kept — the read path adds derived targets under
+            # separate target_* keys, and those must not round-trip into storage
+            # or a fallback guess would harden into a stored number.
+            cmin = _clamp(_num(item.get("calorie_min")), 0, 3000)
+            cmax = _clamp(_num(item.get("calorie_max")), 0, 3000)
+            if cmin and cmax and cmin > cmax:
+                cmin, cmax = cmax, cmin
+            pmin = _clamp(_num(item.get("protein_min")), 0, 200)
             by_slot[slot] = {
                 "slot": slot,
                 "stance": stance,
                 "notes": str(item.get("notes") or "").strip()[:240] or None,
+                "calorie_min": int(round(cmin)) if cmin else None,
+                "calorie_max": int(round(cmax)) if cmax else None,
+                "protein_min": int(round(pmin)) if pmin else None,
             }
         # Always return all primary slots so the UI has a complete day.
         out = []
@@ -1010,14 +1085,21 @@ Rules:
             if slot in by_slot:
                 out.append(by_slot[slot])
             else:
-                out.append({"slot": slot, "stance": "anchors", "notes": None})
+                out.append({
+                    "slot": slot,
+                    "stance": "anchors",
+                    "notes": None,
+                    "calorie_min": None,
+                    "calorie_max": None,
+                    "protein_min": None,
+                })
         return out
 
     @staticmethod
     def _normalize_fast_food_places(raw) -> List[Dict]:
         items = raw if isinstance(raw, list) else []
         out = []
-        for item in items[:12]:
+        for item in items[:PLAN_LIST_LIMITS["fast_food_places"]]:
             if isinstance(item, str) and item.strip():
                 item = {"name": item.strip()}
             if not isinstance(item, dict):

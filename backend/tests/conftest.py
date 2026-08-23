@@ -9,6 +9,9 @@ import pytest
 
 # Ensure backend is on path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# ...and the tests directory itself, so shared helpers like `fakes` import by
+# name from any test module regardless of how pytest was invoked.
+sys.path.insert(0, os.path.dirname(__file__))
 
 from ai_analysis.workout_recommender.progression_engine import ProgressionEngine
 from ai_analysis.workout_recommender.goal_configs import get_goal_config

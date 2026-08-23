@@ -10,10 +10,25 @@ import re
 import statistics
 import calendar
 
+from field_aliases import normalize_records
+from metrics import compute_baseline
+from metrics.baseline import MIN_SAMPLES
 from .workout_recommender.exercise_metadata import resolve_exercise_metadata
 
 # Fallback when the user has not set a preferred workout frequency.
 DEFAULT_SESSIONS_PER_WEEK = 4.5
+
+WEEKDAY_NAMES = [
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+]
+
+# One observed Tuesday is an anecdote. Below this a weekday is not reported.
+MIN_WEEKDAY_OBSERVATIONS = 3
+
+
+# A logged day under this is an abandoned log, not a day of eating. Averaging
+# it in drags planning targets below what the user actually eats.
+PARTIAL_DAY_CALORIES = 500
 
 
 def numeric_values(records: List[Dict], field: str) -> List[float]:
@@ -72,6 +87,7 @@ class FitnessDataAnalyzer:
         self.db = db
         self.user_id = user_id
         self._target_sessions_per_week: Optional[float] = None
+        self._profile: Optional[Dict[str, Any]] = None
 
     def _get_target_sessions_per_week(self) -> Optional[float]:
         """
@@ -99,6 +115,20 @@ class FitnessDataAnalyzer:
 
         return None
 
+    def _get_profile(self) -> Dict[str, Any]:
+        """Read the user profile once per instance; {} when unavailable."""
+        if self._profile is None:
+            try:
+                doc = (
+                    self.db.collection("users").document(self.user_id)
+                    .collection("user_profile").document("profile").get()
+                )
+                self._profile = (doc.to_dict() or {}) if doc.exists else {}
+            except Exception as e:
+                print(f"Warning: could not read user profile: {e}")
+                self._profile = {}
+        return self._profile
+
     def _get_month_date_range(self, year: int, month: int) -> tuple:
         """Get start and end dates for a given month (year, month)."""
         start_date = datetime(year, month, 1)
@@ -114,7 +144,10 @@ class FitnessDataAnalyzer:
         """Fetch data from Firestore collection within date range."""
         collection_ref = self.db.collection("users").document(self.user_id).collection(collection_name)
         docs = collection_ref.where("date", ">=", start_date).where("date", "<=", end_date).stream()
-        return [{"id": doc.id, **doc.to_dict()} for doc in docs]
+        rows = [{"id": doc.id, **doc.to_dict()} for doc in docs]
+        # Older web-written documents use different field names for the same
+        # concepts; normalize here so no summary below has to know that.
+        return normalize_records(collection_name, rows)
 
     def build_training_summary(self, year: int, month: int) -> Dict[str, Any]:
         """Build training metrics summary for a specific month."""
@@ -213,12 +246,43 @@ class FitnessDataAnalyzer:
         start_date, end_date = self._get_month_date_range(year, month)
         return self._nutrition_summary(start_date, end_date, f"{calendar.month_name[month]} {year}")
 
-    def _nutrition_summary(self, start_date: str, end_date: str, label: str) -> Dict[str, Any]:
-        """Build nutrition metrics for an arbitrary date range."""
+    def _nutrition_summary(
+        self,
+        start_date: str,
+        end_date: str,
+        label: str,
+        exclude_dates: Optional[set] = None,
+        min_calories: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Build nutrition metrics for an arbitrary date range.
+
+        `exclude_dates` drops specific days, and `min_calories` drops days whose
+        total is too low to be a real day of eating. Both exist for planning:
+        averaging in a day that is still being logged pulls the average down and
+        the plan sets targets below what the user actually eats.
+        """
         macros = self._fetch_collection_data('macros', start_date, end_date)
 
         if not macros:
             return {"error": "No nutrition data available"}
+
+        excluded = 0
+        if exclude_dates or min_calories:
+            kept = []
+            for row in macros:
+                if exclude_dates and str(row.get('date') or '')[:10] in exclude_dates:
+                    excluded += 1
+                    continue
+                if min_calories is not None:
+                    total = row.get('total_calories')
+                    if not isinstance(total, (int, float)) or total < min_calories:
+                        excluded += 1
+                        continue
+                kept.append(row)
+            macros = kept
+            if not macros:
+                return {"error": "No nutrition data available", "days_excluded": excluded}
 
         calories = numeric_values(macros, 'total_calories')
         protein = numeric_values(macros, 'total_protein')
@@ -237,6 +301,7 @@ class FitnessDataAnalyzer:
         return {
             "time_window": label,
             "days_logged": len(macros),
+            "days_excluded": excluded,
             "avg_calories": round(avg_calories),
             "calories_range": [min(calories), max(calories)],
             "avg_protein": round(avg_protein),
@@ -245,6 +310,33 @@ class FitnessDataAnalyzer:
             "consistency": consistency,
             "protein_ratio": round((avg_protein * 4 / avg_calories) * 100, 1) if avg_calories > 0 else 0
         }
+
+    def build_planning_nutrition(self, window_days: int = 14) -> Dict[str, Any]:
+        """
+        Recent intake as a basis for setting targets — completed days only.
+
+        The day in progress is excluded: a plan generated at 10am would
+        otherwise average in a single logged breakfast and set the user a lower
+        calorie and protein target than they actually eat. Days under
+        PARTIAL_DAY_CALORIES go too, since those are almost always a log
+        someone abandoned rather than a day they ate 300 calories.
+        """
+        import user_time
+
+        today = user_time.today(self.db, self.user_id)
+        end = datetime.strptime(today, '%Y-%m-%d') - timedelta(days=1)
+        start = end - timedelta(days=window_days - 1)
+        start_str, end_str = start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
+
+        summary = self._nutrition_summary(
+            start_str,
+            end_str,
+            f"last {window_days} completed days ({start_str} to {end_str})",
+            exclude_dates={today},
+            min_calories=PARTIAL_DAY_CALORIES,
+        )
+        summary["excludes_today"] = True
+        return summary
 
     def build_recovery_summary(self, year: int, month: int) -> Dict[str, Any]:
         """Build recovery metrics summary for a specific month."""
@@ -292,9 +384,17 @@ class FitnessDataAnalyzer:
             elif recent_fatigue < early_fatigue - 1:
                 fatigue_trend = "decreasing"
 
+        # A personal sleep target, inferred from the user's own logged nights
+        # unless they declared one. Below the sample floor this comes back
+        # cancelled, and the block below reports that rather than inventing a
+        # target — a fabricated target yields a confident deviation, which is
+        # precisely what the lever and readiness layers would then act on.
+        sleep_baseline = self._sleep_baseline(sleep_hours)
+
         # None means "not logged" — distinct from a logged value of 0
         return {
             "time_window": label,
+            "sleep_baseline": sleep_baseline.to_dict(),
             "days_sleep_logged": len(sleep_hours),
             "days_wellness_logged": len(wellness),
             "avg_sleep_hours": round(statistics.mean(sleep_hours), 1) if sleep_hours else None,
@@ -305,6 +405,32 @@ class FitnessDataAnalyzer:
             "fatigue_trend": fatigue_trend,
             "avg_energy": round(statistics.mean(energy), 1) if energy else None,
             "avg_body_aches": round(statistics.mean(body_aches), 1) if body_aches else None
+        }
+
+    def _sleep_baseline(self, sleep_hours: List[float]):
+        """The user's personal sleep target for a set of logged nights."""
+        return compute_baseline(
+            "sleep_hours",
+            sleep_hours,
+            declared_target=self._get_profile().get("sleep_goal"),
+        )
+
+    def build_sleep_baseline(self, window_days: int = 28) -> Dict[str, Any]:
+        """
+        The sleep target on its own, for callers that do not need a full
+        recovery summary. Shares `_sleep_baseline` with the digest so the two
+        can never disagree about what a user's normal night looks like.
+        """
+        end = datetime.now()
+        start = end - timedelta(days=window_days - 1)
+        sleep_data = self._fetch_collection_data(
+            "sleep", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+        )
+        baseline = self._sleep_baseline(numeric_values(sleep_data, "hours_slept"))
+        return {
+            **baseline.to_dict(),
+            "window_days": window_days,
+            "min_samples": MIN_SAMPLES,
         }
 
     def build_lifestyle_summary(self, year: int, month: int) -> Dict[str, Any]:
@@ -331,6 +457,93 @@ class FitnessDataAnalyzer:
             "avg_steps": round(statistics.mean(steps)) if steps else None,
             "active_days": sum(1 for s in steps if s > 5000) if steps else None
         }
+
+    def build_weekday_adherence(
+        self, metric_key: str = "protein", window_days: int = 28
+    ) -> Dict[str, Any]:
+        """
+        Adherence to one metric split by day of week.
+
+        This is the digest behind "you're usually behind on protein by Tuesday
+        afternoon". A weekly average hides the shape that matters: someone can
+        average 95% of target and still miss badly every weekday, which is a
+        different problem with a different fix than missing uniformly.
+
+        Returns weekdays only where enough days were logged to say anything —
+        one observed Tuesday is an anecdote, not a pattern.
+        """
+        from state.daily_rollup import DailyRollupBuilder
+
+        end = datetime.now()
+        start = end - timedelta(days=window_days - 1)
+        rollups = DailyRollupBuilder(self.db, self.user_id).build_range(
+            start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+        )
+
+        # An inferred target is the median of the user's own days, so it sits
+        # in the middle of their behaviour by construction and a "shortfall"
+        # against it only means "below your own norm". Adherence in the sense a
+        # user means it needs a target they declared, so the source travels
+        # with the result and callers can decide how hard to lean on it.
+        target_source = "none"
+
+        buckets: Dict[int, List[float]] = {i: [] for i in range(7)}
+        for day_key in sorted(rollups):
+            reading = (rollups[day_key].get("metrics") or {}).get(metric_key)
+            if not reading or reading.get("status") != "ok":
+                continue
+            deviation = reading.get("deviation")
+            if deviation is None:
+                continue
+            weekday = datetime.strptime(day_key, "%Y-%m-%d").weekday()
+            buckets[weekday].append(deviation)
+            target_source = reading.get("target_source") or target_source
+
+        by_weekday = {}
+        for index, deviations in buckets.items():
+            if len(deviations) < MIN_WEEKDAY_OBSERVATIONS:
+                continue
+            by_weekday[WEEKDAY_NAMES[index]] = {
+                "days_observed": len(deviations),
+                "avg_deviation": round(statistics.mean(deviations), 3),
+                "hit_rate": round(sum(1 for d in deviations if d >= 0) / len(deviations), 2),
+            }
+
+        if not by_weekday:
+            return {
+                "metric": metric_key,
+                "window_days": window_days,
+                "status": "insufficient_data",
+                "target_source": target_source,
+                "by_weekday": {},
+            }
+
+        worst = min(by_weekday.items(), key=lambda kv: kv[1]["avg_deviation"])
+        best = max(by_weekday.items(), key=lambda kv: kv[1]["avg_deviation"])
+        weekdays = [d for name, d in by_weekday.items() if name not in ("Saturday", "Sunday")]
+        weekend = [d for name, d in by_weekday.items() if name in ("Saturday", "Sunday")]
+
+        result = {
+            "metric": metric_key,
+            "window_days": window_days,
+            "status": "ok",
+            "target_source": target_source,
+            "by_weekday": by_weekday,
+            "worst_day": worst[0],
+            "best_day": best[0],
+            "spread": round(best[1]["avg_deviation"] - worst[1]["avg_deviation"], 3),
+        }
+
+        # Only claim a weekday/weekend split when both sides were observed.
+        if weekdays and weekend:
+            result["weekday_avg_deviation"] = round(
+                statistics.mean(d["avg_deviation"] for d in weekdays), 3
+            )
+            result["weekend_avg_deviation"] = round(
+                statistics.mean(d["avg_deviation"] for d in weekend), 3
+            )
+
+        return result
 
     def build_complete_summary(self, year: int, month: int) -> Dict[str, Any]:
         """Build complete summary for AI analysis for a specific month."""

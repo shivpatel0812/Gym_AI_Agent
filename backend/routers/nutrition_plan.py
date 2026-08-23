@@ -16,10 +16,12 @@ from auth import get_user_id
 from db import db
 from nutrition.plan_builder import (
     HEALTH_FOCUSES,
+    PLAN_LIST_LIMITS,
     NutritionPlanBuilder,
     GOAL_KEYS,
     suggest_nutrition_goal,
 )
+import user_time
 from nutrition import idea_cache
 from nutrition.plan_store import (
     NutritionPlanStore,
@@ -28,6 +30,22 @@ from nutrition.plan_store import (
     STATUS_COMPLETED,
 )
 from nutrition.plan_review import build_plan_review
+from nutrition.slot_targets import apply_slot_targets, resolve_slot_targets
+from nutrition.logged_meals import slot_log_facts
+from nutrition.plan_checkin import (
+    CHECKIN_DAYS,
+    build_plan_checkin,
+    checkin_edit_candidates,
+    checkin_facts,
+)
+from nutrition.pacing import (
+    catalog_styles,
+    detect_progress,
+    normalize_pacing,
+    pacing_options,
+    recent_weigh_ins,
+    save_weigh_in,
+)
 from nutrition.today_guidance import build_today_guidance
 from nutrition.blueprint_ai import suggest_fast_food_orders, suggest_slot_fills
 from nutrition.usuals import build_usuals, entry_totals, find_usual, foods_to_log
@@ -38,6 +56,7 @@ from nutrition.plan_edits import (
     EDIT_STATUS_PENDING,
     EDIT_STATUS_STALE,
     apply_edits,
+    normalize_edits,
     pending_count,
 )
 from nutrition.suggestion_store import SuggestionStore
@@ -96,6 +115,14 @@ class SuggestionActionRequest(BaseModel):
     edit_ids: Optional[List[str]] = None
 
 
+class PlanCheckinRequest(BaseModel):
+    model: Optional[str] = None
+    refresh: Optional[bool] = False
+    """Optional weigh-in reported with this check-in — feeds stall detection."""
+    current_weight_lb: Optional[float] = None
+    weigh_in_date: Optional[str] = None
+
+
 class UpdateNutritionPlanRequest(BaseModel):
     goal: Optional[str] = None
     goal_detail: Optional[str] = None
@@ -113,6 +140,24 @@ class UpdateNutritionPlanRequest(BaseModel):
     fast_food_places: Optional[List[dict]] = None
     preferences: Optional[dict] = None
     food_priorities: Optional[List[str]] = None
+    pacing: Optional[dict] = None
+
+
+class SetPacingRequest(BaseModel):
+    style: Optional[str] = None
+    weekly_step: Optional[int] = None
+    hold_weeks: Optional[int] = None
+    break_every_n_weeks: Optional[int] = None
+    refeed_days: Optional[List[str]] = None
+    training_day_bump: Optional[int] = None
+    """Optional one-shot calorie bump applied with the pacing change."""
+    calorie_delta: Optional[int] = None
+
+
+class StagePacingOptionRequest(BaseModel):
+    """Stage one pacing option's edits for Accept on the plan page."""
+    option_id: str
+    current_weight_lb: Optional[float] = None
 
 
 def _store(user_id: str) -> NutritionPlanStore:
@@ -129,9 +174,15 @@ def _builder(model: Optional[str] = None) -> NutritionPlanBuilder:
 
 
 def _recent_nutrition(user_id: str) -> dict:
+    """
+    Recent intake used to set targets — completed days only.
+
+    Deliberately not the rolling coach summary: that one ends today, and a plan
+    built at 10am would average in a half-logged day and hand the user lower
+    calorie and protein targets than they actually eat.
+    """
     try:
-        summary = FitnessDataAnalyzer(db, user_id).build_rolling_summary(window_days=14)
-        return summary.get("nutrition") or {}
+        return FitnessDataAnalyzer(db, user_id).build_planning_nutrition(window_days=14) or {}
     except Exception as e:
         print(f"Warning: nutrition history unavailable: {e}")
         return {}
@@ -184,7 +235,7 @@ def _logged_foods(user_id: str, date: str) -> List[dict]:
 
 def _recent_macro_entries(user_id: str, days: int = 21) -> List[dict]:
     """Recent days of logged food, for learning someone's repeat meals."""
-    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    cutoff = (user_time.now(db, user_id) - timedelta(days=days)).strftime("%Y-%m-%d")
     col = _macros_ref(user_id)
     try:
         docs = list(col.where("date", ">=", cutoff).stream())
@@ -216,7 +267,9 @@ def _usuals_payload(user_id: str, date: str, hour: Optional[int]) -> dict:
         active,
         foods,
         history=_recent_macro_entries(user_id),
-        hour=hour if hour is not None else datetime.now().hour,
+        # The client sends its own hour; the stored timezone covers the callers
+        # that cannot, so the current meal slot is never a UTC guess.
+        hour=hour if hour is not None else user_time.now(db, user_id).hour,
         weekday=_weekday(date),
     )
     # Home shows what a tap did to the day's budget, so it rides along here
@@ -334,7 +387,7 @@ async def propose_nutrition_plan(
     plan = result["plan"]
     plan_id = _store(user_id).save_draft(plan)
     saved = _store(user_id).get(plan_id)
-    return {"status": "success", "plan": saved}
+    return {"status": "success", "plan": apply_slot_targets(saved)}
 
 
 @router.post("/{plan_id}/activate")
@@ -344,7 +397,7 @@ async def activate_nutrition_plan(plan_id: str, user_id: str = Depends(get_user_
     if not plan:
         raise HTTPException(status_code=404, detail="Nutrition plan not found")
     _sync_targets(user_id, plan)
-    return {"status": "success", "plan": plan}
+    return {"status": "success", "plan": apply_slot_targets(plan)}
 
 
 @router.get("/active")
@@ -352,7 +405,7 @@ async def get_active_nutrition_plan(user_id: str = Depends(get_user_id)):
     plan = _store(user_id).get_active()
     if not plan:
         return {"status": "success", "plan": None}
-    return {"status": "success", "plan": plan}
+    return {"status": "success", "plan": apply_slot_targets(plan)}
 
 
 @router.get("/suggestions")
@@ -416,7 +469,7 @@ async def apply_nutrition_suggestions(
     stale = [eid for eid, outcome in outcomes.items() if outcome == EDIT_STATUS_STALE]
     return {
         "status": "success",
-        "plan": updated,
+        "plan": apply_slot_targets(updated),
         "suggestion": record,
         "applied_edit_ids": applied,
         "stale_edit_ids": stale,
@@ -455,7 +508,7 @@ async def get_today_guidance(
     date: Optional[str] = Query(None),
     user_id: str = Depends(get_user_id),
 ):
-    day = date or datetime.now().strftime("%Y-%m-%d")
+    day = date or user_time.today(db, user_id)
     plan = _store(user_id).get_active()
     if not plan or plan.get("status") != STATUS_ACTIVE:
         return {"status": "success", "guidance": {"has_plan": False}}
@@ -479,7 +532,7 @@ async def get_usuals(
     hour comes from the client so the "current" meal slot follows the user's
     clock rather than the server's timezone.
     """
-    day = date or datetime.now().strftime("%Y-%m-%d")
+    day = date or user_time.today(db, user_id)
     return {"status": "success", "date": day, "usuals": _usuals_payload(user_id, day, hour)}
 
 
@@ -490,7 +543,7 @@ async def toggle_usual(
     user_id: str = Depends(get_user_id),
 ):
     """Log a usual into today's macros, or undo a previous tap."""
-    day = request.date or datetime.now().strftime("%Y-%m-%d")
+    day = request.date or user_time.today(db, user_id)
     payload = _usuals_payload(user_id, day, request.hour)
     usual = find_usual(payload, usual_id)
     if not usual:
@@ -527,8 +580,28 @@ PATCHABLE_FIELDS = (
     "health_focuses", "health_notes",
     "meal_anchors", "flexible_meals", "go_to_items", "blueprint_extras",
     "slot_profiles", "fast_food_places",
-    "preferences", "food_priorities",
+    "preferences", "food_priorities", "pacing",
 )
+
+
+def _check_list_limits(patch: dict) -> None:
+    """
+    Reject an edit that would not fit rather than truncating it.
+
+    The normalizers cap each list so a model cannot flood the plan, but a user
+    hitting that cap by hand used to watch their newest meal disappear on save
+    with no explanation.
+    """
+    for field, limit in PLAN_LIST_LIMITS.items():
+        value = patch.get(field)
+        if isinstance(value, list) and len(value) > limit:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"A plan holds up to {limit} {field.replace('_', ' ')}. "
+                    f"Remove {len(value) - limit} before saving."
+                ),
+            )
 
 
 def _apply_patch(user_id: str, plan_id: str, patch: dict) -> Optional[dict]:
@@ -558,10 +631,11 @@ async def update_nutrition_plan(
     user_id: str = Depends(get_user_id),
 ):
     patch = {k: v for k, v in request.dict(exclude_unset=True).items() if v is not None}
+    _check_list_limits(patch)
     updated = _apply_patch(user_id, plan_id, patch)
     if updated is None:
         raise HTTPException(status_code=404, detail="Nutrition plan not found")
-    return {"status": "success", "plan": updated}
+    return {"status": "success", "plan": apply_slot_targets(updated)}
 
 
 @router.post("/{plan_id}/suggest-slot")
@@ -587,6 +661,16 @@ async def suggest_slot(
         if cached:
             return {"status": "success", "suggestion": cached, "cached": True}
 
+    # The model sees this slot's own calorie/protein share and the meals the user
+    # has actually logged into it, so a suggestion can promote something they
+    # already eat instead of inventing a meal they have never had.
+    target = resolve_slot_targets(plan).get(slot)
+    facts = slot_log_facts(
+        _recent_macro_entries(user_id, days=CHECKIN_DAYS),
+        slot,
+        target,
+    )
+
     result = suggest_slot_fills(
         plan,
         slot,
@@ -594,7 +678,11 @@ async def suggest_slot(
         request.model,
         count=count,
         exclude_labels=request.exclude_labels,
+        slot_target=target,
+        log_facts=facts,
     )
+    result["slot_target"] = target
+    result["log_facts"] = facts
     if cacheable and result.get("ideas"):
         idea_cache.put(db, user_id, plan_id, version, slot, request.stance, count, result)
     return {"status": "success", "suggestion": result, "cached": False}
@@ -626,6 +714,232 @@ async def review_nutrition_plan(
     review = build_plan_review(plan, _recent_nutrition(user_id), request.model)
     idea_cache.put(db, user_id, plan_id, version, "__review__", None, 1, review)
     return {"status": "success", "review": review, "cached": False}
+
+
+@router.post("/{plan_id}/checkin")
+async def checkin_nutrition_plan(
+    plan_id: str,
+    request: PlanCheckinRequest = PlanCheckinRequest(),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    How the plan has actually gone over the last two weeks.
+
+    Read-only on the plan itself. An optional weigh-in is stored so stall
+    detection can use the scale, not just calorie adherence. Turning findings
+    into changes is a separate call — a refresh never rewrites meals.
+    """
+    plan = _store(user_id).get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
+
+    if request.current_weight_lb is not None:
+        try:
+            save_weigh_in(
+                db,
+                user_id,
+                request.current_weight_lb,
+                date=request.weigh_in_date or user_time.today(db, user_id),
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    version = int(plan.get("version") or 1)
+    # Skip cache when a fresh weigh-in arrived — the progress verdict depends on it.
+    cache_slot = f"__checkin__{user_time.today(db, user_id)}"
+    if not request.refresh and request.current_weight_lb is None:
+        cached = idea_cache.get(db, user_id, plan_id, version, cache_slot, None, 1)
+        if cached:
+            return {"status": "success", "checkin": cached, "cached": True}
+
+    entries = _recent_macro_entries(user_id, days=CHECKIN_DAYS)
+    weigh_ins = recent_weigh_ins(db, user_id, days=CHECKIN_DAYS + 7)
+    checkin = build_plan_checkin(plan, entries, request.model, weigh_ins=weigh_ins)
+    idea_cache.put(db, user_id, plan_id, version, cache_slot, None, 1, checkin)
+    return {"status": "success", "checkin": checkin, "cached": False}
+
+
+@router.post("/{plan_id}/checkin/propose-edits")
+async def propose_checkin_edits(
+    plan_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Turn the last check-in's findings into staged edits the user reviews.
+
+    Includes meal-from-logs fixes and, when progress says so, a recommended
+    pacing change. Same Accept path as coach-proposed edits.
+    """
+    plan = _store(user_id).get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
+
+    entries = _recent_macro_entries(user_id, days=CHECKIN_DAYS)
+    facts = checkin_facts(plan, entries)
+    weigh_ins = recent_weigh_ins(db, user_id, days=CHECKIN_DAYS + 7)
+    progress = detect_progress(plan, facts, weigh_ins)
+    candidates = checkin_edit_candidates(plan, facts, progress=progress)
+    if not candidates:
+        return {
+            "status": "success",
+            "suggestion": None,
+            "message": "Nothing in your last two weeks needs a plan change.",
+        }
+
+    normalized, rejected = normalize_edits(plan, candidates)
+    if not normalized:
+        return {"status": "success", "suggestion": None, "rejected": rejected}
+
+    record = SuggestionStore(db, user_id).create(
+        plan=plan,
+        edits=normalized,
+        summary=f"From your last {CHECKIN_DAYS} days of logs",
+        conversation_id=None,
+    )
+    return {
+        "status": "success",
+        "suggestion": record,
+        "pending_count": pending_count(record),
+        "rejected": rejected,
+    }
+
+
+@router.get("/{plan_id}/pacing")
+async def get_pacing_catalog(plan_id: str, user_id: str = Depends(get_user_id)):
+    """Current pacing + the styles this goal can switch to."""
+    plan = _store(user_id).get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
+    pacing = normalize_pacing(plan.get("pacing"), plan.get("goal"))
+    return {
+        "status": "success",
+        "pacing": pacing,
+        "styles": catalog_styles(plan.get("goal")),
+    }
+
+
+@router.post("/{plan_id}/pacing/options")
+async def get_pacing_options(
+    plan_id: str,
+    request: PlanCheckinRequest = PlanCheckinRequest(),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Progress verdict + 2–3 pacing option cards.
+
+    Does not change the plan. Staging an option is a separate call so the user
+    still Accepts before anything lands.
+    """
+    plan = _store(user_id).get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
+
+    if request.current_weight_lb is not None:
+        try:
+            save_weigh_in(
+                db,
+                user_id,
+                request.current_weight_lb,
+                date=request.weigh_in_date or user_time.today(db, user_id),
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    entries = _recent_macro_entries(user_id, days=CHECKIN_DAYS)
+    facts = checkin_facts(plan, entries)
+    weigh_ins = recent_weigh_ins(db, user_id, days=CHECKIN_DAYS + 7)
+    progress = detect_progress(plan, facts, weigh_ins)
+    options = pacing_options(plan, progress)
+    return {
+        "status": "success",
+        "progress": progress,
+        "pacing": normalize_pacing(plan.get("pacing"), plan.get("goal")),
+        "options": options,
+    }
+
+
+@router.post("/{plan_id}/pacing/stage")
+async def stage_pacing_option(
+    plan_id: str,
+    request: StagePacingOptionRequest,
+    user_id: str = Depends(get_user_id),
+):
+    """Stage one pacing option as a suggestion set waiting for Accept."""
+    plan = _store(user_id).get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
+
+    if request.current_weight_lb is not None:
+        try:
+            save_weigh_in(db, user_id, request.current_weight_lb)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    entries = _recent_macro_entries(user_id, days=CHECKIN_DAYS)
+    facts = checkin_facts(plan, entries)
+    progress = detect_progress(plan, facts, recent_weigh_ins(db, user_id, days=CHECKIN_DAYS + 7))
+    options = pacing_options(plan, progress)
+    chosen = next((o for o in options if o["id"] == request.option_id), None)
+    if not chosen:
+        raise HTTPException(status_code=404, detail="Pacing option not found. Refresh options and try again.")
+
+    normalized, rejected = normalize_edits(plan, chosen["edits"])
+    if not normalized:
+        return {"status": "success", "suggestion": None, "rejected": rejected}
+
+    record = SuggestionStore(db, user_id).create(
+        plan=plan,
+        edits=normalized,
+        summary=f"Pacing: {chosen['title']}",
+        conversation_id=None,
+    )
+    return {
+        "status": "success",
+        "suggestion": record,
+        "pending_count": pending_count(record),
+        "option": chosen,
+        "rejected": rejected,
+    }
+
+
+@router.post("/{plan_id}/pacing")
+async def set_pacing_now(
+    plan_id: str,
+    request: SetPacingRequest,
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Apply a pacing style immediately from the Roadmap picker.
+
+    This is the explicit user choice path (not a silent coach write). Optional
+    calorie_delta adjusts targets in the same save.
+    """
+    plan = _store(user_id).get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Nutrition plan not found")
+
+    payload = {k: v for k, v in request.dict(exclude_unset=True).items() if k != "calorie_delta"}
+    merged = {**(plan.get("pacing") or {}), **payload}
+    # Style-only picks (Roadmap catalog) should get that style's defaults —
+    # carrying over Hold's weekly_step=0 onto Steady left the ramp flat.
+    if "style" in payload and "weekly_step" not in payload:
+        merged.pop("weekly_step", None)
+    pacing = normalize_pacing(merged, plan.get("goal"))
+    patch: dict = {"pacing": pacing}
+
+    if request.calorie_delta:
+        targets = dict(plan.get("targets") or {})
+        base = float(targets.get("calories") or 0)
+        if base:
+            targets["calories"] = int(max(1200, min(4500, round(base + request.calorie_delta))))
+            patch["targets"] = targets
+
+    updated = _apply_patch(user_id, plan_id, patch)
+    return {
+        "status": "success",
+        "plan": apply_slot_targets(updated),
+        "pacing": pacing,
+    }
 
 
 @router.post("/{plan_id}/suggest-fast-food")

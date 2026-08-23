@@ -202,12 +202,19 @@ class UserProfile(BaseModel):
     family_obligations: Optional[bool] = None
     family_obligations_note: Optional[str] = None
     typical_stress_level: Optional[int] = None
+    # Target hours per night. Optional and never asked during onboarding — when
+    # unset, the recovery digest infers a baseline from logged sleep instead,
+    # and cancels sleep out entirely if too little has been logged to infer one.
+    sleep_goal: Optional[float] = None
     stress_fluctuates: Optional[bool] = None
     preferred_workout_time: Optional[str] = None
     preferred_session_length: Optional[str] = None
     preferred_workout_frequency: Optional[str] = None
     coaching_style_preference: Optional[str] = None
     dietary_preference: Optional[str] = None
+    # IANA zone reported by the device, e.g. "America/New_York". Used for
+    # server-side date defaults; never asked of the user.
+    timezone: Optional[str] = None
     dietary_preference_other: Optional[str] = None
     willingness_to_track: Optional[str] = None
     progress_feeling: Optional[str] = None

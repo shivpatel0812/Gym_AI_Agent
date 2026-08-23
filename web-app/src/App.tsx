@@ -11,6 +11,7 @@ import AboutMyselfPage from './pages/AboutMyselfPage'
 import GeneralAnalysisPage from './pages/GeneralAnalysisPage'
 import ChatbotPage from './pages/ChatbotPage'
 import PlanGeneratorPage from './pages/PlanGeneratorPage'
+import PlanRoadmapPage from './pages/PlanRoadmapPage'
 import BodyScanPage from './pages/BodyScanPage'
 import AuthenticatedLayout from './layouts/AuthenticatedLayout'
 
@@ -44,6 +45,7 @@ function App() {
               <Routes>
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/plan-generator" element={<PlanGeneratorPage />} />
+                <Route path="/plan" element={<PlanRoadmapPage />} />
                 <Route path="/workouts" element={<WorkoutsPage />} />
                 <Route path="/activity" element={<ActivityPage />} />
                 <Route path="/nutrition" element={<NutritionPage />} />
