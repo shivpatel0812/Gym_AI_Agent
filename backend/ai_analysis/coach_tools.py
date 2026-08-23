@@ -13,6 +13,7 @@ the routers, because routers/ already imports ai_analysis/.
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
+from field_aliases import normalize_records
 from nutrition.meal_math import anchor_kind, anchor_macros
 
 # Caps to keep tool results from blowing up the context window
@@ -93,7 +94,9 @@ class CoachToolbox:
         )
         rows = [{"id": d.id, **(d.to_dict() or {})} for d in docs]
         rows.sort(key=lambda r: r.get("date") or "")
-        return rows
+        # Older web-written documents use different field names for the same
+        # concepts; normalize here so no tool below has to know that.
+        return normalize_records(collection, rows)
 
     # --- tools ------------------------------------------------------------
 
@@ -853,6 +856,7 @@ WRITE_TOOLS = {"propose_nutrition_edits"}
 
 EDIT_OPS = [
     "update_targets",
+    "set_pacing",
     "add_meal_anchor", "update_meal_anchor", "remove_meal_anchor",
     "add_flexible_meal", "update_flexible_meal", "remove_flexible_meal",
     "add_go_to", "update_go_to", "remove_go_to",
@@ -911,7 +915,10 @@ NUTRITION_WRITE_SCHEMAS = [
                                     "type": "object",
                                     "description": (
                                         "The new values. For update_targets: any of calories, "
-                                        "protein, carbs, fats, fiber. For meal anchors: slot, "
+                                        "protein, carbs, fats, fiber. For set_pacing: "
+                                        "{\"pacing\": {\"style\": \"steady|hold|diet_break|"
+                                        "refeed|alternate_day|aggressive\", \"weekly_step\": N}}. "
+                                        "For meal anchors: slot, "
                                         "label, foods[{name, amount, calories, protein, carbs, "
                                         "fats}], frequency, days, notes. For flexible meals: "
                                         "name, frequency, calorie_min, calorie_max, protein_min, "

@@ -24,6 +24,8 @@ from .progression_engine import ProgressionEngine
 from .reasoning_generator import ReasoningGenerator
 from .training_focus import TrainingFocusStore
 from .plan_context import PlanContextResolver, PlanContext
+from .readiness_context import ReadinessResolver, ReadinessContext
+from .weight_estimator import days_since_session
 
 
 class WorkoutRecommender:
@@ -66,6 +68,9 @@ class WorkoutRecommender:
         self.focus_store = TrainingFocusStore(db, user_id)
         # Single place that resolves Active Plan intent for an exercise
         self.plan_resolver = PlanContextResolver(db, user_id, self.focus_store)
+        # Single place that resolves how recovered the user is. Reads one
+        # cached document; neutral whenever that document is missing or stale.
+        self.readiness_resolver = ReadinessResolver(db, user_id)
 
     def _normalize_exercise_sets(self, ex: Dict) -> List[Dict]:
         sets = ex.get("sets")
@@ -124,6 +129,40 @@ class WorkoutRecommender:
                 })
         result.sort(key=lambda item: item.get("date") or "", reverse=True)
         return result
+
+    @staticmethod
+    def _last_session_summary(session: Optional[Dict]) -> Optional[Dict]:
+        """
+        The session this recommendation is a response to, trimmed for display.
+
+        Returns None rather than an empty shell when there is nothing to show,
+        so the client can simply test for the key.
+        """
+        if not session:
+            return None
+
+        sets = [
+            {
+                "set_number": s.get("set_number") or i + 1,
+                "reps": s.get("reps"),
+                "weight": s.get("weight"),
+            }
+            for i, s in enumerate(session.get("sets") or [])
+            if (s.get("reps") or 0) > 0
+        ]
+        if not sets and session.get("time") is None:
+            return None
+
+        summary = {"date": session.get("date"), "sets": sets}
+        if session.get("time") is not None:
+            summary["time"] = session.get("time")
+        if session.get("speed") is not None:
+            summary["speed"] = session.get("speed")
+
+        days = days_since_session(session.get("date"))
+        if days is not None:
+            summary["days_ago"] = days
+        return summary
 
     def get_or_create_summary(self, force_refresh: bool = False) -> Dict:
         """
@@ -256,6 +295,8 @@ class WorkoutRecommender:
         if day_intensity is None:
             day_intensity = plan_context.day_intensity
 
+        readiness = self.readiness_resolver.resolve()
+
         # Use deterministic progression engine for all cases
         progression_result = self.progression_engine.compute_recommendation(
             exercise_id=exercise_id,
@@ -270,6 +311,7 @@ class WorkoutRecommender:
             exercise_record=exercise_record,
             top_lifts=profile.get("top_lifts") if profile else None,
             stale_last_session=stale_last_session,
+            readiness=readiness,
         )
 
         # Generate reasoning text (LLM-optional, template fallback)
@@ -302,6 +344,13 @@ class WorkoutRecommender:
                 "progression_type": progression_result.decision.value,
                 "confidence": progression_result.confidence,
             }
+            if progression_result.strategy:
+                recommendation["strategy"] = progression_result.strategy
+            if progression_result.branch:
+                recommendation["branch"] = progression_result.branch.to_dict()
+            rep_range = progression_result.reasoning_context.get("rep_range")
+            if rep_range:
+                recommendation["rep_range"] = list(rep_range)
             if progression_result.reasoning_context.get("estimated_from_top_lifts"):
                 recommendation["estimated_from_top_lifts"] = True
             if progression_result.reasoning_context.get("estimated_from_stale_history"):
@@ -320,10 +369,23 @@ class WorkoutRecommender:
         if progression_result.reasoning_context.get("has_implausible_data"):
             recommendation["has_implausible_data"] = True
 
+        # What the recommendation is measured against. A prescription shown on
+        # its own is a number with no reference point; the session it is a
+        # response to belongs next to it.
+        last_session = self._last_session_summary(
+            recent_exercise_data[0] if recent_exercise_data else stale_last_session
+        )
+        if last_session:
+            recommendation["last_session"] = last_session
+
         # Surface the resolved intent so the UI can explain why the target
         # rep range or intensity looks the way it does
         if plan_context.source != "default":
             recommendation["plan_context"] = plan_context.to_dict()
+
+        # Same for capacity, but only when it actually had something to say.
+        if readiness.usable:
+            recommendation["readiness_context"] = readiness.to_dict()
 
         return {
             "status": "success",

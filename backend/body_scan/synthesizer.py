@@ -336,11 +336,36 @@ GENERIC_KEYWORDS = (
 )
 
 
-def classify_exercise(name: str) -> Optional[str]:
-    """Best-effort muscle group for a logged exercise name, or None."""
+# The shared catalog splits the arms; body-scan emphasis groups them.
+_CATALOG_GROUP_ALIASES = {"biceps": "arms", "triceps": "arms", "forearms": "arms"}
+
+
+def classify_exercise(name: str, exercise_id: str = "") -> Optional[str]:
+    """
+    Best-effort muscle group for a logged exercise name, or None.
+
+    Defers to the maintained exercise catalog first — the same classifier the
+    recommender uses — so a rename or a new entry there is picked up here for
+    free. The keyword tables below remain as a fallback for names the catalog
+    does not recognise, which is why they cannot simply be deleted: they still
+    catch free-text exercises a user typed themselves.
+    """
     name = str(name or "").lower().strip()
-    if not name:
+    if not name and not exercise_id:
         return None
+
+    try:
+        from ai_analysis.workout_recommender.exercise_metadata import (
+            resolve_exercise_metadata,
+        )
+
+        group = (resolve_exercise_metadata(exercise_id, name).muscle_group or "").lower()
+        group = _CATALOG_GROUP_ALIASES.get(group, group)
+        if group and group not in ("unknown", "cardio"):
+            return group
+    except Exception:
+        pass  # Fall through to keywords rather than losing the classification.
+
     for table in (SPECIFIC_KEYWORDS, GENERIC_KEYWORDS):
         for group, keys in table:
             if any(k in name for k in keys):
@@ -353,7 +378,10 @@ def summarize_training_history(sessions: List[Dict[str, Any]]) -> Dict[str, Any]
     counts = {g: 0 for g in ("chest", "back", "shoulders", "arms", "legs", "glutes", "core")}
     for session in sessions or []:
         for ex in session.get("exercises") or []:
-            group = classify_exercise(ex.get("name") or ex.get("exercise_name"))
+            group = classify_exercise(
+                ex.get("name") or ex.get("exercise_name"),
+                ex.get("exercise_id") or "",
+            )
             if group:
                 counts[group] += 1
     total = sum(counts.values()) or 1

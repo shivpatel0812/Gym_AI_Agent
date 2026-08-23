@@ -106,6 +106,15 @@ export function describeEditBullet(edit: NutritionPlanEdit): string {
     });
     return parts.join(" · ") || edit.title;
   }
+  if (edit.op === "set_pacing") {
+    const pacing = edit.payload?.pacing || edit.payload || {};
+    const label = pacing.label || pacing.style || "pacing";
+    const step = pacing.weekly_step;
+    if (step) {
+      return `Pacing → ${label} (${step > 0 ? "+" : ""}${step} kcal/wk)`;
+    }
+    return `Pacing → ${label}`;
+  }
   if (edit.op.startsWith("remove_")) {
     const foods = (edit.before?.foods || []).map((f: any) => f?.name).filter(Boolean);
     return foods.length ? `Remove ${foods.join(" + ")}` : edit.title;

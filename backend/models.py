@@ -202,6 +202,10 @@ class UserProfile(BaseModel):
     family_obligations: Optional[bool] = None
     family_obligations_note: Optional[str] = None
     typical_stress_level: Optional[int] = None
+    # Target hours per night. Optional and never asked during onboarding — when
+    # unset, the recovery digest infers a baseline from logged sleep instead,
+    # and cancels sleep out entirely if too little has been logged to infer one.
+    sleep_goal: Optional[float] = None
     stress_fluctuates: Optional[bool] = None
     preferred_workout_time: Optional[str] = None
     preferred_session_length: Optional[str] = None

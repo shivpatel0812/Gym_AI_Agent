@@ -59,13 +59,32 @@ def _chat_summary(user_id: str, request: "ChatRequest") -> dict:
     """
     analyzer = FitnessDataAnalyzer(db, user_id)
     if request.year and request.month:
-        return analyzer.build_complete_summary(request.year, request.month)
-    window = (
-        PLAN_MODE_CONTEXT_WINDOW_DAYS
-        if getattr(request, "mode", None) in ("plan", "nutrition")
-        else CHAT_CONTEXT_WINDOW_DAYS
-    )
-    return analyzer.build_rolling_summary(window_days=window)
+        summary = analyzer.build_complete_summary(request.year, request.month)
+    else:
+        window = (
+            PLAN_MODE_CONTEXT_WINDOW_DAYS
+            if getattr(request, "mode", None) in ("plan", "nutrition")
+            else CHAT_CONTEXT_WINDOW_DAYS
+        )
+        summary = analyzer.build_rolling_summary(window_days=window)
+
+    # The shared priority, so this conversation argues for the same thing Home
+    # and the plan do. Read from cache — never recomputed to answer a message.
+    state = _user_state_for_chat(user_id)
+    if state:
+        summary["user_state"] = state
+    return summary
+
+
+def _user_state_for_chat(user_id: str) -> Optional[dict]:
+    """Cached user_state, or None. Never blocks or fails a chat turn."""
+    try:
+        from state import UserStateBuilder
+
+        return UserStateBuilder(db, user_id).read()
+    except Exception as e:
+        print(f"Warning: user_state unavailable for chat: {e}")
+        return None
 
 
 def _chat_history(store: ConversationStore, request: "ChatRequest") -> list:

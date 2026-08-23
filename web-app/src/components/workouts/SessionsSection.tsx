@@ -342,8 +342,19 @@ function lastWorkoutHasWeight(lastData: any): boolean {
   return sets.some((s: any) => Number(s.weight) > 0);
 }
 
+/**
+ * Whether a recommendation looks like a stale copy of the last workout.
+ *
+ * Holding the previous numbers is a deliberate decision now — the engine says
+ * so when a lifter is consolidating or backing off — so those are excluded.
+ * Without this a genuine hold reads as a stale response and triggers a refetch
+ * that returns the same, correct, answer.
+ */
+const DELIBERATE_HOLDS = new Set(["maintain", "fill_band", "deload", "light_day"]);
+
 function recCopiesLastWorkout(rec: any, lastSets: { reps: number; weight?: number }[]) {
   if (!rec?.sets?.length || !lastSets.length) return false;
+  if (DELIBERATE_HOLDS.has(rec.progression_type)) return false;
   const n = Math.min(3, rec.sets.length, lastSets.length);
   return Array.from({ length: n }).every((_, i) => {
     const recReps = Number(rec.sets[i].reps) || 0;
@@ -377,10 +388,45 @@ function toStoredRecommendation(rec: any) {
     needs_starting_weight: rec.needs_starting_weight,
     estimated_from_stale_history: rec.estimated_from_stale_history,
     estimated_from_top_lifts: rec.estimated_from_top_lifts,
+    strategy: rec.strategy,
+    branch: rec.branch,
+    rep_range: rec.rep_range,
+    last_session: rec.last_session,
     time: rec.time,
     speed: rec.speed,
     generated_at: rec.generated_at || new Date().toISOString(),
   };
+}
+
+/** A set's rep target: the band when there is one, the single aim otherwise. */
+function formatSetReps(set: any): string {
+  const low = Number(set?.rep_low);
+  const high = Number(set?.rep_high);
+  if (low > 0 && high > 0 && high > low) return `${low}-${high}`;
+  return `${set?.reps ?? 0}`;
+}
+
+/** The sets the recommendation is a response to, newest session, for display. */
+function recLastSessionSets(rec: any): { reps: number; weight?: number }[] {
+  const raw = rec?.last_session?.sets;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((s: any) => Number(s?.reps) > 0)
+    .map((s: any) => ({
+      reps: Number(s.reps) || 0,
+      weight: s.weight != null ? Number(s.weight) : undefined,
+    }));
+}
+
+function formatSessionAgo(lastSession: any): string | null {
+  if (!lastSession) return null;
+  const days = Number(lastSession.days_ago);
+  if (!Number.isFinite(days)) return null;
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days} days ago`;
+  const weeks = Math.round(days / 7);
+  return weeks === 1 ? "last week" : `${weeks} weeks ago`;
 }
 
 function hydrateAiRecommendations(exercises: SessionExercise[]) {
@@ -2276,8 +2322,16 @@ export default function SessionsSection({
                           <p className="text-xs text-[#8E8E93] mt-0.5">
                             {categoryLabel} · {roleLabel}
                           </p>
+                          {/* The open recommendation carries its own "Last time"
+                              row, so this only fills in when that one is absent —
+                              rather than vanishing whenever a recommendation
+                              exists, which used to hide the reference point at
+                              exactly the moment the user was reading the numbers
+                              it referred to. */}
                           {formatLastPerformance(lastData) &&
-                            (!aiRec || isCollapsed) && (
+                            (isCollapsed ||
+                              !aiRec ||
+                              recLastSessionSets(aiRec).length === 0) && (
                             <p className="text-xs text-[#5EEAD4]/90 mt-0.5 leading-relaxed">
                               Last {formatShortDate(lastData.date)}:{" "}
                               {formatLastPerformance(lastData)}
@@ -2433,32 +2487,90 @@ export default function SessionsSection({
                                 )}
 
                                 {aiRec.sets && Array.isArray(aiRec.sets) && (
-                                  <div className="flex gap-2 mb-3">
-                                    {aiRec.sets.slice(0, 3).map(
-                                      (set: any, setIdx: number) => (
-                                        <div
-                                          key={setIdx}
-                                          className="rounded-xl bg-[#0B0C10]/60 border border-[#5EEAD4]/25 px-4 py-2.5 min-w-[80px]"
-                                        >
-                                          <p className="text-[10px] font-bold uppercase tracking-wide text-[#5EEAD4]/60 mb-1">
-                                            Set {set.set_number || setIdx + 1}
-                                          </p>
-                                          <p className="text-white">
-                                            <span className="text-base font-bold">
-                                              {set.reps}
+                                  <div className="mb-3 space-y-2">
+                                    {/* What the prescription is a response to. Without
+                                        it the numbers below are a bare instruction. */}
+                                    {recLastSessionSets(aiRec).length > 0 && (
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-[10px] font-bold uppercase tracking-wide text-[#636366] w-[68px] flex-shrink-0">
+                                          Last time
+                                        </span>
+                                        <div className="flex gap-1.5 flex-wrap">
+                                          {recLastSessionSets(aiRec)
+                                            .slice(0, 4)
+                                            .map((set, setIdx) => (
+                                              <span
+                                                key={setIdx}
+                                                className="rounded-lg bg-[#0B0C10]/40 border border-[#2A2D35] px-2.5 py-1 text-xs text-[#8E8E93]"
+                                              >
+                                                {set.reps}
+                                                {set.weight != null && set.weight > 0
+                                                  ? ` × ${set.weight}`
+                                                  : ""}
+                                              </span>
+                                            ))}
+                                          {formatSessionAgo(aiRec.last_session) && (
+                                            <span className="self-center text-[10px] text-[#636366]">
+                                              {formatSessionAgo(aiRec.last_session)}
                                             </span>
-                                            <span className="text-xs text-[#8E8E93] ml-1">
-                                              reps
-                                            </span>
-                                          </p>
-                                          {set.weight != null && set.weight > 0 && (
-                                            <p className="text-sm font-bold text-[#5EEAD4]">
-                                              {set.weight} lbs
-                                            </p>
                                           )}
                                         </div>
-                                      )
+                                      </div>
                                     )}
+
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] font-bold uppercase tracking-wide text-[#5EEAD4]/70 w-[68px] flex-shrink-0">
+                                        This time
+                                      </span>
+                                      <div className="flex gap-2 flex-wrap">
+                                        {aiRec.sets.slice(0, 4).map(
+                                          (set: any, setIdx: number) => (
+                                            <div
+                                              key={setIdx}
+                                              className="rounded-xl bg-[#0B0C10]/60 border border-[#5EEAD4]/25 px-3.5 py-2 min-w-[76px]"
+                                            >
+                                              <p className="text-[10px] font-bold uppercase tracking-wide text-[#5EEAD4]/60 mb-0.5">
+                                                {set.role === "top"
+                                                  ? "Top set"
+                                                  : set.role === "backoff"
+                                                  ? "Backoff"
+                                                  : `Set ${set.set_number || setIdx + 1}`}
+                                              </p>
+                                              <p className="text-white">
+                                                <span className="text-base font-bold">
+                                                  {formatSetReps(set)}
+                                                </span>
+                                                <span className="text-xs text-[#8E8E93] ml-1">
+                                                  reps
+                                                </span>
+                                              </p>
+                                              {set.weight != null && set.weight > 0 && (
+                                                <p className="text-sm font-bold text-[#5EEAD4]">
+                                                  {set.weight} lbs
+                                                </p>
+                                              )}
+                                            </div>
+                                          )
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* The branch: what to do when the first set says
+                                    the load was wrong, or what earns the next jump. */}
+                                {aiRec.branch?.condition && aiRec.branch?.action && (
+                                  <div className="mb-3 flex items-start gap-2 rounded-xl border border-[#2A2D35] bg-[#0B0C10]/40 px-3 py-2">
+                                    <MdBolt
+                                      size={14}
+                                      className="mt-0.5 flex-shrink-0 text-[#FF6B35]"
+                                    />
+                                    <p className="text-xs leading-relaxed text-[#8E8E93]">
+                                      <span className="text-white">
+                                        {aiRec.branch.condition}
+                                      </span>{" "}
+                                      → {aiRec.branch.action}
+                                    </p>
                                   </div>
                                 )}
 

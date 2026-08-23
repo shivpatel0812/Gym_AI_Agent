@@ -72,6 +72,7 @@ SCALAR_OPS = {
     "update_preferences": "preferences",
     "update_food_priorities": "food_priorities",
     "update_typical_day_notes": "typical_day_notes",
+    "set_pacing": "pacing",
 }
 
 VALID_OPS = set(SCALAR_OPS)
@@ -217,6 +218,24 @@ def normalize_edits(plan: Dict[str, Any], raw_edits: Any) -> Tuple[List[Dict[str
                 continue
             edit.update({"payload": result["payload"], "before": result["before"],
                          "title": result["title"], "field": "targets"})
+            edits.append(edit)
+            continue
+
+        if op == "set_pacing":
+            from nutrition.pacing import STYLE_LABELS, normalize_pacing
+
+            raw_pacing = payload.get("pacing") if "pacing" in payload else payload
+            if not isinstance(raw_pacing, dict):
+                rejected.append("set_pacing: needs a pacing object")
+                continue
+            pacing = normalize_pacing(raw_pacing, plan.get("goal"))
+            label = STYLE_LABELS.get(pacing["style"], pacing["style"])
+            edit.update({
+                "payload": {"pacing": pacing},
+                "before": _trim_before(plan.get("pacing")),
+                "title": f"Pacing → {label}",
+                "field": "pacing",
+            })
             edits.append(edit)
             continue
 

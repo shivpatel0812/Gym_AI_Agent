@@ -76,6 +76,18 @@ export interface SlotSection {
   anchors: DayMapSlot[];
   goTos: DayMapSlot[];
   places: FastFoodPlace[];
+  /**
+   * This meal's own share of the day, resolved by the backend. Present on every
+   * slot the user actually eats, including uncertain ones — not knowing what you
+   * will eat is not the same as not knowing how much you need.
+   */
+  targetCalorieMin?: number | null;
+  targetCalorieMax?: number | null;
+  targetProteinMin?: number | null;
+  /** e.g. "700–900 kcal · 45g+ protein" */
+  targetHeadline?: string | null;
+  /** The sentence for this block, written for this slot and its current state. */
+  description?: string | null;
 }
 
 export interface DayMapStack {
@@ -401,6 +413,11 @@ export function buildDayMap(
       anchors: anchorsBySlot[id] || [],
       goTos: goTosBySlot[id] || [],
       places,
+      targetCalorieMin: profile.target_calorie_min ?? profile.calorie_min ?? null,
+      targetCalorieMax: profile.target_calorie_max ?? profile.calorie_max ?? null,
+      targetProteinMin: profile.target_protein_min ?? profile.protein_min ?? null,
+      targetHeadline: profile.target_headline ?? null,
+      description: profile.description ?? null,
     };
   });
 

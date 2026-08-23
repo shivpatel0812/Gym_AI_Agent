@@ -20,6 +20,15 @@ from ai_analysis.conversation_store import ConversationStore
 from ai_analysis.profile_transformer import get_user_profile_for_ai
 from ai_analysis.data_analyzer import FitnessDataAnalyzer
 from ai_analysis.workout_recommender.plan_context import PlanContextResolver
+from ai_analysis.workout_recommender import WorkoutRecommender
+from ai_analysis.plan_projection import (
+    DEFAULT_PROJECTION_WEEKS,
+    MAX_PROJECTION_WEEKS,
+    PlanProjector,
+    measure_adherence,
+)
+from nutrition.plan_store import NutritionPlanStore
+from nutrition.pacing import build_paced_trajectory
 
 router = APIRouter(prefix="/api/training-plan", tags=["training-plan"])
 
@@ -48,6 +57,14 @@ class UpdatePlanRequest(BaseModel):
     duration_weeks: Optional[int] = None
     weekly_schedule: Optional[dict] = None
     days: Optional[List[dict]] = None
+
+
+def _recommender(user_id: str) -> WorkoutRecommender:
+    """The recommender, for its history reader and its progression engine."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    return WorkoutRecommender(db, user_id, api_key)
 
 
 def _builder() -> PlanBuilder:
@@ -317,6 +334,130 @@ async def get_todays_planned_workout(user_id: str = Depends(get_user_id)):
         "estimated_duration_minutes": day.get("estimated_duration_minutes"),
         "already_logged": already_logged,
         "exercises": exercises,
+    }
+
+
+@router.get("/projection")
+async def get_plan_projection(
+    weeks: Optional[int] = Query(None, description="Weeks to project; defaults to the plan's remaining duration"),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Where the active plan leads, week by week.
+
+    Strength comes from running the real ProgressionEngine forward, so the
+    numbers are what the app will actually prescribe rather than a fitted
+    curve. Nutrition is projected onto the same week axis so a surplus and the
+    lifts it is meant to feed can be read against one calendar.
+    """
+    store = PlanStore(db, user_id)
+    plan = store.get_active()
+    if not plan:
+        return {"status": "no_plan", "projection": None}
+
+    progress = PlanStore.progress(plan)
+    remaining = None
+    if progress.get("total_weeks") and progress.get("current_week"):
+        remaining = max(1, int(progress["total_weeks"]) - int(progress["current_week"]) + 1)
+
+    horizon = weeks or remaining or DEFAULT_PROJECTION_WEEKS
+    horizon = max(1, min(MAX_PROJECTION_WEEKS, int(horizon)))
+
+    recommender = _recommender(user_id)
+    profile = recommender.data_fetcher.get_user_profile() or {}
+    user_goal = profile.get("primary_goal") or "Build Muscle"
+
+    # How often each plan day comes round, so a lift trained twice a week
+    # projects twice as fast as one trained once.
+    day_frequency: dict = {}
+    for day_name in (plan.get("weekly_schedule") or {}).values():
+        if day_name and str(day_name).strip().lower() != "rest":
+            day_frequency[day_name] = day_frequency.get(day_name, 0) + 1
+
+    histories: dict = {}
+    for day in plan.get("days") or []:
+        for exercise in day.get("exercises") or []:
+            ex_id = exercise.get("exercise_id")
+            if ex_id and ex_id not in histories:
+                histories[ex_id] = recommender._get_exercise_history(ex_id, days=60)
+
+    adherence = measure_adherence(histories, user_goal)
+    projector = PlanProjector(recommender.progression_engine)
+
+    days_out = []
+    for day in plan.get("days") or []:
+        day_name = day.get("day_name") or "Workout"
+        per_week = day_frequency.get(day_name, 1)
+        exercises = []
+        for exercise in day.get("exercises") or []:
+            ex_id = exercise.get("exercise_id")
+            if not ex_id:
+                continue
+            rep_range = exercise.get("target_rep_range")
+            projection = projector.project_exercise(
+                exercise_id=ex_id,
+                exercise_name=exercise.get("exercise_name") or ex_id,
+                day_name=day_name,
+                history=histories.get(ex_id) or [],
+                user_goal=user_goal,
+                weeks=horizon,
+                sessions_per_week=per_week,
+                num_sets=exercise.get("sets") or 3,
+                focus_goal=exercise.get("goal"),
+                rep_range_override=(
+                    tuple(rep_range) if isinstance(rep_range, (list, tuple)) and len(rep_range) == 2
+                    else None
+                ),
+                adherence=adherence.rate,
+                top_lifts=profile.get("top_lifts"),
+            )
+            exercises.append({
+                **projection.to_dict(),
+                "priority": exercise.get("priority"),
+                "goal": exercise.get("goal"),
+                "sets": exercise.get("sets"),
+                "target_rep_range": rep_range,
+                "notes": exercise.get("notes"),
+            })
+        days_out.append({
+            "day_name": day_name,
+            "focus": day.get("focus"),
+            "day_goal": day.get("day_goal"),
+            "day_type": day.get("day_type"),
+            "goal": day.get("goal"),
+            "sessions_per_week": per_week,
+            "exercises": exercises,
+        })
+
+    nutrition_plan = NutritionPlanStore(db, user_id).get_active()
+    nutrition = None
+    if nutrition_plan:
+        nutrition = build_paced_trajectory(
+            nutrition_plan,
+            weeks=horizon,
+            profile=profile,
+        )
+        nutrition["plan_id"] = nutrition_plan.get("id")
+        nutrition["plan_name"] = (
+            nutrition_plan.get("plan_name")
+            or nutrition_plan.get("goal_detail")
+            or nutrition_plan.get("goal")
+        )
+
+    return {
+        "status": "success",
+        "projection": {
+            "weeks": horizon,
+            "plan_id": plan.get("id"),
+            "plan_name": plan.get("plan_name"),
+            "primary_goal": plan.get("primary_goal"),
+            "strategy": plan.get("strategy"),
+            "guidelines": plan.get("guidelines"),
+            "progress": progress,
+            "adherence": adherence.to_dict(),
+            "days": days_out,
+            "nutrition": nutrition,
+        },
     }
 
 

@@ -101,17 +101,45 @@ class ReasoningGenerator:
             parts.append(f"Previous weight: {ctx['prev_weight']} lbs")
         if "new_weight" in ctx:
             parts.append(f"New weight: {ctx['new_weight']} lbs")
+        if "weight" in ctx:
+            parts.append(f"Working weight: {ctx['weight']} lbs")
         if "prev_reps" in ctx:
-            parts.append(f"Previous reps: {ctx['prev_reps']}")
+            parts.append(f"Reps achieved last session: {ctx['prev_reps']}")
         if "new_reps" in ctx:
             parts.append(f"New reps: {ctx['new_reps']}")
+        # The band and the aim are what make this readable as coaching rather
+        # than arithmetic, so the model needs both to explain the decision.
+        if "aim" in ctx:
+            parts.append(f"Reps to aim for on every set this session: {ctx['aim']}")
+        if "rep_range" in ctx:
+            low, high = ctx["rep_range"]
+            parts.append(f"Working rep band: {low}-{high} (a sweep of {high} earns more weight)")
+        if "outcome" in ctx:
+            parts.append(f"How last session landed against that band: {ctx['outcome']}")
+        if "earned_by_streak" in ctx:
+            parts.append(
+                f"Sessions in a row finishing at the top of the band: {ctx['earned_by_streak']}"
+            )
         if "consecutive_failures" in ctx:
-            parts.append(f"Consecutive failures: {ctx['consecutive_failures']}")
+            parts.append(f"Consecutive sessions going backwards: {ctx['consecutive_failures']}")
         if "deload_pct" in ctx:
             parts.append(f"Deload percentage: {int(ctx['deload_pct'] * 100)}%")
 
-        parts.append("Explain WHY in 1-2 sentences. Do NOT suggest different numbers.")
+        parts.append(
+            "Explain WHY in 1-2 sentences, referring to what they actually did last "
+            "session. Do NOT suggest different numbers."
+        )
         return "\n".join(parts)
+
+    @staticmethod
+    def _describe_reps(reps) -> str:
+        """Render last session's reps the way a person would say them."""
+        values = [int(r) for r in (reps or []) if r]
+        if not values:
+            return ""
+        if len(set(values)) == 1:
+            return f"{values[0]} on every set"
+        return "/".join(str(v) for v in values)
 
     def _template_reasoning(
         self,
@@ -158,19 +186,53 @@ class ReasoningGenerator:
         if decision == Decision.INCREASE_WEIGHT:
             prev = ctx.get("prev_weight", 0)
             new = ctx.get("new_weight", 0)
-            return (
-                f"You hit the top of your rep range at {prev} lbs. "
-                f"Moving up to {new} lbs and resetting reps."
+            low = (ctx.get("rep_range") or (None, None))[0]
+            streak = ctx.get("earned_by_streak")
+            opening = (
+                f"Two sessions running at the top of your range at {prev:g} lbs — that's earned."
+                if streak
+                else f"You swept the top of your rep range at {prev:g} lbs."
             )
+            tail = f" Back down to {low} reps to start the new range." if low else " Resetting reps."
+            return f"{opening} Moving up to {new:g} lbs.{tail}"
 
         if decision == Decision.INCREASE_REPS:
             weight = ctx.get("weight", 0)
+            aim = ctx.get("aim")
+            band = ctx.get("band")
+            prev_reps = ctx.get("prev_reps") or []
+            reason = ctx.get("reason")
+
+            if reason == "close_out_band" and aim:
+                return (
+                    f"You were a rep short of a clean sweep at {weight:g} lbs. "
+                    f"Get {aim} on every set today and the weight goes up."
+                )
+            if reason == "advance_in_band" and aim:
+                did = self._describe_reps(prev_reps)
+                did_bit = f"Last time you got {did} at {weight:g} lbs. " if did else ""
+                band_bit = f" Anything in the {band} range counts." if band else ""
+                return f"{did_bit}Same weight, aim {aim} across all sets.{band_bit}"
+            if reason == "retry_after_failure" and aim:
+                return (
+                    f"Reps slipped last session. Staying at {weight:g} lbs "
+                    f"and going for {aim} again before changing anything."
+                )
             if weight:
                 return (
-                    f"Matched your previous session. "
-                    f"Adding a rep per set at the same weight ({weight} lbs)."
+                    f"Holding {weight:g} lbs and working further into your rep range."
                 )
-            return "Matched your previous session. Adding a rep per set at the same weight."
+            return "Holding the same weight and working further into your rep range."
+
+        if decision == Decision.FILL_BAND:
+            weight = ctx.get("weight", 0)
+            low = (ctx.get("rep_range") or (None, None))[0]
+            if low:
+                return (
+                    f"Some sets fell under {low} reps last time. "
+                    f"Stay at {weight:g} lbs and get every set over {low} before adding weight."
+                )
+            return f"Stay at {weight:g} lbs and even out your sets before adding weight."
 
         if decision == Decision.MAINTAIN:
             failures = ctx.get("consecutive_failures", 0)

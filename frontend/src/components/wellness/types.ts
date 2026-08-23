@@ -31,6 +31,24 @@ export interface SleepEntry {
   notes?: string;
 }
 
+/**
+ * The user's personal sleep target, computed on the backend.
+ *
+ * `status` is "ok" only when enough nights have been logged to infer a target.
+ * Anything else means the metric is cancelled: show no target rather than a
+ * default, since a made-up number reads as something the app knows about you.
+ */
+export interface SleepBaseline {
+  metric: string;
+  target: number | null;
+  samples: number;
+  confidence: number;
+  status: "ok" | "insufficient_data" | "no_data";
+  source: "declared" | "inferred" | "none";
+  window_days: number;
+  min_samples: number;
+}
+
 export interface ActivityEntry {
   id?: string;
   date: string;

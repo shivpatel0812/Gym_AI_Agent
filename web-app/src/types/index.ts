@@ -32,14 +32,46 @@ export interface WorkoutSet {
   difficulty?: 'easy' | 'solid' | 'grind' | 'failed';
 }
 
-export interface ExerciseAiRecommendation {
+export interface RecommendedSetTarget {
+  set_number?: number;
+  /** The single number to hit. Always present; equals rep_low when banded. */
+  reps?: number;
+  weight?: number;
+  /** The band the set should land in, when the prescription has one. */
+  rep_low?: number;
+  rep_high?: number;
+  role?: "straight" | "top" | "backoff";
+}
+
+/** The "if this, then that" half of a prescription. */
+export interface RecommendationBranch {
+  condition: string;
+  action: string;
+  kind: "earn_weight" | "miss_drop" | "fill_band";
+}
+
+/** The session a recommendation is a response to. */
+export interface RecommendationLastSession {
+  date?: string;
+  days_ago?: number;
   sets?: { set_number?: number; reps?: number; weight?: number }[];
+  time?: number;
+  speed?: number;
+}
+
+export interface ExerciseAiRecommendation {
+  sets?: RecommendedSetTarget[];
   reasoning?: string;
   progression_type?: string;
   confidence?: string;
   needs_starting_weight?: boolean;
   estimated_from_stale_history?: boolean;
   estimated_from_top_lifts?: boolean;
+  /** "band" fills a rep range at one load; "top_set" chases one heavy set. */
+  strategy?: "band" | "top_set";
+  branch?: RecommendationBranch;
+  rep_range?: [number, number];
+  last_session?: RecommendationLastSession;
   time?: number;
   speed?: number;
   generated_at?: string;
@@ -119,7 +151,7 @@ export interface MacroEntry {
 export interface StressEntry {
   id?: string;
   date: string;
-  stress_level: number;
+  level: number;
   description?: string;
 }
 
@@ -132,9 +164,9 @@ export interface BodyFeeling {
 export interface WellnessSurvey {
   id?: string;
   date: string;
-  fatigue_level: number;
-  aches_level: number;
-  energy_level?: number;
+  fatigue: number;
+  body_aches: number;
+  energy?: number;
   sleep_quality?: number;
   mood?: number;
 }

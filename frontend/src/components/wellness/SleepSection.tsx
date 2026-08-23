@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
-import { View, Text, TouchableOpacity, Alert, Platform } from "react-native";
+import { View, Text, TouchableOpacity, Alert, Platform, StyleSheet } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import apiClient from "../../api/client";
-import { SleepEntry, todayKey } from "./types";
+import { SleepBaseline, SleepEntry, todayKey } from "./types";
 import { EmptyNote, Field, FormCard, LevelSlider, Meter, logStyles } from "./ui";
+import { colors } from "../../theme";
 
 const emptySleep = (): SleepEntry => ({
   date: todayKey(),
@@ -17,6 +18,7 @@ const emptySleep = (): SleepEntry => ({
 
 export default function SleepSection() {
   const [entries, setEntries] = useState<SleepEntry[]>([]);
+  const [baseline, setBaseline] = useState<SleepBaseline | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<SleepEntry>(emptySleep());
@@ -25,6 +27,7 @@ export default function SleepSection() {
 
   useEffect(() => {
     fetchEntries();
+    fetchBaseline();
   }, []);
 
   const fetchEntries = async () => {
@@ -33,6 +36,18 @@ export default function SleepSection() {
       setEntries(Array.isArray(res.data) ? res.data : []);
     } catch (error) {
       console.error("Error fetching sleep entries:", error);
+    }
+  };
+
+  const fetchBaseline = async () => {
+    try {
+      const res = await apiClient.get("/api/sleep/baseline");
+      setBaseline(res.data ?? null);
+    } catch (error) {
+      // A missing baseline is a normal state, not an error condition — the
+      // strip simply does not render.
+      console.error("Error fetching sleep baseline:", error);
+      setBaseline(null);
     }
   };
 
@@ -48,6 +63,7 @@ export default function SleepSection() {
       else await apiClient.post("/api/sleep", form);
       reset();
       fetchEntries();
+      fetchBaseline();
     } catch (error) {
       console.error("Error saving sleep entry:", error);
     }
@@ -63,6 +79,7 @@ export default function SleepSection() {
           try {
             await apiClient.delete(`/api/sleep/${id}`);
             fetchEntries();
+            fetchBaseline();
           } catch (error) {
             console.error("Error deleting entry:", error);
           }
@@ -79,8 +96,40 @@ export default function SleepSection() {
     return d;
   };
 
+  const renderBaseline = () => {
+    if (!baseline) return null;
+
+    // Enough nights logged: show what this user's normal actually is.
+    if (baseline.status === "ok" && baseline.target != null) {
+      const label =
+        baseline.source === "declared" ? "Your sleep goal" : "Your usual night";
+      return (
+        <View style={baselineStyles.strip}>
+          <MaterialCommunityIcons name="moon-waning-crescent" size={15} color={colors.ai} />
+          <Text style={baselineStyles.label}>{label}</Text>
+          <Text style={baselineStyles.value}>{baseline.target}h</Text>
+        </View>
+      );
+    }
+
+    // Not enough yet. Say how much is missing rather than showing a target we
+    // would have had to invent — and stay quiet entirely before the first log,
+    // where the empty state already explains itself.
+    const remaining = baseline.min_samples - baseline.samples;
+    if (baseline.samples === 0 || remaining <= 0) return null;
+    return (
+      <View style={baselineStyles.strip}>
+        <MaterialCommunityIcons name="moon-waning-crescent" size={15} color={colors.textMuted} />
+        <Text style={baselineStyles.pending}>
+          {remaining} more {remaining === 1 ? "night" : "nights"} to learn your usual
+        </Text>
+      </View>
+    );
+  };
+
   return (
     <View style={logStyles.wrap}>
+      {renderBaseline()}
       <View style={logStyles.topRow}>
         {!showForm && (
           <TouchableOpacity style={logStyles.logBtn} onPress={() => setShowForm(true)}>
@@ -208,3 +257,21 @@ export default function SleepSection() {
     </View>
   );
 }
+
+const baselineStyles = StyleSheet.create({
+  strip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
+  label: { color: colors.textSecondary, fontSize: 13, flex: 1 },
+  value: { color: colors.ai, fontSize: 15, fontWeight: "700" },
+  pending: { color: colors.textMuted, fontSize: 13, flex: 1 },
+});

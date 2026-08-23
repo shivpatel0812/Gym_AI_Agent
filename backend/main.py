@@ -9,7 +9,7 @@ load_dotenv()
 print("GymAI boot: loading db", flush=True)
 import db
 print("GymAI boot: loading routers", flush=True)
-from routers import exercises, splits, workout_sessions, physical_activities, macros, stress, body_feelings, wellness_survey, sleep, hydration, daily_routines, ai_analysis, user_profile, workout_plan, training_plan, nutrition_plan, ai_access, account, content_reports, body_scan
+from routers import exercises, splits, workout_sessions, physical_activities, macros, stress, body_feelings, wellness_survey, sleep, hydration, daily_routines, ai_analysis, user_profile, workout_plan, training_plan, nutrition_plan, ai_access, account, content_reports, body_scan, user_state
 print("GymAI boot: app configured", flush=True)
 
 app = FastAPI()
@@ -54,6 +54,7 @@ app.include_router(ai_access.router)
 app.include_router(account.router)
 app.include_router(content_reports.router)
 app.include_router(body_scan.router)
+app.include_router(user_state.router)
 
 @app.get("/")
 async def root():

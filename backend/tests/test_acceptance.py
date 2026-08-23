@@ -28,7 +28,7 @@ class TestAcceptanceExamples:
 
     | # | Last Session | Expected Output | Decision |
     |---|-------------|-----------------|----------|
-    | 1 | 75x6, 75x6, 75x5 | 75x7, 75x7, 75x6 | increase_reps |
+    | 1 | 75x6, 75x6, 75x5 | 75x7 x3, band 6-10 | increase_reps |
     | 2 | 75x10, 75x10, 75x10 | 80x6, 80x6, 80x6 | increase_weight |
     | 3 | 75x10 (all easy) | 85x6, 85x6, 85x6 | increase_weight (double) |
     | 4 | Two sessions failed to match prior | Hold previous numbers | maintain |
@@ -37,7 +37,13 @@ class TestAcceptanceExamples:
     """
 
     def test_example_1_increase_reps(self, engine):
-        """75x6, 75x6, 75x5 → 75x7, 75x7, 75x6"""
+        """
+        75x6, 75x6, 75x5 → 75x7 across the board, inside a 6-10 band.
+
+        The aim is uniform rather than a per-set +1 (which used to give
+        7, 7, 6). One number to hit on every set, plus the band it lives in,
+        is what a coach writes on a card; 7, 7, 6 is what arithmetic writes.
+        """
         sessions = [build_session(75, [6, 6, 5])]
         result = engine.compute_recommendation(
             exercise_id=EXERCISE_ID,
@@ -47,12 +53,11 @@ class TestAcceptanceExamples:
             num_sets=3,
         )
         assert result.decision == Decision.INCREASE_REPS
-        assert result.sets[0].weight == 75
-        assert result.sets[0].reps == 7
-        assert result.sets[1].weight == 75
-        assert result.sets[1].reps == 7
-        assert result.sets[2].weight == 75
-        assert result.sets[2].reps == 6
+        assert all(s.weight == 75 for s in result.sets)
+        assert [s.reps for s in result.sets] == [7, 7, 7]
+        # The band travels with the prescription, and it earns the weight.
+        assert all((s.rep_low, s.rep_high) == (6, 10) for s in result.sets)
+        assert result.branch.kind == "earn_weight"
 
     def test_example_2_increase_weight(self, engine):
         """75x10, 75x10, 75x10 → 80x6, 80x6, 80x6"""

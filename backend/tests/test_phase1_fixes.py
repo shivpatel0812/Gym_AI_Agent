@@ -17,6 +17,7 @@ from ai_analysis.workout_recommender import WorkoutRecommender
 from ai_analysis.workout_recommender.progression_engine import ProgressionEngine, Decision
 from ai_analysis.workout_recommender.reasoning_generator import ReasoningGenerator
 from ai_analysis.workout_recommender.plan_context import PlanContext
+from ai_analysis.workout_recommender.readiness_context import neutral as neutral_readiness
 from ai_analysis.workout_recommender.exercise_metadata import (
     resolve_exercise_metadata,
     ExerciseMetadata,
@@ -171,6 +172,11 @@ class TestCustomExerciseMetadata:
         recommender.plan_resolver.resolve.return_value = PlanContext(
             goal="hypertrophy", source="profile"
         )
+        # Readiness resolves to neutral here, both because this scenario is
+        # about exercise metadata and because the db assertions below count
+        # collection reads.
+        recommender.readiness_resolver = MagicMock()
+        recommender.readiness_resolver.resolve.return_value = neutral_readiness()
 
         response = recommender.get_exercise_recommendation(
             exercise_id=exercise_id,
@@ -451,12 +457,9 @@ class TestFillerSetPadding:
             num_sets=4,
         )
         assert len(result.sets) == 4
-        # First two: +1 rep from 8 and 7
-        assert result.sets[0].reps == 9
-        assert result.sets[1].reps == 8
-        # Padding from last set (7): +1 = 8
-        assert result.sets[2].reps == 8
-        assert result.sets[3].reps == 8
+        # A single aim covers every set, padded or not, so padding can no
+        # longer produce a jarring shape by construction.
+        assert [s.reps for s in result.sets] == [8, 8, 8, 8]
         # All at same weight
         assert all(s.weight == 75 for s in result.sets)
 

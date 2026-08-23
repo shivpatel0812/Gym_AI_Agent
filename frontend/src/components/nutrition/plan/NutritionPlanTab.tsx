@@ -13,6 +13,7 @@ import {
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import CreateNutritionPlanModal from "./CreateNutritionPlanModal";
 import PlanReviewCard from "./PlanReviewCard";
+import PlanCheckinCard from "./PlanCheckinCard";
 import EditMealAnchorModal, { slotIcon } from "./EditMealAnchorModal";
 import EditGoToItemModal from "./EditGoToItemModal";
 import EditFlexibleMealModal from "./EditFlexibleMealModal";
@@ -20,6 +21,7 @@ import DayMap, { SlotIdea } from "./DayMap";
 import AddBlueprintModal, { BlueprintAddResult } from "./AddBlueprintModal";
 import PlanSuggestions from "./PlanSuggestions";
 import {
+  AnchorVerdict,
   BlueprintExtra,
   DayBand,
   FastFoodPlace,
@@ -29,6 +31,8 @@ import {
   NutritionPlan,
   NutritionPlanEdit,
   NutritionSuggestionSet,
+  PacingOption,
+  PlanCheckin,
   PlanReview,
   PrimaryMealSlot,
   applySuggestions,
@@ -36,8 +40,11 @@ import {
   endNutritionPlan,
   getPendingSuggestions,
   getActiveNutritionPlan,
+  getPlanCheckin,
   getPlanReview,
   goalLabel,
+  proposeCheckinEdits,
+  stagePacingOption,
   HEALTH_FOCUS_DISCLAIMER,
   healthFocusLabels,
   pauseNutritionPlan,
@@ -100,6 +107,26 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
   const [suggestionsBusy, setSuggestionsBusy] = useState(false);
   const [review, setReview] = useState<PlanReview | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
+  const [checkin, setCheckin] = useState<PlanCheckin | null>(null);
+  const [checkinLoading, setCheckinLoading] = useState(false);
+  const [proposingEdits, setProposingEdits] = useState(false);
+  const [stagingPacingId, setStagingPacingId] = useState<string | null>(null);
+  /**
+   * Per-slot AI output that is about the plan rather than a new meal: guidance,
+   * advisory verdicts on the user's own anchors, and logged meals grouped into
+   * one rotating option. Kept separate from ideasBySlot, which is a list of
+   * meals to add.
+   */
+  const [slotAi, setSlotAi] = useState<
+    Record<
+      string,
+      {
+        guidance?: string | null;
+        verdicts?: AnchorVerdict[];
+        optionsAnchor?: SlotIdea | null;
+      }
+    >
+  >({});
 
   const loadSuggestions = useCallback(async () => {
     try {
@@ -124,6 +151,68 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     }
   }, []);
 
+  const loadCheckin = useCallback(
+    async (
+      planId: string,
+      refresh = false,
+      opts?: { currentWeightLb?: number }
+    ) => {
+      setCheckinLoading(true);
+      try {
+        setCheckin(
+          await getPlanCheckin(planId, {
+            refresh,
+            currentWeightLb: opts?.currentWeightLb,
+          })
+        );
+      } catch {
+        setCheckin(null);
+      } finally {
+        setCheckinLoading(false);
+      }
+    },
+    []
+  );
+
+  const runProposeCheckinEdits = useCallback(async () => {
+    if (!plan) return;
+    setProposingEdits(true);
+    try {
+      const { suggestion, message } = await proposeCheckinEdits(plan.id);
+      if (suggestion) {
+        setSuggestions(suggestion);
+        setPlanChangedSince(false);
+      } else {
+        Alert.alert("Nothing to change", message || "Your plan already matches how you eat.");
+      }
+    } catch {
+      Alert.alert("Error", "Could not work out plan changes from your logs.");
+    } finally {
+      setProposingEdits(false);
+    }
+  }, [plan]);
+
+  const runStagePacing = useCallback(
+    async (option: PacingOption) => {
+      if (!plan) return;
+      setStagingPacingId(option.id);
+      try {
+        const { suggestion } = await stagePacingOption(plan.id, option.id);
+        if (suggestion) {
+          setSuggestions(suggestion);
+          setPlanChangedSince(false);
+        } else {
+          Alert.alert("Could not stage", "That pacing option is no longer available. Refresh and try again.");
+        }
+      } catch {
+        Alert.alert("Error", "Could not stage this pacing change.");
+      } finally {
+        setStagingPacingId(null);
+      }
+    },
+    [plan]
+  );
+
   const load = useCallback(async () => {
     try {
       const [active, macrosRes] = await Promise.all([
@@ -135,6 +224,7 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       if (active) {
         loadSuggestions();
         loadReview(active.id);
+        loadCheckin(active.id);
       }
     } catch (error) {
       console.error("Error loading nutrition plan:", error);
@@ -756,6 +846,21 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           excludeLabels: existing.map((i) => i.label),
         }
       );
+      // Guidance, verdicts and the rotating-options meal describe the slot the
+      // user already has, so they replace rather than accumulate.
+      setSlotAi((prev) => ({
+        ...prev,
+        [slot]: {
+          guidance: suggestion.guidance || prev[slot]?.guidance || null,
+          verdicts: suggestion.anchor_verdicts?.length
+            ? suggestion.anchor_verdicts
+            : prev[slot]?.verdicts || [],
+          optionsAnchor: suggestion.options_anchor
+            ? mapIdea(suggestion.options_anchor, suggestion.options_anchor.notes)
+            : prev[slot]?.optionsAnchor || null,
+        },
+      }));
+
       const mapped = (suggestion.ideas || [])
         .map((idea) => mapIdea(idea, suggestion.notes))
         .slice(0, mode === "preload" ? 1 : 2);
@@ -790,6 +895,28 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
       days: (idea.days as any) || ["mon", "tue", "wed", "thu", "fri"],
       notes: idea.notes || null,
       source: "ai_slot",
+    });
+    setEditingAnchorIndex(null);
+    setAnchorEditorOpen(true);
+  };
+
+  /**
+   * Save several meals the user already eats as one "potential" meal.
+   *
+   * Four separate dinner anchors would each reserve a dinner's worth of
+   * calories; one option meal with four choices reserves one, which is what
+   * actually happens when they pick between them.
+   */
+  const addOptionsAnchor = (idea: SlotIdea, slot: PrimaryMealSlot) => {
+    setEditingAnchor({
+      slot,
+      label: idea.label || `${slotLabel(slot)} options`,
+      kind: "potential",
+      foods: (idea.foods as any) || [],
+      frequency: "daily",
+      days: (idea.days as any) || ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      notes: idea.notes || null,
+      source: "logged",
     });
     setEditingAnchorIndex(null);
     setAnchorEditorOpen(true);
@@ -965,6 +1092,34 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
     [coachEditCounts]
   );
 
+  // Verdicts arrive per slot but render per meal row, so they are flattened to
+  // a lookup by anchor id.
+  const anchorVerdicts = useMemo(() => {
+    const byAnchor: Record<string, AnchorVerdict> = {};
+    Object.values(slotAi).forEach((entry) => {
+      (entry.verdicts || []).forEach((v) => {
+        if (v.anchor_id) byAnchor[String(v.anchor_id)] = v;
+      });
+    });
+    return byAnchor;
+  }, [slotAi]);
+
+  const slotGuidance = useMemo(() => {
+    const out: Partial<Record<PrimaryMealSlot, string | null>> = {};
+    (Object.keys(slotAi) as PrimaryMealSlot[]).forEach((slot) => {
+      out[slot] = slotAi[slot]?.guidance || null;
+    });
+    return out;
+  }, [slotAi]);
+
+  const optionsAnchors = useMemo(() => {
+    const out: Partial<Record<PrimaryMealSlot, SlotIdea | null>> = {};
+    (Object.keys(slotAi) as PrimaryMealSlot[]).forEach((slot) => {
+      out[slot] = slotAi[slot]?.optionsAnchor || null;
+    });
+    return out;
+  }, [slotAi]);
+
   // Top banner: plan-wide edits (targets/strategy) in full. Meal edits are
   // reviewed under breakfast / lunch / dinner on the DayMap — only a summary
   // + Accept all sits up top when those exist.
@@ -1105,6 +1260,17 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
           onAskCoach={onAskCoach}
         />
 
+        <PlanCheckinCard
+          checkin={checkin}
+          loading={checkinLoading}
+          onRefresh={(opts) => loadCheckin(plan.id, true, opts)}
+          onProposeEdits={runProposeCheckinEdits}
+          proposing={proposingEdits}
+          onStagePacing={runStagePacing}
+          stagingPacingId={stagingPacingId}
+          onAskCoach={onAskCoach}
+        />
+
         {dayMap ? (
           <DayMap
             map={dayMap}
@@ -1117,6 +1283,10 @@ export default function NutritionPlanTab({ onAskCoach }: Props) {
             suggestingSlot={suggestingSlot}
             slotIdeas={ideasBySlot}
             onAddIdea={addIdeaAsAnchor}
+            anchorVerdicts={anchorVerdicts}
+            slotGuidance={slotGuidance}
+            optionsAnchors={optionsAnchors}
+            onAddOptionsAnchor={addOptionsAnchor}
             macroLogs={macroLogs}
             onAddLoggedMeal={addLoggedMealAsAnchor}
             onAddPlace={addFastFoodPlace}

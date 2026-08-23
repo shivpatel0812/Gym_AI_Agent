@@ -404,10 +404,26 @@ Return JSON with exactly this shape:
   "food_priorities": [
     "Keep breakfast and daytime meals high in protein",
     "Leave calorie flexibility for dinner"
+  ],
+  "slot_profiles": [
+    {{
+      "slot": "breakfast|lunch|pre_workout|dinner|snack",
+      "stance": "anchors|uncertain|eat_out|flexible",
+      "calorie_min": 500,
+      "calorie_max": 700,
+      "protein_min": 40,
+      "notes": "why this slot carries this share, in one short line"
+    }}
   ]
 }}
 
 Rules:
+- slot_profiles splits the daily calorie and protein target across the meals this
+  person actually eats, so each meal has its own number to hit. Only include
+  slots they use. The calorie bands should add up to roughly the daily target,
+  and the protein floors to roughly the daily protein. Put the biggest share
+  where their day actually is — training time, work schedule, and the meal they
+  said is largest all matter more than an even split.
 - Keep meal_anchors the user listed. You may estimate missing macros; do not invent a totally different breakfast.
 - Never remove or rewrite a locked meal. New meal_anchors must be additions the
   user can take or leave, and each one should say in "notes" how it fits next to
@@ -610,6 +626,10 @@ Rules:
         if isinstance(plan.get("preferences"), dict):
             merged_prefs.update({k: v for k, v in plan["preferences"].items() if v not in (None, [], "")})
         plan["preferences"] = NutritionPlanBuilder._normalize_preferences(merged_prefs)
+
+        from nutrition.pacing import normalize_pacing
+        plan["pacing"] = normalize_pacing(plan.get("pacing") or answers.get("pacing"), goal)
+
         return plan
 
     # Fields the user owns. A regenerate may add to these lists, never rewrite
@@ -1042,10 +1062,22 @@ Rules:
             stance = str(item.get("stance") or "anchors").strip().lower()
             if stance not in VALID_STANCES:
                 stance = "anchors"
+            # Per-slot calorie/protein targets. Only what the coach or the user
+            # actually set is kept — the read path adds derived targets under
+            # separate target_* keys, and those must not round-trip into storage
+            # or a fallback guess would harden into a stored number.
+            cmin = _clamp(_num(item.get("calorie_min")), 0, 3000)
+            cmax = _clamp(_num(item.get("calorie_max")), 0, 3000)
+            if cmin and cmax and cmin > cmax:
+                cmin, cmax = cmax, cmin
+            pmin = _clamp(_num(item.get("protein_min")), 0, 200)
             by_slot[slot] = {
                 "slot": slot,
                 "stance": stance,
                 "notes": str(item.get("notes") or "").strip()[:240] or None,
+                "calorie_min": int(round(cmin)) if cmin else None,
+                "calorie_max": int(round(cmax)) if cmax else None,
+                "protein_min": int(round(pmin)) if pmin else None,
             }
         # Always return all primary slots so the UI has a complete day.
         out = []
@@ -1053,7 +1085,14 @@ Rules:
             if slot in by_slot:
                 out.append(by_slot[slot])
             else:
-                out.append({"slot": slot, "stance": "anchors", "notes": None})
+                out.append({
+                    "slot": slot,
+                    "stance": "anchors",
+                    "notes": None,
+                    "calorie_min": None,
+                    "calorie_max": None,
+                    "protein_min": None,
+                })
         return out
 
     @staticmethod

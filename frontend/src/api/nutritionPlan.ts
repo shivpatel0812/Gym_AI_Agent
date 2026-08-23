@@ -175,6 +175,24 @@ export interface SlotProfile {
   slot: PrimaryMealSlot | string;
   stance: SlotStance | string;
   notes?: string | null;
+  /**
+   * Per-slot targets the coach or the user set. Read-only `target_*` fields
+   * carry the resolved numbers the meal block should show, which fall back to a
+   * derived share of the daily target when nothing is stored. They are kept
+   * separate so reading a plan and saving it back cannot turn a derived guess
+   * into a stored target.
+   */
+  calorie_min?: number | null;
+  calorie_max?: number | null;
+  protein_min?: number | null;
+  target_calorie_min?: number | null;
+  target_calorie_max?: number | null;
+  target_protein_min?: number | null;
+  target_source?: "plan" | "flexible_meal" | "derived" | string | null;
+  /** e.g. "700–900 kcal · 45g+ protein" */
+  target_headline?: string | null;
+  /** The sentence for this meal block, specific to the slot and its state. */
+  description?: string | null;
 }
 
 export interface FastFoodPlace {
@@ -226,8 +244,62 @@ export interface NutritionPlan {
   preferences: NutritionPlanPreferences;
   food_priorities: string[];
   typical_day_notes?: string | null;
+  /**
+   * How calories should move over weeks (steady / hold / diet break / …).
+   * Distinct from daily meal strategy — this is the ramp, not the plate.
+   */
+  pacing?: NutritionPacing | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export type PacingStyle =
+  | "steady"
+  | "hold"
+  | "diet_break"
+  | "refeed"
+  | "alternate_day"
+  | "aggressive"
+  | string;
+
+export interface NutritionPacing {
+  style: PacingStyle;
+  label?: string;
+  blurb?: string;
+  weekly_step: number;
+  hold_weeks?: number;
+  break_every_n_weeks?: number;
+  refeed_days?: string[];
+  training_day_bump?: number;
+  last_reviewed_at?: string | null;
+}
+
+export interface PacingOption {
+  id: string;
+  title: string;
+  why: string;
+  how: string;
+  recommended?: boolean;
+  style: PacingStyle;
+  label: string;
+}
+
+export type ProgressVerdict =
+  | "on_track"
+  | "stall"
+  | "too_fast"
+  | "under_eating"
+  | "overshooting"
+  | "unknown"
+  | string;
+
+export interface ProgressVerdictInfo {
+  verdict: ProgressVerdict;
+  weight_delta_lb?: number | null;
+  calorie_delta?: number | null;
+  days_logged?: number;
+  goal?: string;
+  reason?: string | null;
 }
 
 export interface TodayGuidance {
@@ -511,22 +583,71 @@ export async function updateNutritionPlan(
   return res.data.plan;
 }
 
+/** A meal the user has actually logged in this slot, scored against its target. */
+export interface LoggedSlotMeal {
+  name: string;
+  amount?: string | null;
+  times_logged: number;
+  calories: number;
+  protein: number;
+  carbs?: number;
+  fats?: number;
+  fiber?: number;
+  fit?: "fits" | "over" | "light" | "low_protein" | "unknown" | string;
+  fit_reason?: string | null;
+}
+
+export interface SlotTarget {
+  slot: string;
+  calorie_min?: number | null;
+  calorie_max?: number | null;
+  protein_min?: number | null;
+  source?: string | null;
+  stance?: string | null;
+}
+
+/** The coach's advisory read on an anchor the user built. Never removes it. */
+export interface AnchorVerdict {
+  anchor_id: string;
+  verdict: "solid" | "adjust" | string;
+  advice?: string | null;
+}
+
+export interface SlotSuggestion {
+  ideas: Array<{
+    label: string;
+    foods?: MealAnchorFood[];
+    days?: string[];
+    notes?: string;
+    from_logs?: boolean;
+  }>;
+  /** Several logged meals collected into one rotating "options" anchor. */
+  options_anchor?: {
+    label: string;
+    foods?: MealAnchorFood[];
+    days?: string[];
+    notes?: string;
+  } | null;
+  anchor_verdicts?: AnchorVerdict[];
+  guidance?: string | null;
+  notes?: string | null;
+  stance_hint?: string | null;
+  slot_target?: SlotTarget | null;
+  log_facts?: {
+    slot: string;
+    days_with_logs: number;
+    repeat_meals: LoggedSlotMeal[];
+    fitting_meals: LoggedSlotMeal[];
+  } | null;
+}
+
 export async function suggestSlotFills(
   planId: string,
   slot: string,
   stance?: string,
   model?: string,
   opts?: { count?: number; excludeLabels?: string[]; refresh?: boolean }
-): Promise<{
-  ideas: Array<{
-    label: string;
-    foods?: MealAnchorFood[];
-    days?: string[];
-    notes?: string;
-  }>;
-  notes?: string | null;
-  stance_hint?: string | null;
-}> {
+): Promise<SlotSuggestion> {
   const res = await apiClient.post(
     `/api/nutrition-plan/${planId}/suggest-slot`,
     {
@@ -540,6 +661,114 @@ export async function suggestSlotFills(
     { timeout: 60000 }
   );
   return res.data?.suggestion ?? { ideas: [] };
+}
+
+/** How the plan has actually gone over the last two weeks. Read-only. */
+export interface PlanCheckin {
+  summary: string;
+  continue: string[];
+  improve: PlanReviewImprovement[];
+  source?: "ai" | "rules" | string;
+  generated_at?: string;
+  /** False when nothing in the logs would produce a plan change worth staging. */
+  can_propose_edits?: boolean;
+  can_adjust_pacing?: boolean;
+  progress?: ProgressVerdictInfo;
+  pacing?: NutritionPacing | null;
+  pacing_options?: PacingOption[];
+  facts?: {
+    window_days: number;
+    days_logged: number;
+    avg_calories?: number | null;
+    avg_protein?: number | null;
+    calorie_delta?: number | null;
+    protein_delta?: number | null;
+    daily_target_calories?: number | null;
+    daily_target_protein?: number | null;
+    slots?: Array<{
+      slot: string;
+      label: string;
+      days_logged: number;
+      verdict: string;
+      avg_logged_calories?: number | null;
+      target_calorie_min?: number | null;
+      target_calorie_max?: number | null;
+    }>;
+    unplanned_habits?: Array<{ name: string; slot: string; times_logged: number }>;
+  };
+}
+
+export async function getPlanCheckin(
+  planId: string,
+  opts?: { refresh?: boolean; model?: string; currentWeightLb?: number; weighInDate?: string }
+): Promise<PlanCheckin | null> {
+  const res = await apiClient.post(
+    `/api/nutrition-plan/${planId}/checkin`,
+    {
+      refresh: !!opts?.refresh,
+      model: opts?.model,
+      current_weight_lb: opts?.currentWeightLb,
+      weigh_in_date: opts?.weighInDate,
+    },
+    { timeout: 60000 }
+  );
+  return res.data?.checkin ?? null;
+}
+
+/**
+ * Turn the last check-in into staged edits. They land in the normal suggestion
+ * flow, so each one still shows under its meal and needs an Accept.
+ */
+export async function proposeCheckinEdits(
+  planId: string
+): Promise<{ suggestion: NutritionSuggestionSet | null; message?: string }> {
+  const res = await apiClient.post(
+    `/api/nutrition-plan/${planId}/checkin/propose-edits`,
+    {},
+    { timeout: 60000 }
+  );
+  return { suggestion: res.data?.suggestion ?? null, message: res.data?.message };
+}
+
+export async function fetchPacingOptions(
+  planId: string,
+  opts?: { currentWeightLb?: number }
+): Promise<{
+  progress: ProgressVerdictInfo;
+  pacing: NutritionPacing;
+  options: PacingOption[];
+}> {
+  const res = await apiClient.post(
+    `/api/nutrition-plan/${planId}/pacing/options`,
+    { current_weight_lb: opts?.currentWeightLb },
+    { timeout: 60000 }
+  );
+  return {
+    progress: res.data?.progress,
+    pacing: res.data?.pacing,
+    options: res.data?.options || [],
+  };
+}
+
+export async function stagePacingOption(
+  planId: string,
+  optionId: string,
+  opts?: { currentWeightLb?: number }
+): Promise<{ suggestion: NutritionSuggestionSet | null; option?: PacingOption }> {
+  const res = await apiClient.post(
+    `/api/nutrition-plan/${planId}/pacing/stage`,
+    { option_id: optionId, current_weight_lb: opts?.currentWeightLb },
+    { timeout: 60000 }
+  );
+  return { suggestion: res.data?.suggestion ?? null, option: res.data?.option };
+}
+
+export async function setPacing(
+  planId: string,
+  pacing: Partial<NutritionPacing> & { calorie_delta?: number }
+): Promise<NutritionPlan> {
+  const res = await apiClient.post(`/api/nutrition-plan/${planId}/pacing`, pacing);
+  return res.data.plan;
 }
 
 /** The coach's read on the plan the user built: agree first, then what to change. */

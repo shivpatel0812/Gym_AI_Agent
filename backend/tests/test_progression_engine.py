@@ -87,9 +87,8 @@ class TestIncreaseReps:
             num_sets=3,
         )
         assert result.decision == Decision.INCREASE_REPS
-        assert result.sets[0].reps == 7
-        assert result.sets[1].reps == 7
-        assert result.sets[2].reps == 6
+        # One aim across every set, not a per-set +1 ladder.
+        assert [s.reps for s in result.sets] == [7, 7, 7]
         assert all(s.weight == 75 for s in result.sets)
 
     def test_reps_capped_at_range_high(self, engine):
@@ -134,7 +133,11 @@ class TestIncreaseWeight:
             num_sets=3,
         )
         assert result.decision == Decision.INCREASE_WEIGHT
-        assert all(s.weight == 325 for s in result.sets)
+        # A strength-goal compound is prescribed as a top set plus backoffs,
+        # so the increment lands on the top set rather than on all three.
+        assert result.strategy == "top_set"
+        assert result.sets[0].weight == 325
+        assert result.sets[0].role == "top"
 
     def test_weight_increase_capped_at_10_percent(self, engine):
         # If increment would be > 10%, cap it
@@ -473,7 +476,7 @@ class TestAlwaysProgressFromLastHit:
             num_sets=3,
         )
         assert result.decision == Decision.INCREASE_REPS
-        assert [s.reps for s in result.sets] == [8, 8, 6]
+        assert [s.reps for s in result.sets] == [8, 8, 8]
         assert all(s.weight == 75 for s in result.sets)
 
     def test_four_set_history_still_progresses_three_sets(self, engine):
@@ -485,7 +488,7 @@ class TestAlwaysProgressFromLastHit:
             recent_sessions=sessions,
             num_sets=3,
         )
-        assert [s.reps for s in result.sets[:3]] == [8, 8, 6]
+        assert [s.reps for s in result.sets[:3]] == [8, 8, 8]
         assert all(s.weight == 75 for s in result.sets)
 
     def test_shorter_follow_up_is_not_a_failure(self, engine):
@@ -501,5 +504,5 @@ class TestAlwaysProgressFromLastHit:
             num_sets=3,
         )
         assert result.decision == Decision.INCREASE_REPS
-        assert [s.reps for s in result.sets[:3]] == [8, 8, 6]
+        assert [s.reps for s in result.sets[:3]] == [8, 8, 8]
 
