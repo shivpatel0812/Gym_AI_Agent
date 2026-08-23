@@ -815,16 +815,28 @@ function ClimbSection({
   const lifts = pickClimbLifts(projection.days).slice(0, 4);
   if (!lifts.length) return null;
 
-  const series: Series[] = lifts.map((lift, i) => ({
-    id: lift.exercise_id,
-    label: shortLiftName(lift.exercise_name),
-    color: LIFT_COLORS[i % LIFT_COLORS.length],
-    points: lift.realistic.map((p) => ({ week: p.week, value: p.e1rm })),
-  }));
+  // Indexed to each lift's own week-1 estimate rather than plotted in pounds.
+  // A row at 171-193 lb and a lateral raise at 29-56 lb share one axis, so in
+  // absolute terms the heavy lift fills the frame and the light one is a flat
+  // line along the bottom — unreadable, and it hides that the small lift is
+  // actually climbing fastest. As a percentage of where each started, they are
+  // finally comparable, which is the question this chart is asked.
+  const series: Series[] = lifts.map((lift, i) => {
+    const base = lift.current?.e1rm ?? lift.realistic[0]?.e1rm ?? 0;
+    return {
+      id: lift.exercise_id,
+      label: shortLiftName(lift.exercise_name),
+      color: LIFT_COLORS[i % LIFT_COLORS.length],
+      points: lift.realistic.map((p) => ({
+        week: p.week,
+        value: base > 0 ? (p.e1rm / base) * 100 : 100,
+      })),
+    };
+  });
 
   return (
     <section className="space-y-4">
-      <SectionHead title="The climb" right={`e1RM, wk 1–${totalWeeks}`} />
+      <SectionHead title="The climb" right={`vs. today, wk 1–${totalWeeks}`} />
 
       <div className="flex flex-wrap gap-x-4 gap-y-2">
         {lifts.map((lift, i) => {
@@ -856,8 +868,9 @@ function ClimbSection({
         <ProjectionChart
           series={series}
           height={200}
-          formatValue={(v) => `${Math.round(v)}`}
-          ariaLabel="Projected estimated 1RM for key lifts"
+          formatValue={(v) => `${Math.round(v)}%`}
+          reference={{ value: 100, label: "today" }}
+          ariaLabel="Projected estimated 1RM for key lifts, relative to today"
         />
         <div className="mt-3">
           <ChartLegend series={series} />

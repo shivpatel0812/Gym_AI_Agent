@@ -860,7 +860,13 @@ export default function NutritionPlanTab({ onAskCoach, focusSuggestions }: Props
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-base font-bold text-white">Go To</p>
-          <button type="button" onClick={openNewGoTo} className="text-[13px] font-bold text-[#FF6B35]">
+          {/* Wrapped, not passed directly: openNewGoTo takes an optional slot,
+              so handing it the click handler stored a MouseEvent as the slot. */}
+          <button
+            type="button"
+            onClick={() => openNewGoTo()}
+            className="text-[13px] font-bold text-[#FF6B35]"
+          >
             + Add item
           </button>
         </div>

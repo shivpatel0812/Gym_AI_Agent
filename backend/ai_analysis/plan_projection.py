@@ -44,6 +44,34 @@ MIN_SESSIONS_FOR_ADHERENCE = 4
 # over-promise this module exists to avoid.
 DEFAULT_ADHERENCE = 0.75
 
+# The most estimated 1RM a projection will claim per week, compounding.
+#
+# A modelling assumption, not a measurement: it is set generously, at roughly
+# what a genuine novice manages early on, because it exists to stop the curve
+# being absurd rather than to predict anyone in particular. Over twelve weeks
+# it allows about 27% — ambitious but arguable. Without it, double progression
+# compounds without limit and the projection promised a 95% gain on a lateral
+# raise, which costs the user's trust in every other number on the page.
+PLAUSIBLE_WEEKLY_E1RM_GAIN = 0.02
+
+# The cap does not bind for the first few weeks. Load comes in indivisible
+# steps, and one step — or even a single extra rep — can legitimately be worth
+# more than 2% on a light lift. Applied from week one it would block the very
+# first rep increase and flatten every curve to nothing.
+PLAUSIBILITY_GRACE_WEEKS = 4
+
+
+def exceeds_plausible_gain(
+    candidate_e1rm: float, baseline_e1rm: Optional[float], week: int
+) -> bool:
+    """Whether a projected week has outrun what training plausibly delivers."""
+    if not baseline_e1rm or baseline_e1rm <= 0:
+        return False
+    effective_week = max(week, PLAUSIBILITY_GRACE_WEEKS)
+    ceiling = baseline_e1rm * ((1 + PLAUSIBLE_WEEKLY_E1RM_GAIN) ** effective_week)
+    return candidate_e1rm > ceiling
+
+
 # Epley, matching _compute_e1rm_history in the progression engine.
 def e1rm(weight: float, reps: int) -> float:
     if not weight or not reps:
@@ -231,6 +259,9 @@ class PlanProjector:
                 )
 
         best_case: List[WeekPoint] = []
+        baseline_e1rm = current.e1rm if current else None
+        plateaued_at: Optional[int] = None
+
         for week in range(1, weeks + 1):
             point = None
             for _ in range(sessions_per_week):
@@ -248,13 +279,30 @@ class PlanProjector:
                 if not result.sets:
                     break
                 top = max(result.sets, key=lambda s: s.weight)
-                point = WeekPoint(
+                candidate = WeekPoint(
                     week=week,
                     weight=top.weight,
                     reps=top.reps,
                     e1rm=e1rm(top.weight, top.reps),
                     decision=result.decision.value,
                 )
+                if baseline_e1rm is None:
+                    baseline_e1rm = candidate.e1rm
+
+                if exceeds_plausible_gain(candidate.e1rm, baseline_e1rm, week):
+                    # Past this the curve is arithmetic, not training. Double
+                    # progression compounds happily forever; bodies do not, and
+                    # the smallest plate on a light isolation lift is a huge
+                    # relative jump — a 5 lb step on a 20 lb lateral raise is
+                    # 25%, which repeated weekly "grows" the lift 95% in twelve
+                    # weeks. Let the simulated lifter stall instead, which
+                    # flattens the curve the way real progress flattens.
+                    plateaued_at = plateaued_at or week
+                    if simulated:
+                        simulated.insert(0, dict(simulated[0]))
+                    break
+
+                point = candidate
                 # The simulated user does exactly what was prescribed.
                 simulated.insert(
                     0,
@@ -267,7 +315,15 @@ class PlanProjector:
                     },
                 )
             if point is None:
-                break
+                # Stalled (or nothing to prescribe) — hold the last known point
+                # so the horizon stays a full N weeks rather than truncating.
+                held = best_case[-1] if best_case else current
+                if held is None:
+                    break
+                best_case.append(
+                    WeekPoint(week=week, weight=held.weight, reps=held.reps, e1rm=held.e1rm)
+                )
+                continue
             best_case.append(point)
 
         if current is None and best_case:

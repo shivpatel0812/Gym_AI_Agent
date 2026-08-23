@@ -88,9 +88,17 @@ class TestStrengthProjection:
         assert loads == sorted(loads), f"projected load regressed: {loads}"
 
     def test_training_a_lift_twice_a_week_projects_faster(self, projector):
+        """
+        Compared on load, not estimated 1RM. e1RM dips on the session a weight
+        jump lands, so the curve that is *further ahead* can show the lower
+        e1RM purely because it just reset into a new range — which is exactly
+        what happens here at eight weeks.
+        """
         once = project(projector, [session(50, [8, 8, 8])], sessions_per_week=1)
         twice = project(projector, [session(50, [8, 8, 8])], sessions_per_week=2)
-        assert twice.best_case[-1].e1rm > once.best_case[-1].e1rm
+        assert max(p.weight for p in twice.best_case) > max(
+            p.weight for p in once.best_case
+        )
 
     def test_current_point_comes_from_real_history(self, projector):
         result = project(projector, [session(50, [8, 8, 8])])
@@ -291,3 +299,138 @@ class TestGoalMismatchWarnings:
             "lean_bulk", {"calories": 1500, "protein": 190}, weeks=8, profile={"weight": 180}
         )
         assert t.warnings == []
+
+
+class TestPlausibilityCeiling:
+    """
+    Double progression compounds without limit; bodies do not. Without a
+    ceiling the projection claimed a 95% estimated-1RM gain on a lateral raise
+    in twelve weeks, because the smallest available plate is a 25% jump on a
+    20 lb lift and the simulation kept taking it.
+    """
+
+    def test_light_isolation_lift_stays_plausible(self, projector):
+        result = projector.project_exercise(
+            exercise_id="default-shoulders-db-lateral-raise",
+            exercise_name="Lateral Raise",
+            day_name="Push",
+            history=[session(20, [13, 12, 12])],
+            user_goal="Build Muscle",
+            weeks=12,
+            sessions_per_week=2,
+            adherence=1.0,
+        )
+        start = result.current.e1rm
+        peak = max(p.e1rm for p in result.best_case)
+        assert (peak - start) / start < 0.35, f"{start} -> {peak} is not plausible"
+
+    def test_the_curve_still_climbs_under_the_cap(self, projector):
+        """A ceiling that flattens everything to nothing is not a fix."""
+        result = project(projector, [session(50, [8, 8, 8])], weeks=12)
+        assert max(p.e1rm for p in result.best_case) > result.current.e1rm
+
+    def test_horizon_is_never_truncated_by_a_stall(self, projector):
+        """Hitting the ceiling holds the last point, it does not end the chart."""
+        result = projector.project_exercise(
+            exercise_id="default-shoulders-db-lateral-raise",
+            exercise_name="Lateral Raise",
+            day_name="Push",
+            history=[session(20, [13, 12, 12])],
+            user_goal="Build Muscle",
+            weeks=12,
+            sessions_per_week=2,
+            adherence=1.0,
+        )
+        assert [p.week for p in result.best_case] == list(range(1, 13))
+
+    def test_early_weeks_are_not_blocked_by_the_cap(self, projector):
+        """
+        Load arrives in indivisible steps, so a single increment can be worth
+        more than the weekly cap on a light lift. Applied from week one the
+        ceiling would block the first rep increase and flatten every curve.
+        """
+        result = project(projector, [session(50, [8, 8, 8])], weeks=4)
+        assert result.best_case[0].e1rm > result.current.e1rm
+
+    def test_frequency_reaches_the_ceiling_sooner_not_higher(self, projector):
+        """The plausible ceiling is a property of time, not of training more."""
+        once = project(projector, [session(50, [8, 8, 8])], weeks=12, sessions_per_week=1)
+        twice = project(projector, [session(50, [8, 8, 8])], weeks=12, sessions_per_week=2)
+        peak_once = max(p.e1rm for p in once.best_case)
+        peak_twice = max(p.e1rm for p in twice.best_case)
+        assert abs(peak_twice - peak_once) / peak_once < 0.1
+
+
+class TestPacedWeightCurve:
+    """
+    Any pacing style that rewrites a week's calories has to rewrite the weight
+    curve with it, or the two charts on the page describe different plans.
+    """
+
+    def test_diet_break_weeks_do_not_keep_losing_weight(self):
+        from nutrition.pacing import build_paced_trajectory
+
+        traj = build_paced_trajectory(
+            {
+                "goal": "fat_loss",
+                "targets": {"calories": 2200, "protein": 180},
+                "pacing": {"style": "diet_break", "break_every_n_weeks": 3},
+            },
+            weeks=9,
+            profile=FULL_PROFILE,
+        )
+        rows = traj["weeks"]
+        by_week = {r["week"]: r for r in rows}
+        for week, row in by_week.items():
+            if row.get("phase") != "diet_break":
+                continue
+            previous = by_week.get(week - 1)
+            assert previous, "a break week should never be week 1"
+            drift = row["expected_weight_lb"] - previous["expected_weight_lb"]
+            assert abs(drift) < 0.5, f"week {week} ate at maintenance but moved {drift} lb"
+
+    def test_cut_weeks_still_lose(self):
+        from nutrition.pacing import build_paced_trajectory
+
+        traj = build_paced_trajectory(
+            {
+                "goal": "fat_loss",
+                "targets": {"calories": 2200, "protein": 180},
+                "pacing": {"style": "diet_break", "break_every_n_weeks": 3},
+            },
+            weeks=9,
+            profile=FULL_PROFILE,
+        )
+        first, last = traj["weeks"][0], traj["weeks"][-1]
+        assert last["expected_weight_lb"] < first["expected_weight_lb"]
+
+    def test_ordinal_reads_as_english(self):
+        from nutrition.pacing import _ordinal
+
+        assert [_ordinal(n) for n in (1, 2, 3, 4, 11, 12, 13, 21)] == [
+            "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st",
+        ]
+
+
+class TestMaintenanceTracksBodyweight:
+    def test_maintenance_rises_with_weight(self):
+        from nutrition.trajectory import maintenance_at_weight
+
+        light = maintenance_at_weight(FULL_PROFILE, 180)
+        heavy = maintenance_at_weight(FULL_PROFILE, 200)
+        assert heavy > light
+
+    def test_a_bulk_decelerates_as_maintenance_catches_up(self):
+        """
+        The rationale tells the user maintenance rises as they gain. Holding it
+        fixed made the model contradict its own copy and overstate the gain.
+        """
+        t = build_trajectory(
+            "lean_bulk", {"calories": 3200, "protein": 190}, weeks=12, profile=FULL_PROFILE
+        )
+        weekly = [
+            t.weeks[i].expected_weight_change_lb - t.weeks[i - 1].expected_weight_change_lb
+            for i in range(1, len(t.weeks))
+        ]
+        # Once calories cap out, each further week should add slightly less.
+        assert weekly[-1] < weekly[len(weekly) // 2]

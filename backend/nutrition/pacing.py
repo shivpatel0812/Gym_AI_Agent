@@ -20,10 +20,12 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from nutrition.trajectory import (
+    CALORIES_PER_POUND,
     MAX_CALORIE_DRIFT,
     WEEKLY_CALORIE_STEP,
     build_trajectory,
     estimate_maintenance_calories,
+    maintenance_at_weight,
 )
 
 # ---------------------------------------------------------------------------
@@ -152,6 +154,46 @@ def default_pacing(goal: Optional[str] = None) -> Dict[str, Any]:
 # Trajectory shaped by pacing
 # ---------------------------------------------------------------------------
 
+def _ordinal(n: int) -> str:
+    """3 -> '3rd'. Small thing, but 'every 3th week' reads as a bug to a user."""
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _recompute_weight_curve(
+    payload: Dict[str, Any], profile: Optional[Dict[str, Any]]
+) -> None:
+    """
+    Rebuild the bodyweight projection from whatever calories now sit on the
+    rows, in place.
+
+    Any style that rewrites a week's calories after `build_trajectory` has run
+    has to call this, or the weight curve silently describes a different plan
+    from the one the calorie chart shows.
+    """
+    start_weight = (profile or {}).get("weight")
+    rows = payload.get("weeks") or []
+    if not rows:
+        return
+    if not payload.get("maintenance_calories"):
+        return
+
+    cumulative = 0.0
+    for row in rows:
+        current = float(start_weight) + cumulative if start_weight else None
+        week_maintenance = (
+            maintenance_at_weight(profile or {}, current)
+            or payload["maintenance_calories"]
+        )
+        cumulative += (row["calories"] - week_maintenance) * 7 / CALORIES_PER_POUND
+        row["expected_weight_change_lb"] = round(cumulative, 1)
+        if start_weight:
+            row["expected_weight_lb"] = round(float(start_weight) + cumulative, 1)
+
+
 def build_paced_trajectory(
     plan: Dict[str, Any],
     weeks: int,
@@ -195,9 +237,14 @@ def build_paced_trajectory(
                 row["phase"] = "diet_break"
             else:
                 row["phase"] = "cut"
+        # The weight curve was computed from the pre-break calories, so without
+        # this it keeps dropping straight through a week spent eating at
+        # maintenance — the chart would promise loss the plan is not asking for.
+        _recompute_weight_curve(payload, profile)
         payload["rationale"] = (
             f"Cut weeks hold at {targets.get('calories')} kcal. "
-            f"Every {every}th week is a diet break near maintenance (~{maintenance} kcal)."
+            f"Every {_ordinal(every)} week is a diet break near maintenance "
+            f"(~{maintenance} kcal)."
         )
     elif pacing["style"] == "refeed":
         days = ", ".join(d.title() for d in pacing["refeed_days"]) or "one day"

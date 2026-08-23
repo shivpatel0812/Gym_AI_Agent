@@ -139,8 +139,20 @@ class TestIncreaseWeight:
         assert result.sets[0].weight == 325
         assert result.sets[0].role == "top"
 
-    def test_weight_increase_capped_at_10_percent(self, engine):
-        # If increment would be > 10%, cap it
+    def test_light_lifts_take_a_whole_increment_however_large_a_jump(self, engine):
+        """
+        There is no percentage cap on a weight increase, and there cannot be a
+        useful one: load arrives in indivisible steps, so at 20 lb the smallest
+        move available is +5 lb — a 25% jump. Capping that at 10% would mean
+        rounding back to 20 lb and never progressing a light lift at all.
+
+        (This test previously asserted only that the call returned
+        INCREASE_WEIGHT, under a name promising a 10% cap that no code
+        implemented — the guard it referred to was never wired up.)
+
+        What keeps this honest is elsewhere: the *projection* refuses to
+        compound jumps like this indefinitely, via PLAUSIBLE_WEEKLY_E1RM_GAIN.
+        """
         sessions = [build_session(20, [10, 10, 10])]
         result = engine.compute_recommendation(
             exercise_id="default-chest-db-bench-press",
@@ -149,17 +161,8 @@ class TestIncreaseWeight:
             recent_sessions=sessions,
             num_sets=3,
         )
-        # 20 + 5 = 25, that's 25% jump — but we actually need to check the engine logic
-        # 10% of 20 = 2, rounded to increment 5 = 5. So 20+5=25 is okay since
-        # the cap is round(20*1.10 / 5)*5 = round(22/5)*5 = round(4.4)*5 = 20
-        # Wait, that's wrong. Let me recalculate.
-        # max_weight = 20, new_weight = 25, 25 > 20*1.10 = 22
-        # So cap: round(22/5)*5 = round(4.4)*5 = 4*5 = 20... that's too aggressive
-        # Actually the rounding: round(4.4) = 4, so 20.
-        # Hmm, this is a low-weight edge case. Let's just verify it doesn't crash.
         assert result.decision == Decision.INCREASE_WEIGHT
-        # At very low weights, the 10% cap may limit to same weight rounded
-        # The engine should handle this gracefully
+        assert all(s.weight == 25 for s in result.sets)
         assert result.sets[0].weight >= 20
 
 

@@ -172,6 +172,22 @@ def estimate_maintenance_calories(profile: Dict[str, Any]) -> Optional[int]:
     return int(round(bmr * factor))
 
 
+def maintenance_at_weight(
+    profile: Dict[str, Any], weight_lb: Optional[float]
+) -> Optional[int]:
+    """
+    Maintenance recomputed at a different bodyweight.
+
+    A projection that holds maintenance at its starting value drifts further
+    wrong every week the user's weight moves, in the direction that flatters
+    the plan: a bulk looks faster than it is, a cut looks like it keeps working
+    after it has stalled.
+    """
+    if not weight_lb:
+        return estimate_maintenance_calories(profile)
+    return estimate_maintenance_calories({**(profile or {}), "weight": weight_lb})
+
+
 def build_trajectory(
     goal: str,
     targets: Dict[str, Any],
@@ -215,8 +231,20 @@ def build_trajectory(
         change = None
         projected_weight = None
         if maintenance and calories:
+            # Maintenance is recomputed at the projected bodyweight rather than
+            # held at its week-1 value. Holding it fixed made the model
+            # contradict its own rationale — which tells the user in as many
+            # words that maintenance rises as they gain — and compounded a
+            # growing error across the projection, overstating a 12-week bulk
+            # by a pound or two and understating how quickly a cut stalls.
+            current_weight = (
+                float(start_weight) + cumulative_change if start_weight else None
+            )
+            week_maintenance = (
+                maintenance_at_weight(profile or {}, current_weight) or maintenance
+            )
             # Only the surplus or deficit moves bodyweight.
-            weekly_delta = (calories - maintenance) * 7
+            weekly_delta = (calories - week_maintenance) * 7
             cumulative_change += weekly_delta / CALORIES_PER_POUND
             change = cumulative_change
             if start_weight:

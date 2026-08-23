@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "./src/firebase";
 import { syncTimezone } from "./src/api/timezone";
+import { configureNotifications, clearSleepReminders } from "./src/notifications";
 import Login from "./src/components/Login";
 import Dashboard from "./src/components/Dashboard";
 import Home from "./src/components/home/Home";
@@ -216,6 +217,9 @@ export default function App() {
     // MaterialCommunityIcons are already bundled with @expo/vector-icons
     // No need to load them via expo-font, so we can hide splash screen immediately
     SplashScreen.hideAsync();
+    // Only sets how an arriving notification behaves. Nothing is scheduled and
+    // no permission is requested until the user turns a reminder on.
+    configureNotifications();
   }, []);
 
   useEffect(() => {
@@ -230,6 +234,9 @@ export default function App() {
   }, []);
 
   const handleLogout = async () => {
+    // Queued reminders are this user's, and they would otherwise keep firing on
+    // a shared device after they had signed out.
+    await clearSleepReminders();
     await signOut(auth);
   };
 

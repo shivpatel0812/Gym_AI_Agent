@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { View, Text, TouchableOpacity, Alert, Platform, StyleSheet } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import apiClient from "../../api/client";
 import { SleepBaseline, SleepEntry, todayKey } from "./types";
 import { EmptyNote, Field, FormCard, LevelSlider, Meter, logStyles } from "./ui";
+import SleepReminderRow from "./SleepReminderRow";
 import { colors } from "../../theme";
 
 const emptySleep = (): SleepEntry => ({
@@ -127,9 +128,16 @@ export default function SleepSection() {
     );
   };
 
+  // Days that already have an entry, so the reminder can skip them.
+  const loggedDates = useMemo(
+    () => entries.map((entry) => entry.date).filter(Boolean) as string[],
+    [entries]
+  );
+
   return (
     <View style={logStyles.wrap}>
       {renderBaseline()}
+      <SleepReminderRow loggedDates={loggedDates} />
       <View style={logStyles.topRow}>
         {!showForm && (
           <TouchableOpacity style={logStyles.logBtn} onPress={() => setShowForm(true)}>
