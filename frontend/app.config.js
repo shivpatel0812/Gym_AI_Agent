@@ -80,15 +80,10 @@ module.exports = {
             "GymAI uses your camera for meal photos and optional guided progress photos for AI body-scan coaching. Photos used for body scan are analyzed and then deleted.",
         },
       ],
-      // Reminders are scheduled on the device, so no push credentials are
-      // needed and nothing about them leaves the phone.
-      [
-        "expo-notifications",
-        {
-          icon: "./assets/adaptive-icon.png",
-          color: "#070708",
-        },
-      ],
+      // Local sleep reminders use the expo-notifications JS API only. Expo still
+      // auto-injects `aps-environment` when the package is installed — strip it
+      // so Ad Hoc builds don't require Push Notifications on the Apple App ID.
+      "./plugins/withLocalNotificationsOnly",
     ],
     extra: {
       apiBaseUrl:
