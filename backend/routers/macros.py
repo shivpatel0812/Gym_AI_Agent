@@ -22,6 +22,62 @@ def _normalize_food_text(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "").strip().lower())
 
 
+def _logged_food_quantity(item: dict) -> float:
+    """Units this logged row represents; always >= 1 so it is safe to divide by."""
+    try:
+        quantity = float(item.get("quantity") or 1)
+    except (TypeError, ValueError):
+        return 1.0
+    return quantity if quantity > 0 else 1.0
+
+
+def _saved_food_payload(item: dict, now: str) -> Optional[dict]:
+    """
+    Per-SERVING library entry for a logged food, or None if it isn't storable.
+
+    Macros on a logged row are the product (per-unit x quantity), but the library
+    stores ONE serving. The quantity has to be divided back out or a "rice cake
+    x3" log would redefine a rice cake as three of them -- and that inflated
+    value would then be re-logged and re-remembered, compounding each time.
+    """
+    name = str(item.get("name") or "").strip()
+    if not name:
+        return None
+    try:
+        float(item.get("calories") or 0)
+        float(item.get("protein") or 0)
+    except (TypeError, ValueError):
+        return None
+
+    quantity = _logged_food_quantity(item)
+
+    def per_unit(value) -> float:
+        try:
+            return round(float(value or 0) / quantity, 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # `amount` on a multi-unit row reads "3 x 1 cake", which is not a serving
+    # label -- fall back to unit_amount, and to a generic label if absent.
+    serving = str(item.get("unit_amount") or "").strip()
+    if not serving and quantity == 1:
+        serving = str(item.get("amount") or "").strip()
+    serving = serving or "1 serving"
+
+    return {
+        "name": name,
+        "serving": serving[:80],
+        "grams": 100.0,
+        "calories": per_unit(item.get("calories")),
+        "protein": per_unit(item.get("protein")),
+        "carbs": per_unit(item.get("carbs")),
+        "fats": per_unit(item.get("fats")),
+        "fiber": per_unit(item.get("fiber")),
+        "updated_at": now,
+        "last_used_at": now,
+    }
+
+
 def _remember_logged_foods(user_id: str, food_items) -> None:
     """Upsert each logged food into the user's Saved Foods library."""
     items = food_items if isinstance(food_items, list) else []
@@ -29,28 +85,10 @@ def _remember_logged_foods(user_id: str, food_items) -> None:
     for item in items:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name") or "").strip()
-        if not name:
+        payload = _saved_food_payload(item, now)
+        if payload is None:
             continue
-        try:
-            calories = float(item.get("calories") or 0)
-            protein = float(item.get("protein") or 0)
-        except (TypeError, ValueError):
-            continue
-        serving = str(item.get("amount") or "").strip() or "1 serving"
-        name_key = _normalize_food_text(name)
-        payload = {
-            "name": name,
-            "serving": serving[:80],
-            "grams": 100.0,
-            "calories": calories,
-            "protein": protein,
-            "carbs": float(item.get("carbs") or 0),
-            "fats": float(item.get("fats") or 0),
-            "fiber": float(item.get("fiber") or 0),
-            "updated_at": now,
-            "last_used_at": now,
-        }
+        name_key = _normalize_food_text(payload["name"])
         existing = None
         for doc in _foods_ref(user_id).stream():
             data = doc.to_dict() or {}
@@ -66,12 +104,14 @@ def _remember_logged_foods(user_id: str, food_items) -> None:
                 "serving": prev.get("serving") or payload["serving"],
                 "grams": float(prev.get("grams") or payload["grams"] or 100),
                 "created_at": prev.get("created_at") or now,
-                "aliases": list({*(prev.get("aliases") or []), name, serving}),
+                "aliases": list(
+                    {*(prev.get("aliases") or []), payload["name"], payload["serving"]}
+                ),
             }
             existing.reference.set(merged, merge=True)
         else:
             payload["created_at"] = now
-            payload["aliases"] = [name] if name else []
+            payload["aliases"] = [payload["name"]]
             _foods_ref(user_id).document().set(payload)
 
 
@@ -140,11 +180,28 @@ async def update_macro_entry(macro_id: str, macro_entry: MacroEntry, user_id: st
         macro_dict["food_items"] = []
     macro_dict["updated_at"] = datetime.now().isoformat()
     doc_ref = db.collection("users").document(user_id).collection("macros").document(macro_id)
-    if not doc_ref.get().exists:
+    prev_snap = doc_ref.get()
+    if not prev_snap.exists:
         raise HTTPException(status_code=404, detail="Macro entry not found")
+    prev = prev_snap.to_dict() or {}
+    prev_names = {
+        _normalize_food_text(item.get("name") or "")
+        for item in (prev.get("food_items") or [])
+        if isinstance(item, dict) and item.get("name")
+    }
+    # Only index newly added foods — re-scanning the whole library on every
+    # toggle made Home go-to clicks multi-second.
+    new_items = [
+        item
+        for item in (macro_dict.get("food_items") or [])
+        if isinstance(item, dict)
+        and item.get("name")
+        and _normalize_food_text(item.get("name") or "") not in prev_names
+    ]
     doc_ref.update(macro_dict)
     try:
-        _remember_logged_foods(user_id, macro_dict.get("food_items"))
+        if new_items:
+            _remember_logged_foods(user_id, new_items)
     except Exception:
         pass
     return {"id": macro_id, **macro_dict}

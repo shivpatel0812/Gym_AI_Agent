@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   View,
@@ -21,19 +21,18 @@ import apiClient from "../../api/client";
 import { colors, spacing } from "../../theme";
 import { todayKey } from "../wellness/types";
 import { LevelSlider } from "../wellness/ui";
-import LogFoodForm from "../nutrition/LogFoodForm";
-import { FoodItem } from "../nutrition/types";
+import LogFoodForm, { PlanMealPick } from "../nutrition/LogFoodForm";
+import { DEFAULT_TARGETS, FoodItem } from "../nutrition/types";
 import { TodaysWorkout } from "../workouts/types";
-import { EMPTY_USUALS, getUsuals, toggleUsual, getActiveNutritionPlan } from "../../api/nutritionPlan";
-import type { Usual, UsualsPayload } from "../../api/nutritionPlan";
-import {
-  displayMealLabel,
-  extractRecentMeals,
-  uncertainSlotsFromPlan,
-  RecentMealPick,
-} from "../../lib/recentMeals";
+import { getActiveNutritionPlan, mealAnchorKind } from "../../api/nutritionPlan";
+import type { NutritionPlan } from "../../api/nutritionPlan";
+import { normalizeMealLabel } from "../../lib/recentMeals";
+import { foodQuantity, scaleFoodItem } from "../../lib/foodQuantity";
+import { planItemAppliesToday, todayWeekdayKey } from "../../lib/mealSlots";
+import QuickLogBars from "./QuickLogBars";
+import TodayFoodLog from "./TodayFoodLog";
 
-type SheetKind = "sleep" | "stress" | "wellness" | "food" | "routine" | "weekMeals" | null;
+type SheetKind = "sleep" | "stress" | "wellness" | "food" | "routine" | null;
 
 type Routine = {
   id?: string;
@@ -62,42 +61,6 @@ const ROUTINE_ICONS: { name: keyof typeof MaterialCommunityIcons.glyphMap; label
   { name: "music", label: "Music" },
   { name: "sleep", label: "Rest" },
 ];
-
-const SLOT_ICONS: Record<string, keyof typeof MaterialCommunityIcons.glyphMap> = {
-  breakfast: "coffee-outline",
-  shake: "cup",
-  pre_workout: "dumbbell",
-  lunch: "food-fork-drink",
-  snack: "food-apple-outline",
-  dinner: "silverware-fork-knife",
-  late_night: "weather-night",
-  other: "food",
-};
-
-/** Flip a usual locally so the tap lands before the round trip does. */
-function flipUsual(payload: UsualsPayload, id: string): UsualsPayload {
-  const apply = (u: Usual) => (u.id === id ? { ...u, logged: !u.logged, can_undo: !u.logged } : u);
-  const usuals = payload.usuals.map(apply);
-  return {
-    ...payload,
-    usuals,
-    slots: payload.slots.map((slot) => ({ ...slot, usuals: slot.usuals.map(apply) })),
-    logged_count: usuals.filter((u) => u.expected && u.logged).length,
-  };
-}
-
-function remainingLine(remaining?: { calories: number | null; protein: number | null } | null) {
-  if (!remaining) return null;
-  const parts: string[] = [];
-  if (remaining.calories != null) {
-    const cal = Math.round(remaining.calories);
-    parts.push(cal < 0 ? `${Math.abs(cal).toLocaleString()} cal over` : `${cal.toLocaleString()} cal left`);
-  }
-  if (remaining.protein != null && remaining.protein > 0) {
-    parts.push(`${Math.round(remaining.protein)}g protein to go`);
-  }
-  return parts.length ? parts.join(" · ") : null;
-}
 
 function todayEntry<T extends { date?: string }>(rows: T[]): T | undefined {
   const key = todayKey();
@@ -146,19 +109,21 @@ export default function Home() {
   const [stressLevel, setStressLevel] = useState<number | null>(null);
   const [stressId, setStressId] = useState<string | null>(null);
   const [surveyId, setSurveyId] = useState<string | null>(null);
-  const [surveyLogged, setSurveyLogged] = useState(false);
   const [bodyId, setBodyId] = useState<string | null>(null);
   const [draftBody, setDraftBody] = useState("");
-  const [steps, setSteps] = useState(0);
-  const [activeCal, setActiveCal] = useState(0);
   const [todayWorkout, setTodayWorkout] = useState<TodaysWorkout | null>(null);
   const [routines, setRoutines] = useState<Routine[]>([]);
-  const [usuals, setUsuals] = useState<UsualsPayload>(EMPTY_USUALS);
-  const [uncertainSlots, setUncertainSlots] = useState<string[]>([]);
-  const [weekMeals, setWeekMeals] = useState<RecentMealPick[]>([]);
-  const [weekMealSlot, setWeekMealSlot] = useState<string>("lunch");
+  const [plan, setPlan] = useState<NutritionPlan | null>(null);
+  const [macroRows, setMacroRows] = useState<any[]>([]);
+  const [sleepRows, setSleepRows] = useState<any[]>([]);
+  const [stressRows, setStressRows] = useState<any[]>([]);
+  const [waterCups, setWaterCups] = useState(0);
+  const [waterId, setWaterId] = useState<string | null>(null);
+  const [waterTarget, setWaterTarget] = useState(DEFAULT_TARGETS.water);
   const [logMeal, setLogMeal] = useState("Lunch");
   const [logUncertain, setLogUncertain] = useState(false);
+  const [loggingId, setLoggingId] = useState<string | null>(null);
+  const [lockScroll, setLockScroll] = useState(false);
   const [sheet, setSheet] = useState<SheetKind>(null);
   const [saving, setSaving] = useState(false);
 
@@ -175,39 +140,144 @@ export default function Home() {
   const [routineName, setRoutineName] = useState("");
   const [routineDesc, setRoutineDesc] = useState("");
   const [routineIcon, setRoutineIcon] = useState<string>("briefcase-outline");
+  const macrosWriteChain = useRef(Promise.resolve());
+  const todayMacroIdRef = useRef<string | null>(null);
+  const todayFoodsPendingRef = useRef<FoodItem[] | null>(null);
+
+  const enqueueMacroWrite = (task: () => Promise<void>) => {
+    const next = macrosWriteChain.current.then(task, task);
+    macrosWriteChain.current = next.catch(() => undefined);
+    return next;
+  };
+
+  const patchTodayMacroRow = (prev: any[], nextFoods: FoodItem[], opts?: { id?: string }) => {
+    const existing = todayEntry(prev);
+    const totals = {
+      total_calories: nextFoods.reduce((s, f) => s + (Number(f.calories) || 0), 0),
+      total_protein: nextFoods.reduce((s, f) => s + (Number(f.protein) || 0), 0),
+    };
+    if (existing) {
+      return prev.map((row) =>
+        row === existing ||
+        (existing.id && row.id === existing.id) ||
+        String(row.date || "").slice(0, 10) === date
+          ? {
+              ...row,
+              ...(opts?.id ? { id: opts.id } : null),
+              food_items: nextFoods,
+              ...totals,
+            }
+          : row
+      );
+    }
+    return [
+      {
+        id: opts?.id || `local-${date}`,
+        date,
+        food_items: nextFoods,
+        ...totals,
+      },
+      ...prev,
+    ];
+  };
+
+  const flushTodayMacros = () =>
+    enqueueMacroWrite(async () => {
+      const foods = todayFoodsPendingRef.current;
+      if (foods === null) return;
+      const toWrite = foods;
+      let id = todayMacroIdRef.current;
+      try {
+        if (!toWrite.length) {
+          if (id) {
+            await apiClient.delete(`/api/macros/${id}`);
+            todayMacroIdRef.current = null;
+          }
+          return;
+        }
+        if (id) {
+          await apiClient.put(`/api/macros/${id}`, { date, food_items: toWrite });
+          return;
+        }
+        const res = await apiClient.post("/api/macros", { date, food_items: toWrite });
+        const newId = res.data?.id ? String(res.data.id) : null;
+        if (!newId) return;
+        todayMacroIdRef.current = newId;
+        setMacroRows((prev) => {
+          const existing = todayEntry(prev);
+          if (!existing) {
+            // Cleared while create was in flight — drop the doc we just made.
+            apiClient.delete(`/api/macros/${newId}`).catch(() => undefined);
+            todayMacroIdRef.current = null;
+            return prev;
+          }
+          return prev.map((row) =>
+            row === existing ||
+            row.id === existing.id ||
+            String(row.date || "").slice(0, 10) === date
+              ? { ...row, id: newId }
+              : row
+          );
+        });
+      } catch (error) {
+        console.error("Error saving macros:", error);
+        throw error;
+      }
+    });
 
   const load = useCallback(async () => {
     try {
-      const [sleepRes, stressRes, surveyRes, bodyRes, activityRes, routineRes, planRes, usualsRes, macrosRes, nutritionPlan] =
-        await Promise.all([
-          apiClient.get("/api/sleep"),
-          apiClient.get("/api/stress"),
-          apiClient.get("/api/wellness-survey"),
-          apiClient.get("/api/body-feelings"),
-          apiClient.get("/api/physical-activities"),
-          apiClient.get("/api/daily-routines"),
-          apiClient.get("/api/workout-plan/today").catch(() => ({ data: null })),
-          getUsuals(date).catch(() => EMPTY_USUALS),
-          apiClient.get("/api/macros").catch(() => ({ data: [] })),
-          getActiveNutritionPlan().catch(() => null),
-        ]);
-      const sleep = todayEntry(Array.isArray(sleepRes.data) ? sleepRes.data : []);
-      const stress = todayEntry(Array.isArray(stressRes.data) ? stressRes.data : []);
-      const survey = todayEntry(Array.isArray(surveyRes.data) ? surveyRes.data : []);
+      const [
+        sleepRes,
+        stressRes,
+        surveyRes,
+        bodyRes,
+        routineRes,
+        planRes,
+        macrosRes,
+        nutritionPlan,
+        hydrationRes,
+        targetsRes,
+      ] = await Promise.all([
+        apiClient.get("/api/sleep"),
+        apiClient.get("/api/stress"),
+        apiClient.get("/api/wellness-survey"),
+        apiClient.get("/api/body-feelings"),
+        apiClient.get("/api/daily-routines"),
+        apiClient.get("/api/workout-plan/today").catch(() => ({ data: null })),
+        apiClient.get("/api/macros").catch(() => ({ data: [] })),
+        getActiveNutritionPlan().catch(() => null),
+        apiClient.get("/api/hydration").catch(() => ({ data: [] })),
+        apiClient.get("/api/user-profile/nutrition-targets").catch(() => ({ data: null })),
+      ]);
+      const sleeps = Array.isArray(sleepRes.data) ? sleepRes.data : [];
+      const stresses = Array.isArray(stressRes.data) ? stressRes.data : [];
+      const surveys = Array.isArray(surveyRes.data) ? surveyRes.data : [];
+      const sleep = todayEntry(sleeps);
+      const stress = todayEntry(stresses);
+      const survey = todayEntry(surveys);
       const body = todayEntry(Array.isArray(bodyRes.data) ? bodyRes.data : []);
-      const activities = Array.isArray(activityRes.data) ? activityRes.data : [];
-      const todayActs = activities.filter((a: any) => String(a.date || "").slice(0, 10) === date);
-      const stepTotal = todayActs.reduce((sum: number, a: any) => sum + (Number(a.steps) || 0), 0);
-      const minutes = todayActs.reduce((sum: number, a: any) => sum + (Number(a.duration_minutes) || 0), 0);
+      const hydration = todayEntry(Array.isArray(hydrationRes.data) ? hydrationRes.data : []);
+      setSleepRows(sleeps);
+      setStressRows(stresses);
+      setWaterCups(Math.max(0, Math.round(Number(hydration?.amount_cups) || 0)));
+      setWaterId(hydration?.id || null);
+      setWaterTarget(
+        Math.max(
+          1,
+          Math.round(Number(targetsRes.data?.water) || DEFAULT_TARGETS.water)
+        )
+      );
       setSleepHours(sleep?.hours_slept != null ? Number(sleep.hours_slept) : null);
       setSleepId(sleep?.id || null);
       setSleepQuality(sleep?.quality != null ? Number(sleep.quality) : null);
+      setDraftSleep(sleep?.hours_slept != null ? Number(sleep.hours_slept) : 7.5);
       setDraftSleepQuality(sleep?.quality != null ? Number(sleep.quality) : 5);
       setStressLevel(stress?.level != null ? Number(stress.level) : null);
       setStressId(stress?.id || null);
+      setDraftStress(stress?.level != null ? Number(stress.level) : 5);
       setDraftStressNote(stress?.description || "");
       setSurveyId(survey?.id || null);
-      setSurveyLogged(Boolean(survey?.id || body?.id));
       setBodyId(body?.id || null);
       setDraftBody(body?.description || "");
       if (survey) {
@@ -216,26 +286,16 @@ export default function Home() {
         setDraftEnergy(survey.energy ?? 5);
         setDraftMood(survey.mood ?? 5);
       }
-      setSteps(stepTotal);
-      setActiveCal(minutes > 0 ? Math.round(minutes * 5) : Math.round(stepTotal * 0.04));
       setRoutines(Array.isArray(routineRes.data) ? routineRes.data : []);
       setTodayWorkout(planRes.data || null);
-      setUsuals(usualsRes);
-      const slots = uncertainSlotsFromPlan(nutritionPlan);
-      setUncertainSlots(slots);
-      const prefer =
-        (usualsRes.current_slot && (usualsRes.current_slot === "lunch" || usualsRes.current_slot === "dinner")
-          ? usualsRes.current_slot
-          : slots[0]) || "lunch";
-      setWeekMealSlot(prefer);
-      setWeekMeals(
-        extractRecentMeals(Array.isArray(macrosRes.data) ? macrosRes.data : [], {
-          meal: prefer,
-          days: 7,
-          excludeToday: true,
-          limit: 12,
-        })
-      );
+      setMacroRows(Array.isArray(macrosRes.data) ? macrosRes.data : []);
+      const todayMacro = todayEntry(Array.isArray(macrosRes.data) ? macrosRes.data : []);
+      todayMacroIdRef.current =
+        todayMacro?.id && !String(todayMacro.id).startsWith("local-")
+          ? String(todayMacro.id)
+          : null;
+      todayFoodsPendingRef.current = null;
+      setPlan(nutritionPlan);
     } catch (error) {
       console.error("Error loading home:", error);
     }
@@ -258,42 +318,9 @@ export default function Home() {
   };
   const openWellness = () => setSheet("wellness");
   const openFood = (mealLabel?: string, uncertain = false) => {
-    const label = mealLabel || displayMealLabel(usuals.current_slot || "lunch");
-    setLogMeal(label);
+    setLogMeal(mealLabel || "Lunch");
     setLogUncertain(uncertain);
     setSheet("food");
-  };
-
-  const openWeekMeals = async (slot: string) => {
-    setWeekMealSlot(slot);
-    try {
-      const res = await apiClient.get("/api/macros");
-      setWeekMeals(
-        extractRecentMeals(Array.isArray(res.data) ? res.data : [], {
-          meal: slot,
-          days: 7,
-          excludeToday: true,
-          limit: 16,
-        })
-      );
-    } catch {
-      setWeekMeals([]);
-    }
-    setSheet("weekMeals");
-  };
-
-  const logRecentPick = async (item: RecentMealPick) => {
-    await addFood({
-      name: item.name,
-      calories: item.calories,
-      protein: item.protein,
-      carbs: item.carbs,
-      fats: item.fats,
-      fiber: item.fiber,
-      amount: item.amount,
-      meal: displayMealLabel(weekMealSlot),
-      uncertain: true,
-    });
   };
   const openNewRoutine = () => {
     setEditingRoutine(null);
@@ -382,37 +409,245 @@ export default function Home() {
     }
   };
 
-  const addFood = async (food: FoodItem) => {
+  const persistSleepHours = async (hours: number) => {
     try {
-      const res = await apiClient.get("/api/macros");
-      const rows = Array.isArray(res.data) ? res.data : [];
-      const existing = todayEntry(rows);
-      if (existing?.id) {
-        await apiClient.put(`/api/macros/${existing.id}`, {
-          date,
-          food_items: [...(existing.food_items || []), food],
-        });
-      } else {
-        await apiClient.post("/api/macros", { date, food_items: [food] });
+      const payload = { date, hours_slept: hours, quality: sleepQuality ?? 5 };
+      if (sleepId) await apiClient.put(`/api/sleep/${sleepId}`, payload);
+      else {
+        const res = await apiClient.post("/api/sleep", payload);
+        setSleepId(res.data?.id || null);
       }
-      setSheet(null);
-      await load();
+      setSleepHours(hours);
+      setDraftSleep(hours);
+      setSleepRows((prev) => {
+        const rest = prev.filter((row) => String(row.date || "").slice(0, 10) !== date);
+        return [...rest, { date, hours_slept: hours, quality: sleepQuality ?? 5, id: sleepId }];
+      });
     } catch (error) {
-      console.error("Error logging food:", error);
+      console.error("Error saving sleep:", error);
     }
   };
 
-  const onToggleUsual = async (usual: Usual) => {
-    // Logged by hand rather than tapped: it is already on the day, and this
-    // feature has nothing of its own to remove.
-    if (usual.logged && !usual.can_undo) return;
-    setUsuals((prev) => flipUsual(prev, usual.id));
+  const persistStressLevel = async (level: number) => {
     try {
-      setUsuals(await toggleUsual(usual.id, date));
+      const payload = {
+        date,
+        level,
+        description: draftStressNote.trim() || undefined,
+      };
+      if (stressId) await apiClient.put(`/api/stress/${stressId}`, payload);
+      else {
+        const res = await apiClient.post("/api/stress", payload);
+        setStressId(res.data?.id || null);
+      }
+      setStressLevel(level);
+      setDraftStress(level);
+      setStressRows((prev) => {
+        const rest = prev.filter((row) => String(row.date || "").slice(0, 10) !== date);
+        return [...rest, { date, level, id: stressId }];
+      });
     } catch (error) {
-      console.error("Error toggling usual:", error);
-      setUsuals((prev) => flipUsual(prev, usual.id));
+      console.error("Error saving stress:", error);
     }
+  };
+
+  const persistWaterCups = async (cups: number) => {
+    const next = Math.max(0, Math.round(cups));
+    setWaterCups(next);
+    try {
+      const payload = { date, amount_cups: next };
+      if (waterId) await apiClient.put(`/api/hydration/${waterId}`, payload);
+      else {
+        const res = await apiClient.post("/api/hydration", payload);
+        setWaterId(res.data?.id || null);
+      }
+    } catch (error) {
+      console.error("Error saving hydration:", error);
+    }
+  };
+
+  const addFoods = async (foods: FoodItem[], closeSheet = true) => {
+    if (!foods.length) return;
+    const tag = foods[0]?.usual_id || foods[0]?.anchor_id || null;
+    if (tag) setLoggingId(tag);
+
+    let snapshot: any[] = [];
+    let skipped = false;
+    setMacroRows((prev) => {
+      snapshot = prev;
+      const existing = todayEntry(prev);
+      if (existing?.id && !String(existing.id).startsWith("local-")) {
+        todayMacroIdRef.current = String(existing.id);
+      }
+      const current = existing?.food_items || [];
+      // Ignore double-taps before the optimistic re-render lands.
+      const toAdd = foods.filter((f) => {
+        const t = f.usual_id || f.anchor_id;
+        if (!t) return true;
+        return !current.some((x) => x.usual_id === t || x.anchor_id === t);
+      });
+      if (!toAdd.length) {
+        skipped = true;
+        return prev;
+      }
+      const nextFoods = [...current, ...toAdd];
+      todayFoodsPendingRef.current = nextFoods;
+      return patchTodayMacroRow(prev, nextFoods);
+    });
+    if (closeSheet) setSheet(null);
+    setLoggingId(null);
+    if (skipped) return;
+
+    try {
+      await flushTodayMacros();
+    } catch {
+      setMacroRows(snapshot);
+      const existing = todayEntry(snapshot);
+      todayFoodsPendingRef.current = existing?.food_items || [];
+      todayMacroIdRef.current =
+        existing?.id && !String(existing.id).startsWith("local-")
+          ? String(existing.id)
+          : todayMacroIdRef.current;
+    }
+  };
+
+  const addFood = async (food: FoodItem) => addFoods([food]);
+
+  /**
+   * Change how many units of a tagged item are logged. `base` is the PER-UNIT
+   * food; the row is always rebuilt as base x qty so repeated taps cannot drift.
+   * Dropping to zero removes the row, matching removeByTag.
+   */
+  const bumpFoodQuantity = async (tag: string, delta: number, base: FoodItem) => {
+    setLoggingId(tag);
+
+    let snapshot: any[] = [];
+    let changed = false;
+    setMacroRows((prev) => {
+      snapshot = prev;
+      const existing = todayEntry(prev);
+      if (existing?.id && !String(existing.id).startsWith("local-")) {
+        todayMacroIdRef.current = String(existing.id);
+      }
+      const current: FoodItem[] = existing?.food_items || [];
+      const name = String(base.name || "").trim().toLowerCase();
+      let idx = current.findIndex(
+        (f) => (f.usual_id && f.usual_id === tag) || (f.anchor_id && f.anchor_id === tag)
+      );
+      // The same food may already be on the log untagged (added via the form).
+      // Bump that row rather than appending a duplicate beside it.
+      if (idx === -1 && name) {
+        idx = current.findIndex(
+          (f) =>
+            !f.usual_id &&
+            !f.anchor_id &&
+            String(f.name || "").trim().toLowerCase() === name
+        );
+      }
+
+      let nextFoods: FoodItem[];
+      if (idx === -1) {
+        if (delta <= 0) return prev;
+        nextFoods = [...current, scaleFoodItem(base, 1)];
+      } else {
+        const nextQty = foodQuantity(current[idx]) + delta;
+        if (nextQty <= 0) {
+          nextFoods = current.filter((_, i) => i !== idx);
+        } else {
+          nextFoods = current.map((f, i) =>
+            i === idx ? { ...scaleFoodItem(base, nextQty), meal: f.meal ?? base.meal } : f
+          );
+        }
+      }
+
+      changed = true;
+      todayFoodsPendingRef.current = nextFoods;
+      if (!nextFoods.length && existing) {
+        return prev.filter(
+          (row) =>
+            row !== existing &&
+            row.id !== existing.id &&
+            String(row.date || "").slice(0, 10) !== date
+        );
+      }
+      return patchTodayMacroRow(prev, nextFoods);
+    });
+    setLoggingId(null);
+    if (!changed) return;
+
+    try {
+      await flushTodayMacros();
+    } catch {
+      setMacroRows(snapshot);
+      const existing = todayEntry(snapshot);
+      todayFoodsPendingRef.current = existing?.food_items || [];
+      todayMacroIdRef.current =
+        existing?.id && !String(existing.id).startsWith("local-")
+          ? String(existing.id)
+          : todayMacroIdRef.current;
+    }
+  };
+
+  const removeByTag = async (tag: string) => {
+    setLoggingId(tag);
+
+    let snapshot: any[] = [];
+    setMacroRows((prev) => {
+      snapshot = prev;
+      const existing = todayEntry(prev);
+      if (!existing) return prev;
+      if (existing.id && !String(existing.id).startsWith("local-")) {
+        todayMacroIdRef.current = String(existing.id);
+      }
+      const nextFoods = (existing.food_items || []).filter(
+        (item: FoodItem) => item.usual_id !== tag && item.anchor_id !== tag
+      );
+      todayFoodsPendingRef.current = nextFoods;
+      if (!nextFoods.length) {
+        return prev.filter(
+          (row) =>
+            row !== existing &&
+            row.id !== existing.id &&
+            String(row.date || "").slice(0, 10) !== date
+        );
+      }
+      return patchTodayMacroRow(prev, nextFoods);
+    });
+    setLoggingId(null);
+
+    try {
+      await flushTodayMacros();
+    } catch {
+      setMacroRows(snapshot);
+      const existing = todayEntry(snapshot);
+      todayFoodsPendingRef.current = existing?.food_items || [];
+      todayMacroIdRef.current =
+        existing?.id && !String(existing.id).startsWith("local-")
+          ? String(existing.id)
+          : todayMacroIdRef.current;
+    }
+  };
+
+  const planMealsFor = (mealLabel: string): PlanMealPick[] => {
+    const slots = mealLabel === "Pre-Workout"
+      ? ["pre_workout", "shake"]
+      : mealLabel === "Snacks"
+        ? ["snack", "late_night", "other"]
+        : [normalizeMealLabel(mealLabel)];
+    const weekday = todayWeekdayKey();
+    return (plan?.meal_anchors || [])
+      .filter(
+        (a) =>
+          a.id &&
+          slots.includes(normalizeMealLabel(a.slot)) &&
+          planItemAppliesToday(a, weekday)
+      )
+      .map((a) => ({
+        id: String(a.id),
+        label: a.label || "Plan meal",
+        kind: mealAnchorKind(a),
+        foods: a.foods || [],
+      }));
   };
 
   const saveRoutine = async () => {
@@ -469,178 +704,52 @@ export default function Home() {
 
   const doneCount = routines.filter((r) => (r.completed_dates || []).includes(date)).length;
   const progress = routines.length ? doneCount / routines.length : 0;
-  const wellnessCount = surveyLogged ? 3 : 0;
   const now = new Date();
   const dateLabel = now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   const showWorkout = todayWorkout?.status === "workout_day" && !todayWorkout.already_logged;
-  const budgetLine = remainingLine(usuals.remaining);
+  const todayFoods: FoodItem[] = todayEntry(macroRows)?.food_items || [];
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+      scrollEnabled={!lockScroll}
+    >
       <View style={styles.header}>
         <Text style={styles.greeting}>{greetingForHour(now.getHours())}</Text>
         <Text style={styles.dateLine}>{dateLabel}</Text>
       </View>
 
-      <Text style={styles.sectionLabel}>Quick log</Text>
-      <View style={styles.quickRow}>
-        <TouchableOpacity style={styles.halfCard} onPress={openSleep}>
-          <MaterialCommunityIcons name="moon-waning-crescent" size={22} color="#A78BFA" />
-          <Text style={styles.cardLabel}>Sleep</Text>
-          {sleepHours != null ? (
-            <>
-              <Text style={styles.cardValue}>{sleepHours} hrs</Text>
-              {sleepQuality != null ? (
-                <Text style={styles.bodyPreview}>Quality {sleepQuality}/10</Text>
-              ) : null}
-            </>
-          ) : (
-            <Text style={styles.tap}>Tap to log</Text>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.halfCard} onPress={openStress}>
-          <MaterialCommunityIcons name="head-outline" size={22} color="#E9D5FF" />
-          <Text style={styles.cardLabel}>Stress</Text>
-          {stressLevel != null ? (
-            <Text style={styles.cardValue}>{stressLevel}/10</Text>
-          ) : (
-            <Text style={styles.tap}>Tap to log</Text>
-          )}
-        </TouchableOpacity>
-      </View>
+      <QuickLogBars
+        sleepHours={sleepHours}
+        sleepQuality={sleepQuality}
+        stressLevel={stressLevel}
+        energy={surveyId ? draftEnergy : null}
+        aches={surveyId ? draftAches : null}
+        waterCups={waterCups}
+        waterTarget={waterTarget}
+        sleepRows={sleepRows}
+        stressRows={stressRows}
+        onSaveSleep={persistSleepHours}
+        onSaveStress={persistStressLevel}
+        onSaveWater={persistWaterCups}
+        onOpenWellness={openWellness}
+        onOpenSleep={openSleep}
+        onOpenStress={openStress}
+        onLockScroll={setLockScroll}
+      />
 
-      <TouchableOpacity style={styles.wellnessCard} onPress={openWellness}>
-        <View style={styles.wellnessIcon}>
-          <MaterialCommunityIcons name="heart" size={20} color="#F9A8D4" />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.cardLabel}>Wellness</Text>
-          <Text style={styles.cardValue}>Mood, energy, soreness</Text>
-          {draftBody.trim() ? (
-            <Text style={styles.bodyPreview} numberOfLines={1}>
-              {draftBody.trim()}
-            </Text>
-          ) : null}
-        </View>
-        <Text style={styles.tap}>{wellnessCount}/3 logged</Text>
-      </TouchableOpacity>
-
-      <View style={styles.routinesHead}>
-        <Text style={styles.sectionLabel}>Your usuals</Text>
-        {usuals.expected_count > 0 ? (
-          <Text style={styles.frac}>
-            {usuals.logged_count}/{usuals.expected_count}
-          </Text>
-        ) : null}
-      </View>
-
-      {usuals.has_usuals ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.usualScroll}>
-          {usuals.slots.map((slot) => (
-            <View key={slot.slot} style={styles.usualGroup}>
-              <View style={styles.usualGroupHead}>
-                {slot.is_current ? <View style={styles.nowDot} /> : null}
-                <Text style={[styles.usualTime, slot.is_current && styles.usualTimeNow]}>
-                  {/* slot.label covers a backend that predates time labels. */}
-                  {slot.time_label || slot.label}
-                </Text>
-              </View>
-              <View style={styles.usualGroupRow}>
-                {slot.usuals.map((usual) => (
-                  <TouchableOpacity
-                    key={usual.id}
-                    activeOpacity={0.85}
-                    style={[styles.usualChip, usual.logged && styles.usualChipOn]}
-                    onPress={() => onToggleUsual(usual)}
-                  >
-                    <View style={[styles.usualIcon, usual.logged && styles.usualIconOn]}>
-                      <MaterialCommunityIcons
-                        name={SLOT_ICONS[usual.slot] || "food"}
-                        size={16}
-                        color={usual.logged ? "#05080F" : "#7C8CA0"}
-                      />
-                    </View>
-                    {usual.logged ? (
-                      <View style={styles.usualCheck}>
-                        <MaterialCommunityIcons name="check" size={10} color="#05080F" />
-                      </View>
-                    ) : null}
-                    <Text style={[styles.usualName, usual.logged && styles.usualNameOn]} numberOfLines={2}>
-                      {usual.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          ))}
-        </ScrollView>
-      ) : (
-        <TouchableOpacity style={styles.emptyRoutines} onPress={() => navigation.navigate("Nutrition")}>
-          <Text style={styles.emptyText}>
-            Foods you log often show up here to tap — add your usual meals in your nutrition plan.
-          </Text>
-        </TouchableOpacity>
-      )}
-
-      {budgetLine ? <Text style={styles.remainingLine}>{budgetLine}</Text> : null}
-
-      {(uncertainSlots.length > 0 || weekMeals.length > 0) &&
-      (uncertainSlots.includes("lunch") ||
-        uncertainSlots.includes("dinner") ||
-        usuals.current_slot === "lunch" ||
-        usuals.current_slot === "dinner") ? (
-        <View style={styles.uncertainHomeBox}>
-          <View style={styles.routinesHead}>
-            <Text style={[styles.sectionLabel, { color: "#F5C542" }]}>
-              Uncertain · past week
-            </Text>
-            <TouchableOpacity
-              onPress={() =>
-                openWeekMeals(
-                  uncertainSlots[0] ||
-                    (usuals.current_slot === "dinner" ? "dinner" : "lunch")
-                )
-              }
-            >
-              <Text style={styles.seeAll}>See all</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.uncertainHomeHint}>
-            Tap a meal you had this week for{" "}
-            {displayMealLabel(weekMealSlot).toLowerCase()}, or log something new.
-          </Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.weekChipRow}>
-            {weekMeals.slice(0, 8).map((item) => (
-              <TouchableOpacity
-                key={item.key}
-                style={styles.weekChip}
-                onPress={() => logRecentPick(item)}
-              >
-                <Text style={styles.weekChipName} numberOfLines={2}>
-                  {item.name}
-                </Text>
-                <Text style={styles.weekChipMeta}>
-                  {[item.calories ? `${item.calories} kcal` : null, item.protein ? `${item.protein}g P` : null]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity
-              style={[styles.weekChip, styles.weekChipAdd]}
-              onPress={() => openFood(displayMealLabel(weekMealSlot), true)}
-            >
-              <MaterialCommunityIcons name="plus" size={18} color="#F5C542" />
-              <Text style={styles.weekChipName}>Log uncertain</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
-      ) : null}
-
-      <TouchableOpacity style={styles.foodBtn} onPress={() => openFood()}>
-        <MaterialCommunityIcons name="food-apple" size={20} color="#4ADE80" />
-        <Text style={styles.foodBtnText}>Log food</Text>
-      </TouchableOpacity>
+      <TodayFoodLog
+        plan={plan}
+        todayFoods={todayFoods}
+        macroRows={macroRows}
+        loggingId={loggingId}
+        onLogMeal={(meal, uncertain) => openFood(meal, uncertain)}
+        onLogFoods={(foods) => addFoods(foods, false)}
+        onRemoveTag={removeByTag}
+        onBumpFood={bumpFoodQuantity}
+      />
 
       <View style={styles.routinesHead}>
         <Text style={styles.sectionLabel}>Routines</Text>
@@ -689,17 +798,6 @@ export default function Home() {
       )}
       <View style={styles.progressTrack}>
         <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
-      </View>
-
-      <View style={styles.activityCard}>
-        <View style={styles.activityCol}>
-          <Text style={styles.cardLabel}>Steps</Text>
-          <Text style={styles.bigStat}>{steps ? steps.toLocaleString() : "0"}</Text>
-        </View>
-        <View style={styles.activityCol}>
-          <Text style={styles.cardLabel}>Active cal</Text>
-          <Text style={styles.bigStat}>{activeCal ? activeCal.toLocaleString() : "0"}</Text>
-        </View>
       </View>
 
       {showWorkout ? (
@@ -806,67 +904,14 @@ export default function Home() {
         <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
           <LogFoodForm
             meal={logMeal}
+            compact
             defaultUncertain={logUncertain}
+            planMeals={planMealsFor(logMeal)}
+            onMealChange={setLogMeal}
             onAdd={addFood}
+            onAddMany={(foods) => addFoods(foods)}
             onCancel={() => setSheet(null)}
           />
-        </ScrollView>
-      </Sheet>
-
-      <Sheet
-        visible={sheet === "weekMeals"}
-        title={`Past week · ${displayMealLabel(weekMealSlot)}`}
-        onClose={() => setSheet(null)}
-      >
-        <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
-          <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
-            {(["lunch", "dinner"] as const).map((slot) => (
-              <TouchableOpacity
-                key={slot}
-                style={[
-                  styles.slotPick,
-                  weekMealSlot === slot && styles.slotPickOn,
-                ]}
-                onPress={() => openWeekMeals(slot)}
-              >
-                <Text
-                  style={[
-                    styles.slotPickText,
-                    weekMealSlot === slot && styles.slotPickTextOn,
-                  ]}
-                >
-                  {displayMealLabel(slot)}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          {weekMeals.length === 0 ? (
-            <Text style={styles.emptyText}>
-              No {displayMealLabel(weekMealSlot).toLowerCase()} logs in the past week yet.
-            </Text>
-          ) : (
-            weekMeals.map((item) => (
-              <TouchableOpacity
-                key={item.key}
-                style={styles.weekListRow}
-                onPress={() => logRecentPick(item)}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.weekChipName}>{item.name}</Text>
-                  <Text style={styles.weekChipMeta}>
-                    {[
-                      item.calories ? `${item.calories} kcal` : null,
-                      item.protein ? `${item.protein}g P` : null,
-                      item.date,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </Text>
-                </View>
-                <MaterialCommunityIcons name="plus-circle" size={22} color="#F5C542" />
-              </TouchableOpacity>
-            ))
-          )}
         </ScrollView>
       </Sheet>
 
@@ -1022,19 +1067,6 @@ const styles = StyleSheet.create({
   },
   slotPickText: { color: "#7C8CA0", fontSize: 12, fontWeight: "700" },
   slotPickTextOn: { color: "#F5C542" },
-  foodBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: colors.cardBackground,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 16,
-    paddingVertical: 12,
-    marginBottom: 18,
-  },
-  foodBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   routinesHead: {
     flexDirection: "row",
     alignItems: "center",
@@ -1139,8 +1171,6 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 14,
   },
-  activityCol: { flex: 1 },
-  bigStat: { color: "#fff", fontSize: 28, fontWeight: "800", marginTop: 4 },
   workoutCard: {
     backgroundColor: colors.cardBackground,
     borderWidth: 1,

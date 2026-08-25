@@ -77,6 +77,12 @@ class FoodItem(BaseModel):
     sodium: Optional[float] = None
     meal: Optional[str] = None
     amount: Optional[str] = None
+    # How many units this row represents. The macro fields above are always the
+    # PRODUCT (per-unit x quantity), so every existing total keeps working; this
+    # is kept alongside so the row can be re-scaled without re-deriving.
+    quantity: Optional[float] = None
+    # The per-unit label ("1 cake, 9g") that `quantity` multiplies.
+    unit_amount: Optional[str] = None
     # Set when the item came from a one-tap "usual" so the same tap can undo it.
     # Kept on the model so re-saving a day's food_items does not strip the tag.
     usual_id: Optional[str] = None

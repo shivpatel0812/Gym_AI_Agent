@@ -7,13 +7,14 @@ import {
   StyleSheet,
   Image,
   ActivityIndicator,
+  ScrollView,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import apiClient from "../../api/client";
 import foodDatabase, { FoodDbItem } from "../../data/foodDatabase";
 import { colors } from "../../theme";
-import { FoodItem } from "./types";
+import { FoodItem, MEALS } from "./types";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   AI_MODEL_OPTIONS,
@@ -47,6 +48,10 @@ interface LogFoodFormProps {
   defaultUncertain?: boolean;
   /** Active plan meals for this slot — import or tag. */
   planMeals?: PlanMealPick[];
+  /** Let the user retag breakfast / lunch / … without backing out. */
+  onMealChange?: (meal: string) => void;
+  /** Tighter layout for the Home sheet. */
+  compact?: boolean;
 }
 
 function toFoodDbItem(raw: any): FoodDbItem {
@@ -97,12 +102,15 @@ export default function LogFoodForm({
   onCancel,
   defaultUncertain,
   planMeals = [],
+  onMealChange,
+  compact = false,
 }: LogFoodFormProps) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<FoodDbItem | null>(null);
   const [amountMode, setAmountMode] = useState<"serving" | "custom">("serving");
   const [customGrams, setCustomGrams] = useState("");
-  const [mode, setMode] = useState<"search" | "photo" | "custom">("search");
+  const [quantity, setQuantity] = useState(1);
+  const [mode, setMode] = useState<"search" | "photo" | "custom">("photo");
   const [customName, setCustomName] = useState("");
   const [customCalories, setCustomCalories] = useState("");
   const [customProtein, setCustomProtein] = useState("");
@@ -124,11 +132,21 @@ export default function LogFoodForm({
   const [weekMeals, setWeekMeals] = useState<RecentMealPick[]>([]);
   const [tagAnchorId, setTagAnchorId] = useState<string | null>(null);
   const [expandedPotential, setExpandedPotential] = useState<string | null>(null);
+  const [activeMeal, setActiveMeal] = useState(meal);
   const estimateQueryRef = useRef("");
   const lastEstimatedRef = useRef("");
 
-  const mealSlot = normalizeMealLabel(meal);
-  const showUncertain = mealSlot === "lunch" || mealSlot === "dinner";
+  useEffect(() => {
+    setActiveMeal(meal);
+  }, [meal]);
+
+  const selectMeal = (next: string) => {
+    setActiveMeal(next);
+    onMealChange?.(next);
+  };
+
+  const mealSlot = normalizeMealLabel(activeMeal);
+  const showUncertain = !compact && (mealSlot === "lunch" || mealSlot === "dinner");
 
   useEffect(() => {
     AsyncStorage.getItem(AI_MODEL_STORAGE_KEY)
@@ -178,6 +196,10 @@ export default function LogFoodForm({
     setUncertain(Boolean(defaultUncertain));
   }, [defaultUncertain]);
 
+  useEffect(() => {
+    setQuantity(1);
+  }, [selected]);
+
   const catalog = useMemo(() => {
     const byName = new Map<string, FoodDbItem>();
     for (const food of foodDatabase) {
@@ -202,8 +224,8 @@ export default function LogFoodForm({
       if (!grams || grams <= 0) return 0;
       return grams / selected.grams;
     }
-    return 1;
-  }, [selected, amountMode, customGrams]);
+    return quantity;
+  }, [selected, amountMode, customGrams, quantity]);
 
   const scaled = useMemo(() => {
     if (!selected) return null;
@@ -292,8 +314,13 @@ export default function LogFoodForm({
 
   const handleAdd = () => {
     if (!selected || !scaled || scale === 0) return;
+    const isMultiple = amountMode === "serving" && quantity > 1;
     const amountLabel =
-      amountMode === "custom" ? `${customGrams}g` : selected.serving;
+      amountMode === "custom"
+        ? `${customGrams}g`
+        : isMultiple
+          ? `${quantity} × ${selected.serving}`
+          : selected.serving;
     onAdd({
       name: selected.name,
       calories: scaled.calories,
@@ -301,8 +328,11 @@ export default function LogFoodForm({
       carbs: scaled.carbs,
       fats: scaled.fats,
       fiber: scaled.fiber,
-      meal,
+      meal: activeMeal,
       amount: amountLabel,
+      ...(amountMode === "serving"
+        ? { quantity, unit_amount: selected.serving }
+        : {}),
       uncertain: showUncertain ? uncertain : undefined,
       ...(tagAnchorId
         ? { anchor_id: tagAnchorId, usual_id: tagAnchorId }
@@ -334,7 +364,7 @@ export default function LogFoodForm({
       carbs: Number.isFinite(carbs) && carbs >= 0 ? Math.round(carbs * 10) / 10 : 0,
       fats: Number.isFinite(fats) && fats >= 0 ? Math.round(fats * 10) / 10 : 0,
       fiber: Number.isFinite(fiber) && fiber >= 0 ? Math.round(fiber * 10) / 10 : 0,
-      meal,
+      meal: activeMeal,
       amount: customAmount.trim() || undefined,
       uncertain: showUncertain ? uncertain : undefined,
       ...(tagAnchorId
@@ -364,7 +394,7 @@ export default function LogFoodForm({
     fats: f.fats != null ? Math.round(Number(f.fats) * 10) / 10 : 0,
     fiber: f.fiber != null ? Math.round(Number(f.fiber) * 10) / 10 : 0,
     amount: f.amount ? String(f.amount) : undefined,
-    meal,
+    meal: activeMeal,
     anchor_id: anchorId,
     usual_id: anchorId,
     uncertain: showUncertain ? uncertain : undefined,
@@ -379,7 +409,7 @@ export default function LogFoodForm({
         name: pick.label,
         calories: 0,
         protein: 0,
-        meal,
+        meal: activeMeal,
         anchor_id: pick.id,
         usual_id: pick.id,
       });
@@ -526,20 +556,45 @@ export default function LogFoodForm({
   );
 
   return (
-    <View style={styles.wrap}>
-      <View style={styles.rowBetween}>
-        <Text style={styles.addTitle}>Add food · {displayMealLabel(meal)}</Text>
-        <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.cancel}>Cancel</Text>
-        </TouchableOpacity>
-      </View>
+    <View style={[styles.wrap, compact && { gap: 10 }]}>
+      {compact ? null : (
+        <View style={styles.rowBetween}>
+          <Text style={styles.addTitle}>Add food · {displayMealLabel(activeMeal)}</Text>
+          <TouchableOpacity onPress={onCancel}>
+            <Text style={styles.cancel}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mealChips}>
+        {MEALS.map((item) => {
+          const on = activeMeal === item.id;
+          const short =
+            item.id === "Pre-Workout" ? "Pre" : item.id === "Breakfast" ? "Bfast" : item.id === "Snacks" ? "Snack" : item.label;
+          return (
+            <TouchableOpacity
+              key={item.id}
+              onPress={() => selectMeal(item.id)}
+              style={[styles.mealChip, on && styles.mealChipOn]}
+            >
+              <Text style={[styles.mealChipText, on && styles.mealChipTextOn]}>{short}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
 
       {planMeals.length > 0 ? (
-        <View style={styles.planBox}>
-          <Text style={styles.planTitle}>From your plan</Text>
-          <Text style={styles.planHint}>
-            Import a meal, or tap Tag then log food to link it.
-          </Text>
+        <View style={[styles.planBox, compact && { padding: 8, gap: 6 }]}>
+          {!compact ? (
+            <>
+              <Text style={styles.planTitle}>From your plan</Text>
+              <Text style={styles.planHint}>
+                Import a meal, or tap Tag then log food to link it.
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.planTitle}>Tag meal</Text>
+          )}
           {planMeals.map((pick) => {
             const color = kindColor(pick.kind);
             const tagging = tagAnchorId === pick.id;
@@ -658,7 +713,7 @@ export default function LogFoodForm({
           />
           <View style={{ flex: 1 }}>
             <Text style={[styles.uncertainTitle, uncertain && { color: "#F5C542" }]}>
-              Uncertain {displayMealLabel(meal).toLowerCase()}
+              Uncertain {displayMealLabel(activeMeal).toLowerCase()}
             </Text>
             <Text style={styles.uncertainHint}>
               Different each time — pick from this week or search.
@@ -669,7 +724,7 @@ export default function LogFoodForm({
 
       {showUncertain && uncertain && weekMeals.length > 0 ? (
         <View style={styles.weekBox}>
-          <Text style={styles.weekTitle}>Past week · {displayMealLabel(meal)}</Text>
+          <Text style={styles.weekTitle}>Past week · {displayMealLabel(activeMeal)}</Text>
           {weekMeals.map((item) => (
             <TouchableOpacity
               key={item.key}
@@ -724,8 +779,8 @@ export default function LogFoodForm({
         </View>
       ) : null}
 
-      <View style={styles.tabs}>{["Search", "Photo", "Custom"].map((label, i) =>
-        tabBtn((["search", "photo", "custom"] as const)[i], label)
+      <View style={styles.tabs}>{["Photo", "Search", "Custom"].map((label, i) =>
+        tabBtn((["photo", "search", "custom"] as const)[i], label)
       )}</View>
 
       {mode === "search" && (
@@ -902,6 +957,50 @@ export default function LogFoodForm({
                   />
                 </TouchableOpacity>
               </View>
+
+              {amountMode === "serving" && (
+                <View style={styles.qtyRow}>
+                  <TouchableOpacity
+                    style={[styles.qtyStep, quantity <= 1 && styles.qtyStepOff]}
+                    disabled={quantity <= 1}
+                    onPress={() => setQuantity((q) => Math.max(1, q - 1))}
+                  >
+                    <MaterialCommunityIcons
+                      name="minus"
+                      size={18}
+                      color={quantity <= 1 ? "#3A4757" : "#fff"}
+                    />
+                  </TouchableOpacity>
+                  <View style={styles.qtyValueBox}>
+                    <Text style={styles.qtyValue}>×{quantity}</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.qtyStep}
+                    onPress={() => setQuantity((q) => Math.min(99, q + 1))}
+                  >
+                    <MaterialCommunityIcons name="plus" size={18} color="#fff" />
+                  </TouchableOpacity>
+                  <View style={styles.qtyChips}>
+                    {[1, 2, 3, 4].map((n) => (
+                      <TouchableOpacity
+                        key={n}
+                        style={[styles.qtyChip, quantity === n && styles.qtyChipOn]}
+                        onPress={() => setQuantity(n)}
+                      >
+                        <Text
+                          style={[
+                            styles.qtyChipText,
+                            quantity === n && styles.qtyChipTextOn,
+                          ]}
+                        >
+                          {n}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              )}
+
               <View style={{ flexDirection: "row", gap: 8 }}>
                 {[
                   ["Calories", scaled.calories, "#9CC0E8"],
@@ -922,7 +1021,7 @@ export default function LogFoodForm({
                 disabled={scale === 0}
                 onPress={handleAdd}
               >
-                <Text style={styles.primaryBtnText}>Add to {meal}</Text>
+                <Text style={styles.primaryBtnText}>Add to {activeMeal}</Text>
               </TouchableOpacity>
             </>
           )}
@@ -1067,7 +1166,7 @@ export default function LogFoodForm({
             disabled={!canAddCustom}
             onPress={handleAddCustom}
           >
-            <Text style={styles.primaryBtnText}>Add to {meal}</Text>
+            <Text style={styles.primaryBtnText}>Add to {activeMeal}</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -1077,6 +1176,21 @@ export default function LogFoodForm({
 
 const styles = StyleSheet.create({
   wrap: { gap: 16 },
+  mealChips: { gap: 6, paddingRight: 4 },
+  mealChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#05080F",
+  },
+  mealChipOn: {
+    borderColor: "#9CC0E8",
+    backgroundColor: "rgba(156,192,232,0.16)",
+  },
+  mealChipText: { color: "#7C8CA0", fontSize: 12, fontWeight: "700" },
+  mealChipTextOn: { color: "#9CC0E8" },
   uncertainRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1239,6 +1353,34 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   photoBoxText: { color: "#7C8CA0", fontSize: 14, fontWeight: "600" },
+  qtyRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  qtyStep: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#05080F",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  qtyStepOff: { opacity: 0.45 },
+  qtyValueBox: { minWidth: 46, alignItems: "center" },
+  qtyValue: { color: "#fff", fontSize: 17, fontWeight: "800" },
+  qtyChips: { flexDirection: "row", gap: 6, marginLeft: "auto" },
+  qtyChip: {
+    minWidth: 34,
+    paddingVertical: 7,
+    paddingHorizontal: 8,
+    borderRadius: 9,
+    alignItems: "center",
+    backgroundColor: "#05080F",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  qtyChipOn: { borderColor: "#9CC0E8", backgroundColor: "#111C2B" },
+  qtyChipText: { color: "#7C8CA0", fontWeight: "700", fontSize: 13 },
+  qtyChipTextOn: { color: "#9CC0E8" },
   modelRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   modelChip: {
     paddingHorizontal: 12,

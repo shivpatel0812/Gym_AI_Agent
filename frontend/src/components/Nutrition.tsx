@@ -138,6 +138,11 @@ function FoodRowEditor({
             const nextFiber = parseFloat(fiber);
             onSave({
               ...food,
+              // Hand-entered macros are no longer "per-unit x quantity", so the
+              // scaling metadata must not survive the edit -- a stale quantity
+              // would make the saved-foods library divide these values again.
+              quantity: undefined,
+              unit_amount: undefined,
               name: name.trim(),
               amount: amount.trim() || undefined,
               calories: Math.round(parsedCalories),

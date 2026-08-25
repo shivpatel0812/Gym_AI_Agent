@@ -8,6 +8,14 @@ export interface FoodItem {
   sodium?: number;
   meal?: string;
   amount?: string;
+  /**
+   * How many units this row represents. Macro fields are always the PRODUCT
+   * (per-unit x quantity), so totals need no quantity awareness; this is kept
+   * so the row can be re-scaled without re-deriving the per-unit values.
+   */
+  quantity?: number;
+  /** The per-unit label ("1 cake, 9g") that `quantity` multiplies. */
+  unit_amount?: string;
   uncertain?: boolean;
   /** One-tap usual undo id. */
   usual_id?: string;

@@ -3,4 +3,4 @@ module.exports = function(api) {
   return {
     presets: ['babel-preset-expo'],
   };
-};shivpatelca2@gmail.com
+};
