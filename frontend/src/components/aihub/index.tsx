@@ -22,6 +22,12 @@ export default function AIHub() {
     setActiveTab("coach");
   };
 
+  const openPlanMode = (prompt: string) => {
+    setCoachPrompt(prompt);
+    setCoachMode("plan");
+    setActiveTab("coach");
+  };
+
   useEffect(() => {
     const mode = route.params?.coachMode;
     const prompt = route.params?.prompt;
@@ -71,7 +77,7 @@ export default function AIHub() {
             }
           />
         ) : activeTab === "plan" ? (
-          <PlanTab onAskCoach={askCoach} />
+          <PlanTab onAskCoach={askCoach} onOpenPlanMode={openPlanMode} />
         ) : (
           <AIAnalysis />
         )}

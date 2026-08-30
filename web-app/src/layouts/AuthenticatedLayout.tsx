@@ -39,7 +39,7 @@ export default function AuthenticatedLayout({
   const navItems = [
     { label: "Dashboard", href: "/dashboard", icon: MdDashboard },
     { label: "My Plan", href: "/plan-generator", icon: MdAutoAwesome },
-    { label: "Roadmap", href: "/plan", icon: MdTimeline },
+    { label: "Plan Hub", href: "/plan", icon: MdTimeline },
     { label: "Workouts", href: "/workouts", icon: MdFitnessCenter },
     { label: "Activity", href: "/activity", icon: MdDirectionsRun },
     { label: "Nutrition", href: "/nutrition", icon: MdRestaurant },

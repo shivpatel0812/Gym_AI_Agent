@@ -48,9 +48,12 @@ def _apply_user_routine(
         for item in split_routine
         if item.get("day")
     }
+    # Clients send the split's raw day names; repeated days now carry an A/B
+    # label, so fall back to the base name they were built from.
+    day_labels = context.get("day_labels") or {}
     for day in context.get("days", []):
         day_name = day.get("day_name")
-        provided = by_day.get(day_name)
+        provided = by_day.get(day_name) or by_day.get(day_labels.get(day_name))
         if not provided:
             continue
         exercises = []
@@ -179,6 +182,57 @@ def _exercise_prescription(exercise: dict, order: int) -> dict:
     return prescription
 
 
+# A reconstructed day is meant to describe a workout, not everything the user
+# has ever done on that weekday. Without a cap, unioning every logged session
+# produced a 20-exercise "Push" day that no one has ever performed.
+MAX_RECONSTRUCTED_EXERCISES = 12
+
+# How many past sessions compose one reconstructed day. More than this and
+# one-off substitutions start looking like part of the routine.
+SESSIONS_PER_RECONSTRUCTED_DAY = 3
+
+
+def _labelled_day_slots(day_names: List[str]) -> List[dict]:
+    """
+    Give repeated day names distinct identities.
+
+    A split stored as ['Pull', 'Push', 'Legs', 'Pull', 'Push'] means the user
+    trains pull twice a week with different work each time. Stored as bare
+    strings, the two Pull entries are indistinguishable, reconstruct
+    identically, and get deduplicated down to one — so the planner had no basis
+    for what separates Pull A from Pull B and reinvented it on every build.
+    """
+    totals: Dict[str, int] = {}
+    for name in day_names:
+        totals[name] = totals.get(name, 0) + 1
+
+    seen: Dict[str, int] = {}
+    slots = []
+    for name in day_names:
+        occurrence = seen.get(name, 0)
+        seen[name] = occurrence + 1
+        label = (
+            f"{name} {chr(ord('A') + occurrence)}" if totals[name] > 1 else name
+        )
+        slots.append({"label": label, "base": name, "occurrence": occurrence,
+                      "total": totals[name]})
+    return slots
+
+
+def _sessions_for_slot(day_sessions: List[dict], slot: dict) -> List[dict]:
+    """
+    Which logged sessions describe this slot.
+
+    For a day trained twice a week the log alternates between them, so slot A
+    takes every Nth session from position 0 and slot B from position 1. That
+    gives the two days genuinely different contents instead of one shared
+    superset.
+    """
+    stride = max(1, slot["total"])
+    selected = day_sessions[slot["occurrence"]::stride]
+    return selected[:SESSIONS_PER_RECONSTRUCTED_DAY]
+
+
 def _load_split_context(user_id: str, split_id: str) -> dict:
     split_ref = (
         db.collection("users")
@@ -235,23 +289,30 @@ def _load_split_context(user_id: str, split_id: str) -> dict:
             sessions.append(data)
     sessions.sort(key=lambda item: item.get("date", ""), reverse=True)
 
+    sessions_by_day: Dict[str, List[dict]] = {}
+    for session in sessions:
+        sessions_by_day.setdefault(session.get("split_day"), []).append(session)
+
+    slots = _labelled_day_slots(day_names)
     days = []
-    for day_name in day_names:
+    for slot in slots:
         seen = set()
         exercises = []
-        for session in sessions:
-            if session.get("split_day") != day_name:
-                continue
+        for session in _sessions_for_slot(sessions_by_day.get(slot["base"], []), slot):
             for exercise in session.get("exercises", []):
                 exercise_id = exercise.get("exercise_id")
                 if not exercise_id or exercise_id in seen:
                     continue
                 seen.add(exercise_id)
                 exercises.append(_exercise_prescription(exercise, len(exercises) + 1))
+                if len(exercises) >= MAX_RECONSTRUCTED_EXERCISES:
+                    break
+            if len(exercises) >= MAX_RECONSTRUCTED_EXERCISES:
+                break
         days.append(
             {
-                "day_name": day_name,
-                "focus": day_name,
+                "day_name": slot["label"],
+                "focus": slot["base"],
                 "estimated_duration_minutes": max(30, len(exercises) * 8),
                 "exercises": exercises,
             }
@@ -259,6 +320,7 @@ def _load_split_context(user_id: str, split_id: str) -> dict:
     return {
         "split_id": split_id,
         "split_name": split.get("name", "Existing Split"),
+        "day_labels": {slot["label"]: slot["base"] for slot in slots},
         "days": days,
     }
 

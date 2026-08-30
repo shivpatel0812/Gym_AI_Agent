@@ -32,6 +32,11 @@ class DataFetcher:
         sessions_ref = self.db.collection("users").document(self.user_id).collection("workout_sessions")
         sessions = list(sessions_ref.stream())
         return [{"id": s.id, **s.to_dict()} for s in sessions]
+
+    def get_exercise_records(self) -> Dict[str, Dict[str, Any]]:
+        """Fetch custom exercise metadata keyed by exercise id."""
+        ref = self.db.collection("users").document(self.user_id).collection("exercises")
+        return {doc.id: {"id": doc.id, **doc.to_dict()} for doc in ref.stream()}
     
     def get_recent_workout_sessions(self, days: int = 14) -> List[Dict]:
         """Fetch workout sessions from the last N days."""
@@ -112,5 +117,4 @@ class DataFetcher:
         # Sort by most recent first
         failed_attempts.sort(key=lambda x: x["days_ago"])
         return failed_attempts
-
 

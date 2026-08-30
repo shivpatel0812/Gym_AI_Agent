@@ -3,6 +3,7 @@
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 import math
+from statistics import median
 
 from .exercise_metadata import resolve_exercise_metadata
 
@@ -44,10 +45,14 @@ def _bench_equivalent(top_lifts: Dict[str, Any]) -> Optional[float]:
     return sum(estimates) / len(estimates) if estimates else None
 
 
-def _exercise_ratio(exercise_id: str, exercise_name: str) -> Optional[float]:
+def _exercise_ratio(
+    exercise_id: str,
+    exercise_name: str,
+    exercise_record: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
     """Estimate an exercise's working load relative to a barbell bench press."""
     name = exercise_name.lower()
-    metadata = resolve_exercise_metadata(exercise_id, exercise_name)
+    metadata = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
 
     if metadata.muscle_group == "cardio" or metadata.equipment == "Bodyweight":
         return None
@@ -100,6 +105,7 @@ def estimate_starting_weight(
     exercise_name: str,
     top_lifts: Optional[Dict[str, Any]],
     conservative_factor: float = 0.875,
+    exercise_record: Optional[Dict[str, Any]] = None,
 ) -> Optional[float]:
     """
     Estimate a first-session working weight and round it to a valid 5 lb step.
@@ -111,7 +117,7 @@ def estimate_starting_weight(
         return None
 
     bench_equivalent = _bench_equivalent(top_lifts)
-    ratio = _exercise_ratio(exercise_id, exercise_name)
+    ratio = _exercise_ratio(exercise_id, exercise_name, exercise_record)
     if bench_equivalent is None or ratio is None:
         return None
 
@@ -119,6 +125,60 @@ def estimate_starting_weight(
     if estimate <= 0:
         return None
     return max(5.0, math.floor(estimate / 5.0 + 0.5) * 5.0)
+
+
+def infer_top_lifts_from_related_history(
+    target_exercise_id: str,
+    target_exercise_name: str,
+    sessions: List[Dict[str, Any]],
+    exercise_records: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Infer a bench-equivalent anchor from recent related exercise history.
+
+    This produces a conservative calibration anchor, not a claim that two
+    exercises have an exact strength relationship.
+    """
+    target = resolve_exercise_metadata(target_exercise_id, target_exercise_name)
+    if target.muscle_group in {"unknown", "cardio"}:
+        return None
+    estimates = []
+    ordered_sessions = sorted(
+        sessions or [], key=lambda session: str(session.get("date") or ""), reverse=True
+    )
+    for session in ordered_sessions:
+        for exercise in session.get("exercises") or []:
+            source_id = str(exercise.get("exercise_id") or "")
+            source_name = str(exercise.get("exercise_name") or "")
+            if source_id == target_exercise_id:
+                continue
+            source_record = (exercise_records or {}).get(source_id) or exercise
+            source = resolve_exercise_metadata(source_id, source_name, source_record)
+            if source.muscle_group != target.muscle_group:
+                continue
+            source_ratio = _exercise_ratio(source_id, source_name, source_record)
+            if not source_ratio:
+                continue
+            best = None
+            for set_data in exercise.get("sets") or []:
+                normalized = _representative_weight(set_data)
+                if normalized and (best is None or normalized > best):
+                    best = normalized
+            if best:
+                try:
+                    age = days_since_session(session.get("date"))
+                except Exception:
+                    age = None
+                recency = 1.0 if age is None else max(0.8, 1.0 - max(0, age - 30) / 750.0)
+                estimates.append((best / source_ratio) * recency)
+        if len(estimates) >= 6:
+            break
+    if not estimates:
+        return None
+    return {
+        "bench_press": {"weight": round(median(estimates), 1), "reps": 5},
+        "source": "related_exercise_history",
+        "sample_count": len(estimates),
+    }
 
 
 def days_since_session(date_str: Optional[str], today: Optional[date] = None) -> Optional[int]:

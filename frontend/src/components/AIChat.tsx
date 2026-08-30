@@ -50,6 +50,22 @@ interface Message {
   content: string;
   /** Plan edits this turn staged for review. Chat never writes the plan. */
   suggestions?: NutritionSuggestionArtifact;
+  /** Coach-mode message that sounds like a durable program decision. */
+  planIntent?: boolean;
+}
+
+const PLAN_INTENT_PATTERNS = [
+  /\b(add|remove|replace|swap|change)\b.{0,35}\b(exercise|lift|movement|workout|day)\b/i,
+  /\b(change|switch|update|redo|edit|adjust)\b.{0,30}\b(plan|split|program|routine|goal)\b/i,
+  /\b(push\s*pull\s*legs|upper\s*lower|full[ -]?body|training split)\b/i,
+  /\b(build|building|maintain|maintaining)\b.{0,35}\b(bench|press|squat|deadlift|row|lift|strength|muscle)\b/i,
+  /\b(goal|target)\b.{0,45}\b(by|within|for my|on my plan|this block)\b/i,
+  /\b(make|set)\b.{0,25}\b(my )?(goal|target)\b/i,
+  /\bput\b.{0,25}\b(in|into|on)\b.{0,15}\b(my )?plan\b/i,
+];
+
+function looksLikePlanIntent(message: string): boolean {
+  return PLAN_INTENT_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 function suggestionArtifact(artifacts?: any[]): NutritionSuggestionArtifact | undefined {
@@ -59,6 +75,7 @@ function suggestionArtifact(artifacts?: any[]): NutritionSuggestionArtifact | un
 // Shown while the coach is pulling data mid-answer
 const TOOL_LABELS: Record<string, string> = {
   get_recent_sessions: "Checking your recent workouts...",
+  get_workout_session: "Opening that workout day...",
   get_exercise_history: "Looking up your lift history...",
   get_todays_plan: "Checking today's plan...",
   get_current_split: "Looking at your current split...",
@@ -201,6 +218,12 @@ export default function AIChat({
   const toggleMode = (next: "plan" | "nutrition") => {
     if (chatMode === next) setChatMode("coach");
     else enterMode(next);
+  };
+
+  const continueInPlanMode = (prompt: string) => {
+    startNewChat(true);
+    setChatMode("plan");
+    setInputMessage(prompt);
   };
   const handleRenameConversation = (id: string, currentTitle: string) => {
     setRenameTarget({ id, title: currentTitle });
@@ -348,7 +371,14 @@ export default function AIChat({
     }
 
     const messageToSend = inputMessage.trim();
-    const updatedMessages: Message[] = [...messages, { role: "user", content: messageToSend }];
+    const updatedMessages: Message[] = [
+      ...messages,
+      {
+        role: "user",
+        content: messageToSend,
+        planIntent: chatMode === "coach" && looksLikePlanIntent(messageToSend),
+      },
+    ];
     setMessages(updatedMessages);
     setInputMessage("");
     setLoading(true);
@@ -432,12 +462,30 @@ export default function AIChat({
         ]}
       >
         {isUser ? (
-          <LinearGradient
-            colors={[colors.accentPrimary, colors.accentSecondary]}
-            style={styles.messageBubble}
-          >
-            <Text style={styles.messageText}>{item.content}</Text>
-          </LinearGradient>
+          <View style={styles.userColumn}>
+            <LinearGradient
+              colors={[colors.accentPrimary, colors.accentSecondary]}
+              style={styles.messageBubble}
+            >
+              <Text style={styles.messageText}>{item.content}</Text>
+            </LinearGradient>
+            {item.planIntent ? (
+              <TouchableOpacity
+                style={styles.planIntentCard}
+                onPress={() => continueInPlanMode(item.content)}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Continue this request in Plan Mode"
+              >
+                <MaterialCommunityIcons name="target" size={16} color={colors.accentPrimary} />
+                <View style={styles.planIntentCopy}>
+                  <Text style={styles.planIntentTitle}>Make this part of your plan?</Text>
+                  <Text style={styles.planIntentBody}>Continue in Plan Mode so this becomes a durable plan change.</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={19} color={colors.accentPrimary} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
         ) : (
           <View style={styles.assistantColumn}>
             <View style={[styles.messageBubble, styles.assistantBubble]}>
@@ -908,6 +956,34 @@ function LoadingDot({ delay }: { delay: number }) {
 }
 
 const styles = StyleSheet.create({
+  userColumn: {
+    alignItems: "flex-end",
+    maxWidth: "100%",
+  },
+  planIntentCard: {
+    width: "86%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderHover,
+    borderRadius: borderRadius.md,
+  },
+  planIntentCopy: { flex: 1 },
+  planIntentTitle: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  planIntentBody: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: 2,
+  },
   assistantColumn: {
     alignItems: "flex-start",
     maxWidth: "100%",

@@ -44,7 +44,7 @@ export default function BodyFeelingForm({
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
-        <MaterialCommunityIcons name="body" size={32} color={colors.accentSecondary} />
+        <MaterialCommunityIcons name="human" size={32} color={colors.accentSecondary} />
         <Text style={styles.title}>
           {feeling ? "Edit Body Feeling" : "Log Body Feeling"}
         </Text>

@@ -36,6 +36,10 @@ export type PlanMealPick = {
   label: string;
   kind: "individual" | "potential" | "uncertain";
   foods: MealAnchorFood[];
+  /** e.g. "Mon, Wed" or "Weekdays" */
+  schedule?: string;
+  /** Whether this anchor applies on the day being logged. */
+  appliesToday?: boolean;
 };
 
 interface LogFoodFormProps {
@@ -95,6 +99,8 @@ const field = {
   fontSize: 14,
 };
 
+const PLAN_MEALS_COLLAPSED = 2;
+
 export default function LogFoodForm({
   meal,
   onAdd,
@@ -132,6 +138,7 @@ export default function LogFoodForm({
   const [weekMeals, setWeekMeals] = useState<RecentMealPick[]>([]);
   const [tagAnchorId, setTagAnchorId] = useState<string | null>(null);
   const [expandedPotential, setExpandedPotential] = useState<string | null>(null);
+  const [planListExpanded, setPlanListExpanded] = useState(false);
   const [activeMeal, setActiveMeal] = useState(meal);
   const estimateQueryRef = useRef("");
   const lastEstimatedRef = useRef("");
@@ -139,6 +146,12 @@ export default function LogFoodForm({
   useEffect(() => {
     setActiveMeal(meal);
   }, [meal]);
+
+  useEffect(() => {
+    setPlanListExpanded(false);
+    setTagAnchorId(null);
+    setExpandedPotential(null);
+  }, [meal, planMeals.length]);
 
   const selectMeal = (next: string) => {
     setActiveMeal(next);
@@ -585,17 +598,38 @@ export default function LogFoodForm({
 
       {planMeals.length > 0 ? (
         <View style={[styles.planBox, compact && { padding: 8, gap: 6 }]}>
-          {!compact ? (
-            <>
-              <Text style={styles.planTitle}>From your plan</Text>
-              <Text style={styles.planHint}>
-                Import a meal, or tap Tag then log food to link it.
-              </Text>
-            </>
-          ) : (
-            <Text style={styles.planTitle}>Tag meal</Text>
-          )}
-          {planMeals.map((pick) => {
+          <View style={styles.planHead}>
+            {!compact ? (
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.planTitle}>From your plan</Text>
+                <Text style={styles.planHint}>
+                  Import a meal, or tap Tag then log food to link it.
+                </Text>
+              </View>
+            ) : (
+              <Text style={[styles.planTitle, { flex: 1 }]}>Tag meal</Text>
+            )}
+            {planMeals.length > PLAN_MEALS_COLLAPSED ? (
+              <TouchableOpacity
+                style={styles.planExpandBtn}
+                onPress={() => setPlanListExpanded((v) => !v)}
+                hitSlop={8}
+              >
+                <Text style={styles.planExpandText}>
+                  {planListExpanded
+                    ? "Show less"
+                    : `Show all (${planMeals.length})`}
+                </Text>
+                <MaterialCommunityIcons
+                  name={planListExpanded ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  color="#9CC0E8"
+                />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          {(planListExpanded ? planMeals : planMeals.slice(0, PLAN_MEALS_COLLAPSED)).map(
+            (pick) => {
             const color = kindColor(pick.kind);
             const tagging = tagAnchorId === pick.id;
             const expanded = expandedPotential === pick.id;
@@ -614,6 +648,7 @@ export default function LogFoodForm({
                     </Text>
                     <Text style={styles.planMeta}>
                       {kindLabel(pick.kind)}
+                      {pick.schedule ? ` · ${pick.schedule}` : ""}
                       {foodCount
                         ? ` · ${foodCount} ${isOptions ? "option" : "food"}${
                             foodCount === 1 ? "" : "s"
@@ -696,7 +731,8 @@ export default function LogFoodForm({
                 ) : null}
               </View>
             );
-          })}
+          }
+          )}
         </View>
       ) : null}
 
@@ -1426,6 +1462,21 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 0.4,
   },
+  planHead: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 2,
+  },
+  planExpandBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingVertical: 2,
+    paddingLeft: 6,
+  },
+  planExpandText: { color: "#9CC0E8", fontSize: 11, fontWeight: "700" },
   planHint: { color: "#636366", fontSize: 11, fontWeight: "600", marginBottom: 2 },
   planCard: {
     borderRadius: 10,

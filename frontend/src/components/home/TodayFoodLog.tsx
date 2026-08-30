@@ -19,7 +19,7 @@ import {
   mealAnchorKind,
   sumGroupedFoodMacros,
 } from "../../api/nutritionPlan";
-import { extractRecentMeals, normalizeMealLabel, RecentMealPick } from "../../lib/recentMeals";
+import { normalizeMealLabel } from "../../lib/recentMeals";
 import { foodQuantity } from "../../lib/foodQuantity";
 import {
   HOME_MEALS,
@@ -103,25 +103,24 @@ function goToCount(item: GoToItem, foods: FoodItem[]) {
 export default function TodayFoodLog({
   plan,
   todayFoods,
-  macroRows,
   loggingId,
   onLogMeal,
   onLogFoods,
+  onRepeatFoods,
   onRemoveTag,
   onBumpFood,
 }: {
   plan: NutritionPlan | null;
   todayFoods: FoodItem[];
-  macroRows: any[];
   loggingId: string | null;
   onLogMeal: (meal: HomeMealId, uncertain?: boolean) => void;
   onLogFoods: (foods: FoodItem[]) => Promise<void> | void;
+  onRepeatFoods?: (foods: FoodItem[]) => Promise<void> | void;
   onRemoveTag: (tag: string) => Promise<void> | void;
   /** Change the logged count of a tagged item; `base` is the per-unit food. */
   onBumpFood?: (tag: string, delta: number, base: FoodItem) => Promise<void> | void;
 }) {
-  const [logMoreMeal, setLogMoreMeal] = useState<HomeMealId | null>(null);
-  const [prevOpen, setPrevOpen] = useState(true);
+  const [anchorMenuMeal, setAnchorMenuMeal] = useState<HomeMealId | null>(null);
   const now = currentMealId();
   const targets = plan?.targets || {};
   const calTarget = Math.max(Number(targets.calories) || 2200, 1);
@@ -225,13 +224,22 @@ export default function TodayFoodLog({
     return mealSlotOpenToday(all, today, profile?.stance);
   };
 
-  const previousFor = (mealId: HomeMealId): RecentMealPick[] =>
-    extractRecentMeals(macroRows, {
-      meal: mealId,
-      days: 7,
-      excludeToday: true,
-      limit: 10,
-    });
+  const anchorFoodItems = (anchor: MealAnchor, mealId: HomeMealId): FoodItem[] =>
+    (anchor.foods || [])
+      .filter((f) => String(f.name || "").trim())
+      .map((f) => ({
+        name: String(f.name).trim(),
+        amount: f.amount ? String(f.amount) : undefined,
+        unit_amount: f.amount ? String(f.amount) : undefined,
+        calories: Math.round(Number(f.calories) || 0),
+        protein: Number(f.protein) || 0,
+        carbs: Number(f.carbs) || 0,
+        fats: Number(f.fats) || 0,
+        fiber: Number(f.fiber) || 0,
+        meal: mealId,
+        anchor_id: anchor.id,
+        usual_id: anchor.id,
+      }));
 
   const logAnchor = async (anchor: MealAnchor, mealId: HomeMealId) => {
     const kind = mealAnchorKind(anchor);
@@ -243,22 +251,57 @@ export default function TodayFoodLog({
       await onRemoveTag(anchor.id);
       return;
     }
-    const items: FoodItem[] = (anchor.foods || [])
-      .filter((f) => String(f.name || "").trim())
-      .map((f) => ({
-        name: String(f.name).trim(),
-        amount: f.amount ? String(f.amount) : undefined,
-        calories: Math.round(Number(f.calories) || 0),
-        protein: Number(f.protein) || 0,
-        carbs: Number(f.carbs) || 0,
-        fats: Number(f.fats) || 0,
-        fiber: Number(f.fiber) || 0,
-        meal: mealId,
-        anchor_id: anchor.id,
-        usual_id: anchor.id,
-      }));
+    const items: FoodItem[] = anchorFoodItems(anchor, mealId);
     if (items.length) await onLogFoods(items);
     else onLogMeal(mealId);
+  };
+
+  /** One tap always adds — never opens a picker or toggles undo. */
+  const logAnchorAdd = async (anchor: MealAnchor, mealId: HomeMealId) => {
+    const kind = mealAnchorKind(anchor);
+    if (kind === "uncertain" || !(anchor.foods || []).some((f) => f.name)) {
+      onLogMeal(mealId, kind === "uncertain");
+      return;
+    }
+    const items = anchorFoodItems(anchor, mealId);
+    if (!items.length) {
+      onLogMeal(mealId);
+      return;
+    }
+    const logged = anchorLogged(anchor, foodsByMeal[mealId]);
+    if (logged && anchor.id && onBumpFood && items.length === 1) {
+      await onBumpFood(anchor.id, 1, items[0]);
+      return;
+    }
+    if (logged) {
+      const repeat = onRepeatFoods ?? onLogFoods;
+      await repeat(items);
+      return;
+    }
+    await onLogFoods(items);
+  };
+
+  const logMealAgain = async (mealId: HomeMealId, loggedFoods: FoodItem[]) => {
+    if (loggedFoods.length === 1) {
+      const row = loggedFoods[0];
+      const tag = row.usual_id || row.anchor_id;
+      const qty = foodQuantity(row);
+      if (tag && onBumpFood) {
+        const unit: FoodItem = {
+          ...row,
+          calories: Math.round((Number(row.calories) || 0) / qty),
+          protein: (Number(row.protein) || 0) / qty,
+          carbs: row.carbs != null ? (Number(row.carbs) || 0) / qty : undefined,
+          fats: row.fats != null ? (Number(row.fats) || 0) / qty : undefined,
+          fiber: row.fiber != null ? (Number(row.fiber) || 0) / qty : undefined,
+          quantity: 1,
+        };
+        await onBumpFood(tag, 1, unit);
+        return;
+      }
+    }
+    const repeat = onRepeatFoods ?? onLogFoods;
+    await repeat(loggedFoods.map((f) => ({ ...f, meal: mealId })));
   };
 
   /** The per-unit food a go-to tile logs. */
@@ -293,21 +336,6 @@ export default function TodayFoodLog({
   const clearGoTo = (item: GoToItem) => {
     if (!item.id || !goToLogged(item, todayFoods)) return;
     void onRemoveTag(item.id);
-  };
-
-  const logPrevious = async (item: RecentMealPick, mealId: HomeMealId) => {
-    await onLogFoods([
-      {
-        name: item.name,
-        calories: item.calories,
-        protein: item.protein,
-        carbs: item.carbs,
-        fats: item.fats,
-        fiber: item.fiber,
-        amount: item.amount,
-        meal: mealId,
-      },
-    ]);
   };
 
   return (
@@ -358,7 +386,8 @@ export default function TodayFoodLog({
             ? loggedFoods[0].name + (loggedFoods.length > 1 ? ` +${loggedFoods.length - 1}` : "")
             : primary?.label || (showUncertain ? "Open / TBD" : "Not logged");
           const busy = Boolean(primary?.id && loggingId === primary.id);
-          const logMoreOpen = logMoreMeal === meal.id;
+          const menuOpen = anchorMenuMeal === meal.id;
+          const hasAltAnchors = anchors.length > 1;
 
           return (
             <View
@@ -367,7 +396,7 @@ export default function TodayFoodLog({
                 styles.mealCard,
                 logged && styles.mealCardOn,
                 isNow && styles.mealCardNow,
-                logMoreOpen && styles.mealCardMore,
+                menuOpen && styles.mealCardMenuOpen,
               ]}
             >
               <View style={styles.mealTop}>
@@ -390,6 +419,22 @@ export default function TodayFoodLog({
                 <Text style={styles.mealName} numberOfLines={1}>
                   {meal.label}
                 </Text>
+                {hasAltAnchors ? (
+                  <TouchableOpacity
+                    style={[styles.mealMenuBtn, menuOpen && styles.mealMenuBtnOn]}
+                    onPress={() =>
+                      setAnchorMenuMeal(menuOpen ? null : meal.id)
+                    }
+                    hitSlop={6}
+                    accessibilityLabel={`Other ${meal.label} options`}
+                  >
+                    <MaterialCommunityIcons
+                      name="dots-vertical"
+                      size={15}
+                      color={menuOpen ? colors.accentPrimary : "#7C8CA0"}
+                    />
+                  </TouchableOpacity>
+                ) : null}
               </View>
 
               <Text style={styles.preview} numberOfLines={2}>
@@ -414,22 +459,64 @@ export default function TodayFoodLog({
                 </Text>
               )}
 
+              {menuOpen ? (
+                <View style={styles.anchorMenu}>
+                  {anchors.map((anchor, i) => {
+                    const aKind = mealAnchorKind(anchor);
+                    const aAccent = kindAccent(aKind);
+                    const aLogged = anchorLogged(anchor, loggedFoods);
+                    const aBusy = Boolean(anchor.id && loggingId === anchor.id);
+                    const t = sumGroupedFoodMacros(anchor.foods || []);
+                    return (
+                      <TouchableOpacity
+                        key={anchor.id || anchor.label}
+                        style={[
+                          styles.anchorMenuItem,
+                          i === 0 && styles.anchorMenuItemFirst,
+                        ]}
+                        onPress={() => {
+                          void logAnchorAdd(anchor, meal.id);
+                          setAnchorMenuMeal(null);
+                        }}
+                        disabled={aBusy}
+                      >
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={styles.anchorMenuLabel} numberOfLines={1}>
+                            {anchor.label}
+                          </Text>
+                          <Text style={styles.anchorMenuMeta} numberOfLines={1}>
+                            {aKind === "uncertain"
+                              ? "Open / TBD"
+                              : t.calories
+                                ? `${Math.round(t.calories)} cal · ${Math.round(t.protein)}g P`
+                                : aKind === "potential"
+                                  ? "Potential"
+                                  : "From plan"}
+                          </Text>
+                        </View>
+                        {aBusy ? (
+                          <ActivityIndicator size="small" color={aAccent} />
+                        ) : (
+                          <Text style={[styles.anchorMenuAction, { color: aAccent }]}>
+                            {aLogged ? "+1" : "Log"}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ) : null}
+
               <TouchableOpacity
                 style={[
                   styles.mealBtn,
-                  logged && styles.mealBtnGhost,
-                  logMoreOpen && styles.mealBtnGhostOn,
+                  logged && styles.mealBtnOn,
                   !logged && showUncertain && { backgroundColor: bp.uncertain },
                   !logged && kind === "potential" && { backgroundColor: bp.potential },
                 ]}
                 onPress={() => {
-                  if (logged) {
-                    const next = logMoreOpen ? null : meal.id;
-                    setLogMoreMeal(next);
-                    if (next) setPrevOpen(true);
-                    return;
-                  }
-                  if (primary) logAnchor(primary, meal.id);
+                  if (primary) void logAnchorAdd(primary, meal.id);
+                  else if (logged) void logMealAgain(meal.id, loggedFoods);
                   else onLogMeal(meal.id, showUncertain);
                 }}
                 disabled={busy}
@@ -439,100 +526,29 @@ export default function TodayFoodLog({
                     size="small"
                     color={
                       logged
-                        ? "#4ADE80"
+                        ? colors.onAccent
                         : showUncertain || kind === "potential"
                           ? "#fff"
                           : colors.onAccent
                     }
                   />
                 ) : (
-                  <View style={styles.mealBtnInner}>
-                    <Text
-                      style={[
-                        styles.mealBtnText,
-                        logged && styles.mealBtnGhostText,
-                        !logged &&
-                          (showUncertain || kind === "potential") && { color: "#fff" },
-                      ]}
-                    >
-                      {logged
-                        ? "Log more"
-                        : primary && kind !== "uncertain"
-                          ? "Log this"
-                          : "Log now"}
-                    </Text>
-                    {logged ? (
-                      <MaterialCommunityIcons
-                        name={logMoreOpen ? "chevron-up" : "chevron-down"}
-                        size={16}
-                        color="#8E8E93"
-                      />
-                    ) : null}
-                  </View>
+                  <Text
+                    style={[
+                      styles.mealBtnText,
+                      logged && styles.mealBtnOnText,
+                      !logged &&
+                        (showUncertain || kind === "potential") && { color: "#fff" },
+                    ]}
+                  >
+                    Log
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>
           );
         })}
       </ScrollView>
-
-      {logMoreMeal ? (
-        <View style={styles.logMoreBox}>
-          <TouchableOpacity
-            style={styles.logMoreAdd}
-            onPress={() => onLogMeal(logMoreMeal)}
-          >
-            <MaterialCommunityIcons name="plus" size={16} color={colors.onAccent} />
-            <Text style={styles.logMoreAddText}>Add food</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.prevToggle}
-            onPress={() => setPrevOpen((v) => !v)}
-            activeOpacity={0.75}
-          >
-            <Text style={styles.prevTitle}>Previous</Text>
-            <View style={styles.prevToggleRight}>
-              <Text style={styles.prevCount}>{previousFor(logMoreMeal).length}</Text>
-              <MaterialCommunityIcons
-                name={prevOpen ? "chevron-up" : "chevron-down"}
-                size={18}
-                color="#7C8CA0"
-              />
-            </View>
-          </TouchableOpacity>
-
-          {prevOpen ? (
-            previousFor(logMoreMeal).length === 0 ? (
-              <Text style={styles.prevEmpty}>Nothing from the past week yet.</Text>
-            ) : (
-              previousFor(logMoreMeal).map((item) => (
-                <TouchableOpacity
-                  key={item.key}
-                  style={styles.prevRow}
-                  onPress={() => logPrevious(item, logMoreMeal)}
-                >
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={styles.prevName} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                    <Text style={styles.prevMeta}>
-                      {[
-                        item.calories ? `${item.calories} kcal` : null,
-                        item.protein ? `${item.protein}g P` : null,
-                        item.date,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </Text>
-                  </View>
-                  <MaterialCommunityIcons name="plus-circle" size={20} color="#9CC0E8" />
-                </TouchableOpacity>
-              ))
-            )
-          ) : null}
-        </View>
-      ) : null}
 
       <View style={styles.quickHead}>
         <Text style={styles.goLabel}>Quick add</Text>
@@ -818,8 +834,37 @@ const styles = StyleSheet.create({
   },
   mealCardOn: { borderColor: "rgba(74,222,128,0.45)" },
   mealCardNow: { borderColor: "rgba(156,192,232,0.55)" },
-  mealCardMore: { borderColor: "rgba(156,192,232,0.7)" },
+  mealCardMenuOpen: { borderColor: "rgba(156,192,232,0.7)" },
   mealTop: { flexDirection: "row", alignItems: "center", gap: 5 },
+  mealMenuBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mealMenuBtnOn: { backgroundColor: "rgba(156,192,232,0.14)" },
+  anchorMenu: {
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    overflow: "hidden",
+    backgroundColor: "#0E1218",
+  },
+  anchorMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 7,
+    paddingHorizontal: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  anchorMenuItemFirst: { borderTopWidth: 0 },
+  anchorMenuLabel: { color: "#fff", fontSize: 11, fontWeight: "700" },
+  anchorMenuMeta: { color: "#7C8CA0", fontSize: 9, fontWeight: "600", marginTop: 1 },
+  anchorMenuAction: { fontSize: 10, fontWeight: "800" },
   kindDot: { width: 6, height: 6, borderRadius: 3 },
   dot: {
     width: 14,
@@ -844,61 +889,10 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     alignItems: "center",
   },
-  mealBtnGhost: { backgroundColor: "transparent", borderWidth: 1, borderColor: colors.border },
-  mealBtnGhostOn: { borderColor: "rgba(156,192,232,0.55)", backgroundColor: "rgba(156,192,232,0.08)" },
-  mealBtnInner: { flexDirection: "row", alignItems: "center", gap: 4 },
+  mealBtnOn: { backgroundColor: colors.accentPrimary },
   mealBtnText: { color: colors.onAccent, fontSize: 11, fontWeight: "800" },
-  mealBtnGhostText: { color: "#8E8E93" },
-  logMoreBox: {
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.cardBackground,
-    borderRadius: 14,
-    padding: 10,
-    gap: 2,
-  },
-  logMoreAdd: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    backgroundColor: colors.accentPrimary,
-    borderRadius: 10,
-    paddingVertical: 10,
-    marginBottom: 8,
-  },
-  logMoreAddText: { color: colors.onAccent, fontSize: 13, fontWeight: "800" },
-  prevToggle: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 8,
-    paddingHorizontal: 2,
-  },
-  prevToggleRight: { flexDirection: "row", alignItems: "center", gap: 6 },
-  prevCount: {
-    color: "#7C8CA0",
-    fontSize: 12,
-    fontWeight: "700",
-    backgroundColor: "#1E2A38",
-    overflow: "hidden",
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  prevTitle: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  mealBtnOnText: { color: colors.onAccent },
   prevEmpty: { color: "#55647A", fontSize: 12, lineHeight: 16, marginBottom: 8, paddingHorizontal: 2 },
-  prevRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-  },
-  prevName: { color: "#fff", fontSize: 13, fontWeight: "700" },
-  prevMeta: { color: "#7C8CA0", fontSize: 11, marginTop: 2 },
   quickHead: { marginTop: 6, marginBottom: 8 },
   quickSub: { color: "#55647A", fontSize: 12, fontWeight: "600", marginTop: -4 },
   quickRow: {

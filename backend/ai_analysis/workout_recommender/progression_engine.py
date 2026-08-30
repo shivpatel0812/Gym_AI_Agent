@@ -270,13 +270,16 @@ class ProgressionEngine:
                 increment=increment,
                 top_lifts=top_lifts,
                 stale_last_session=stale_last_session,
+                exercise_record=exercise_record,
             )
 
         # Get the latest session data
         latest = recent_sessions[0]
         latest_sets = latest.get("sets", [])
         if not latest_sets:
-            estimated = estimate_starting_weight(exercise_id, exercise_name, top_lifts)
+            estimated = estimate_starting_weight(
+                exercise_id, exercise_name, top_lifts, exercise_record=exercise_record
+            )
             if estimated:
                 return self._handle_first_session_with_estimate(
                     num_sets, rep_range, estimated
@@ -587,6 +590,7 @@ class ProgressionEngine:
         increment: float,
         top_lifts: Optional[Dict[str, Any]],
         stale_last_session: Optional[Dict],
+        exercise_record: Optional[Dict] = None,
     ) -> ProgressionResult:
         """Fill 3 current working sets when there is no recent session."""
         if stale_last_session:
@@ -612,7 +616,9 @@ class ProgressionEngine:
                     },
                 )
 
-        estimated = estimate_starting_weight(exercise_id, exercise_name, top_lifts)
+        estimated = estimate_starting_weight(
+            exercise_id, exercise_name, top_lifts, exercise_record=exercise_record
+        )
         if estimated:
             return self._handle_first_session_with_estimate(
                 num_sets, rep_range, estimated
@@ -1348,4 +1354,3 @@ class ProgressionEngine:
             return weight
         # Use math.floor(x + 0.5) to avoid Python's banker's rounding
         return math.floor(weight / increment + 0.5) * increment
-

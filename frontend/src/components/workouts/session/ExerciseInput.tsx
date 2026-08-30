@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View, TextInput, TouchableOpacity, StyleSheet, FlatList } from "react-native";
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList } from "react-native";
 import { Exercise } from "../types";
 
 interface ExerciseInputProps {
@@ -40,7 +40,7 @@ export default function ExerciseInput({
         <View style={styles.suggestionsContainer}>
           <FlatList
             data={filteredExercises}
-            keyExtractor={(item) => item.id}
+            keyExtractor={(item, index) => item.id || `${item.name}-${index}`}
             renderItem={({ item }) => (
               <TouchableOpacity
                 style={styles.suggestionItem}
@@ -96,7 +96,6 @@ const styles = StyleSheet.create({
     borderBottomColor: "#e5e7eb",
   },
 });
-
 
 
 

@@ -1,0 +1,11 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // GymAI reads and writes application data through the authenticated FastAPI
+    // backend. Firebase Admin bypasses these rules; browser clients get no
+    // direct database access, including recommendation events and learning.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

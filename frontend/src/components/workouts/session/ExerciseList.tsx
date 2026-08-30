@@ -4,6 +4,8 @@ interface ExerciseEntry {
   exercise_id: string;
   exercise_name: string;
   sets: any;
+  reps?: number;
+  weight?: number;
   is_custom?: boolean;
   plan_context?: {
     goal?: string;
@@ -156,7 +158,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 });
-
 
 
 

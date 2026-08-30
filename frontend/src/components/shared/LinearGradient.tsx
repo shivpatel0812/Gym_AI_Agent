@@ -1,10 +1,10 @@
-import { View, StyleSheet, ViewStyle, Platform } from 'react-native';
+import { View, StyleSheet, ViewStyle, Platform, StyleProp } from 'react-native';
 
 interface LinearGradientProps {
   colors: string[];
   start?: { x: number; y: number };
   end?: { x: number; y: number };
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   children?: React.ReactNode;
 }
 

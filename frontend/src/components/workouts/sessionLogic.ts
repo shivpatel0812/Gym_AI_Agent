@@ -1,4 +1,4 @@
-import defaultExercises from "../../data/defaultExercises";
+import defaultExercises, { categoryToMuscleGroup } from "../../data/defaultExercises";
 import {
   SessionExercise,
   WorkoutSession,
@@ -410,6 +410,9 @@ export function mapRecSets(rec: any): WorkoutSet[] {
     set_number: s.set_number || i + 1,
     reps: s.reps || 0,
     weight: s.weight,
+    rep_low: s.rep_low,
+    rep_high: s.rep_high,
+    preferred_reps: s.preferred_reps,
     completed: false,
   }));
 }
@@ -421,9 +424,17 @@ export function toStoredRecommendation(rec: any) {
     reasoning: rec.reasoning,
     progression_type: rec.progression_type,
     confidence: rec.confidence,
+    rep_range: rec.rep_range,
+    strategy: rec.strategy,
+    branch: rec.branch,
+    next_set_reasoning: rec.next_set_reasoning,
+    next_set_action: rec.next_set_action,
+    next_set_request_id: rec.next_set_request_id,
     needs_starting_weight: rec.needs_starting_weight,
     estimated_from_stale_history: rec.estimated_from_stale_history,
     estimated_from_top_lifts: rec.estimated_from_top_lifts,
+    estimated_from_related_exercises: rec.estimated_from_related_exercises,
+    calibration_required: rec.calibration_required,
     suggested_sets: rec.suggested_sets,
     suggested_reps: rec.suggested_reps,
     has_implausible_data: rec.has_implausible_data,
@@ -463,6 +474,37 @@ export function sessionToForm(session: WorkoutSession): SessionFormData {
     exercises: migrateSessionCardioToExercises(session),
     notes: session.notes || "",
   };
+}
+
+/** Copy exercise order and set counts from a logged session — fresh sets for a new workout. */
+export function layoutExercisesFromSession(source: WorkoutSession): SessionExercise[] {
+  return migrateSessionCardioToExercises(source).map((ex) => {
+    if (isCardioExercise(ex)) {
+      return {
+        exercise_id: ex.exercise_id,
+        exercise_name: ex.exercise_name,
+        time: undefined,
+        ...(isSportCardio(ex)
+          ? { intensity: 5, fatigue: 5 }
+          : { speed: undefined }),
+      };
+    }
+    const setCount = Array.isArray(ex.sets)
+      ? Math.max(ex.sets.length, 1)
+      : typeof ex.sets === "number" && ex.sets > 0
+        ? ex.sets
+        : 3;
+    return {
+      exercise_id: ex.exercise_id,
+      exercise_name: ex.exercise_name,
+      sets: Array.from({ length: setCount }, (_, i) => ({
+        set_number: i + 1,
+        reps: 0,
+        weight: undefined,
+        completed: false,
+      })),
+    };
+  });
 }
 
 export function buildSessionPayload(
@@ -540,4 +582,138 @@ export function getBestSetLabel(maxData: any) {
   const best = entries[0][1];
   if (best?.weight == null) return null;
   return `${best.weight} × ${best.reps || 0}`;
+}
+
+export const MUSCLE_GROUP_LABELS: Record<string, string> = {
+  CHEST: "Chest",
+  SHOULDERS: "Shoulders",
+  TRICEPS: "Triceps",
+  BACK: "Back",
+  BICEPS: "Biceps",
+  LEGS: "Legs",
+  GLUTES: "Glutes",
+  CALVES: "Calves",
+  "CORE / ABS": "Core",
+};
+
+export function resolveExerciseCategory(
+  exerciseId: string,
+  exerciseName: string,
+  customExercises: { id?: string; name: string; muscle_group?: string }[] = []
+): string | null {
+  const fromDefault = defaultExercises.find(
+    (e) => e.id === exerciseId || e.name === exerciseName
+  );
+  if (fromDefault?.category) return fromDefault.category;
+  const fromCustom = customExercises.find(
+    (e) => e.id === exerciseId || e.name === exerciseName
+  );
+  if (fromCustom?.muscle_group) {
+    const muscleGroup = fromCustom.muscle_group.toLowerCase();
+    for (const [cat, muscle] of Object.entries(categoryToMuscleGroup)) {
+      if (muscleGroup.includes(muscle.toLowerCase())) return cat;
+    }
+  }
+  return null;
+}
+
+export function exerciseMatchesMuscleGroup(
+  category: string | null,
+  filter: string
+): boolean {
+  if (!category) return false;
+  if (filter === "ARMS") return category === "BICEPS" || category === "TRICEPS";
+  if (filter === "CORE") return category === "CORE / ABS";
+  return category === filter;
+}
+
+/** Muscle groups relevant to the current split day (e.g. Push → chest, shoulders, triceps). */
+export function muscleGroupsForSplitDay(
+  splitDay?: string,
+  splitName?: string
+): string[] {
+  const key = `${splitDay || ""} ${splitName || ""}`.toLowerCase();
+  if (/\bpush\b|push day|chest.*tricep|tricep.*chest/.test(key)) {
+    return ["CHEST", "SHOULDERS", "TRICEPS"];
+  }
+  if (/\bpull\b|pull day|back.*bicep|bicep.*back/.test(key)) {
+    return ["BACK", "BICEPS"];
+  }
+  if (/\bleg\b|lower|glute|quad|hamstring/.test(key)) {
+    return ["LEGS", "GLUTES", "CALVES"];
+  }
+  if (/\bupper\b/.test(key)) {
+    return ["CHEST", "BACK", "SHOULDERS", "BICEPS", "TRICEPS"];
+  }
+  if (/\bfull\b|total body/.test(key)) {
+    return ["CHEST", "BACK", "SHOULDERS", "BICEPS", "TRICEPS", "LEGS"];
+  }
+  if (/\bchest\b/.test(key)) return ["CHEST", "TRICEPS"];
+  if (/\bback\b/.test(key)) return ["BACK", "BICEPS"];
+  if (/\bshoulder\b/.test(key)) return ["SHOULDERS"];
+  if (/\barm\b|bicep|tricep/.test(key)) return ["BICEPS", "TRICEPS"];
+  if (/\bcore\b|\babs\b/.test(key)) return ["CORE / ABS"];
+  return [];
+}
+
+/** Uppercase history header for the split-aware card footer (e.g. "Recent push history"). */
+export function splitHistoryLabel(splitDay?: string, splitName?: string): string {
+  const key = `${splitDay || ""} ${splitName || ""}`.toLowerCase();
+  if (/\bpush\b|push day/.test(key)) return "Recent push history";
+  if (/\bpull\b|pull day/.test(key)) return "Recent pull history";
+  if (/\bleg\b|lower/.test(key)) return "Recent legs history";
+  if (/\bupper\b/.test(key)) return "Recent upper history";
+  if (/\bfull\b|total body/.test(key)) return "Recent full body history";
+  if (/\bchest\b/.test(key)) return "Recent chest history";
+  if (/\bback\b/.test(key)) return "Recent back history";
+  if (/\bshoulder\b/.test(key)) return "Recent shoulder history";
+  if (/\barm\b|bicep|tricep/.test(key)) return "Recent arms history";
+  if (/\bcore\b|\babs\b/.test(key)) return "Recent core history";
+  const label = (splitDay || splitName || "workout").trim();
+  return label ? `Recent ${label.toLowerCase()} history` : "Recent workout history";
+}
+
+export type MuscleGroupSessionHit = {
+  session: WorkoutSession;
+  exercises: SessionExercise[];
+};
+
+export function getRecentMuscleGroupSessions(
+  sessions: WorkoutSession[],
+  muscleGroup: string,
+  resolveCategory: (exerciseId: string, exerciseName: string) => string | null,
+  excludeSessionId?: string | null,
+  limit = 5
+): MuscleGroupSessionHit[] {
+  const hits: MuscleGroupSessionHit[] = [];
+  const sorted = [...sessions].sort((a, b) =>
+    String(b.date || "").localeCompare(String(a.date || ""))
+  );
+  for (const session of sorted) {
+    if (session.id && session.id === excludeSessionId) continue;
+    const matched = migrateSessionCardioToExercises(session).filter((ex) => {
+      const cat = resolveCategory(ex.exercise_id, ex.exercise_name);
+      return exerciseMatchesMuscleGroup(cat, muscleGroup);
+    });
+    if (!matched.length) continue;
+    hits.push({ session, exercises: matched });
+    if (hits.length >= limit) break;
+  }
+  return hits;
+}
+
+export function formatExerciseSessionSnapshot(ex: SessionExercise): string {
+  if (!Array.isArray(ex.sets)) return ex.exercise_name;
+  const working = ex.sets.filter(
+    (set) => set.completed || (Number(set.reps) > 0 && Number(set.weight) > 0)
+  );
+  if (!working.length) return ex.exercise_name;
+  const best = [...working].sort(
+    (a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0)
+  )[0];
+  if (best?.weight != null && Number(best.weight) > 0) {
+    return `${best.weight}×${best.reps || 0}`;
+  }
+  if (best?.reps) return `${best.reps} reps`;
+  return ex.exercise_name;
 }

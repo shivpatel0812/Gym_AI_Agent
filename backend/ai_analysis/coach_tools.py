@@ -19,6 +19,7 @@ from nutrition.meal_math import anchor_kind, anchor_macros
 # Caps to keep tool results from blowing up the context window
 MAX_SESSIONS = 20
 MAX_EXERCISE_ENTRIES = 12
+MAX_CONTEXT_SESSIONS_PER_EXERCISE = 10
 MAX_RECORDS = 15
 MAX_DAYS_LOOKBACK = 365
 # Enough to see the shape of a day without turning one tool call into a wall
@@ -62,14 +63,94 @@ def _top_set(sets: List[Dict]) -> Optional[Dict[str, Any]]:
     return best
 
 
+def _exercise_matches(candidate: Dict, exercise_id: Optional[str], name: str) -> bool:
+    """Prefer the stable id; exact normalized name is a legacy-log fallback."""
+    candidate_id = candidate.get("exercise_id")
+    if exercise_id and candidate_id and str(candidate_id) == str(exercise_id):
+        return True
+    # Exercise catalog ids changed over time and custom exercises may later be
+    # linked to a default entry. A mismatched id must not block an exact-name
+    # match, or genuine history disappears while the projector invents a seed.
+    candidate_name = candidate.get("exercise_name") or candidate.get("name") or ""
+    return bool(name and candidate_name.strip().lower() == name.strip().lower())
+
+
+def _exercise_history_context(
+    sessions: List[Dict], exercise_id: Optional[str], exercise_name: str
+) -> Dict[str, Any]:
+    """Compact lifetime evidence attached to an exercise in an exact-day result."""
+    history = []
+    for session in sessions:
+        for exercise in session.get("exercises", []) or []:
+            if not _exercise_matches(exercise, exercise_id, exercise_name):
+                continue
+            sets = exercise.get("sets", []) or []
+            normalized_sets = [
+                {
+                    "weight": workout_set.get("weight"),
+                    "reps": workout_set.get("reps"),
+                    "rpe": workout_set.get("rpe"),
+                    "completed": workout_set.get("completed"),
+                }
+                for workout_set in sets
+            ]
+            history.append({
+                "date": session.get("date"),
+                "sets": normalized_sets,
+                "top_set": _top_set(normalized_sets),
+            })
+
+    history.sort(key=lambda item: item.get("date") or "", reverse=True)
+    all_sets = [
+        {**workout_set, "date": entry.get("date")}
+        for entry in history
+        for workout_set in entry.get("sets", [])
+        if (workout_set.get("reps") or 0) > 0
+    ]
+    weighted = [workout_set for workout_set in all_sets if (workout_set.get("weight") or 0) > 0]
+    bodyweight = [workout_set for workout_set in all_sets if (workout_set.get("weight") or 0) <= 0]
+
+    # For an added-load movement, more external weight wins; reps break ties.
+    best_weighted = max(
+        weighted,
+        key=lambda workout_set: (workout_set.get("weight") or 0, workout_set.get("reps") or 0),
+        default=None,
+    )
+    best_bodyweight = max(
+        bodyweight,
+        key=lambda workout_set: workout_set.get("reps") or 0,
+        default=None,
+    )
+    most_recent_weighted = weighted[0] if weighted else None
+
+    recent = history[:MAX_CONTEXT_SESSIONS_PER_EXERCISE]
+    recent_top_sets = [entry.get("top_set") for entry in reversed(recent) if entry.get("top_set")]
+    trend = "insufficient_history"
+    if len(recent_top_sets) >= 2:
+        first, last = recent_top_sets[0], recent_top_sets[-1]
+        first_score = (first.get("weight") or 0) * (1 + (first.get("reps") or 0) / 30)
+        last_score = (last.get("weight") or 0) * (1 + (last.get("reps") or 0) / 30)
+        trend = "up" if last_score > first_score * 1.02 else "down" if last_score < first_score * .98 else "steady"
+
+    return {
+        "lifetime_session_count": len(history),
+        "recent_sessions": recent,
+        "best_weighted_set": best_weighted,
+        "best_bodyweight_rep_set": best_bodyweight,
+        "most_recent_weighted_set": most_recent_weighted,
+        "recent_trend": trend,
+    }
+
+
 class CoachToolbox:
     """Executes the coach's tool calls against the user's Firestore data."""
 
     def __init__(self, db, user_id: str, mode: str = "coach", conversation_id: Optional[str] = None):
         self.db = db
         self.user_id = user_id
-        # Which toolset the chat turn is allowed to use. Only nutrition mode
-        # may propose plan edits; ordinary coach chat stays read-only.
+        # Which toolset the chat turn is allowed to use. Nutrition and plan
+        # mode may each stage proposals against their own plan; ordinary coach
+        # chat stays read-only.
         self.mode = mode
         self.conversation_id = conversation_id
         # Structured results the client should render as more than chat text
@@ -131,6 +212,72 @@ class CoachToolbox:
             result.append(entry)
 
         return {"days": days, "session_count": len(result), "sessions": result}
+
+    def get_workout_session(self, date: str) -> Dict[str, Any]:
+        """Every logged exercise and set for one exact calendar date."""
+        try:
+            requested = datetime.strptime(str(date or ""), "%Y-%m-%d").strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            return {"error": "date must be a real calendar date in YYYY-MM-DD format"}
+
+        docs = self._collection("workout_sessions").where("date", "==", requested).stream()
+        rows = normalize_records(
+            "workout_sessions",
+            [{"id": doc.id, **(doc.to_dict() or {})} for doc in docs],
+        )
+        # One lifetime scan supplies context for every exercise on the selected
+        # day; do not issue a separate Firestore query per exercise.
+        all_rows = normalize_records(
+            "workout_sessions",
+            [{"id": doc.id, **(doc.to_dict() or {})}
+             for doc in self._collection("workout_sessions").stream()],
+        )
+        sessions = []
+        for session in rows:
+            exercises = []
+            for index, exercise in enumerate(session.get("exercises", []) or []):
+                sets = []
+                for set_index, workout_set in enumerate(exercise.get("sets", []) or []):
+                    sets.append({
+                        "set_number": workout_set.get("set_number") or set_index + 1,
+                        "weight": workout_set.get("weight"),
+                        "reps": workout_set.get("reps"),
+                        "rpe": workout_set.get("rpe"),
+                        "difficulty": workout_set.get("difficulty"),
+                        "completed": workout_set.get("completed"),
+                    })
+                exercises.append({
+                    "order": exercise.get("order") or index + 1,
+                    "exercise_id": exercise.get("exercise_id"),
+                    "name": exercise.get("exercise_name") or exercise.get("name") or "Unknown",
+                    "sets": sets,
+                    "top_set": _top_set(sets),
+                    "notes": exercise.get("notes"),
+                    "time": exercise.get("time"),
+                    "speed": exercise.get("speed"),
+                    "history_context": _exercise_history_context(
+                        all_rows,
+                        exercise.get("exercise_id"),
+                        exercise.get("exercise_name") or exercise.get("name") or "Unknown",
+                    ),
+                })
+            sessions.append({
+                "session_id": session.get("id"),
+                "date": requested,
+                "split": session.get("split_name") or session.get("workout_name"),
+                "day": session.get("split_day"),
+                "notes": session.get("notes"),
+                "exercise_count": len(exercises),
+                "exercises": exercises,
+            })
+
+        return {
+            "date": requested,
+            "found": bool(sessions),
+            "session_count": len(sessions),
+            "sessions": sessions,
+            "message": None if sessions else f"No workout was logged on {requested}.",
+        }
 
     def get_exercise_history(self, exercise_name: str, days: int = 90) -> Dict[str, Any]:
         """Progression on one exercise: top set and estimated 1RM per session."""
@@ -496,6 +643,84 @@ class CoachToolbox:
             ),
         }
 
+    def propose_plan_edits(
+        self, summary: str = "", edits: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Stage per-exercise plan changes for review. Never writes the live plan.
+
+        Scoped on purpose: this can retarget a lift the plan already contains
+        and nothing else. Restructuring — adding exercises, removing them,
+        changing which days exist — belongs to Plan Mode, where the user is
+        answering guided questions rather than chatting mid-workout.
+        """
+        try:
+            from ai_analysis.plan_store import PlanStore
+            from ai_analysis.plan_suggestion_store import PlanSuggestionStore
+            from ai_analysis.plan_edits import normalize_edits, MAX_EDITS
+
+            plan = PlanStore(self.db, self.user_id).get_active()
+        except Exception as e:
+            return {"error": f"Could not load training plan: {e}"}
+
+        if not plan:
+            return {
+                "status": "no_plan",
+                "message": (
+                    "There is no active training plan to edit. Tell the user to create "
+                    "one from the Plan tab first."
+                ),
+            }
+
+        clean_summary = str(summary or "").strip()[:200]
+        normalized, rejected = normalize_edits(plan, edits)
+
+        if not normalized:
+            return {
+                "status": "nothing_proposed",
+                "rejected": rejected,
+                "message": (
+                    "No valid edits. Tell the user plainly what you could not change and "
+                    "why. Do not claim the plan was updated."
+                ),
+            }
+
+        try:
+            record = PlanSuggestionStore(self.db, self.user_id).create(
+                plan=plan,
+                edits=normalized,
+                summary=clean_summary or f"{len(normalized)} target updates",
+                conversation_id=self.conversation_id,
+            )
+        except Exception as e:
+            return {"error": f"Could not save those suggestions: {e}"}
+
+        self.artifacts.append({
+            "type": "plan_suggestions",
+            "suggestion_set_id": record["id"],
+            "plan_id": plan.get("id"),
+            "summary": record["summary"],
+            "count": len(normalized),
+            "titles": [edit["title"] for edit in normalized],
+        })
+
+        return {
+            "status": "proposed",
+            "suggestion_set_id": record["id"],
+            "count": len(normalized),
+            "max_edits": MAX_EDITS,
+            "proposed": [
+                {"title": e["title"], "op": e["op"], "rationale": e.get("rationale")}
+                for e in normalized
+            ],
+            "rejected": rejected,
+            "message": (
+                "Staged for review. The plan has NOT changed. Explain the changes in "
+                "plain language and tell the user to review them on the Plan tab, where "
+                "they can accept or discard. If anything was rejected, say so."
+            ),
+        }
+
     def get_wellness_log(self, days: int = 7) -> Dict[str, Any]:
         """Day-by-day sleep, stress, and wellness-survey entries."""
         sleep = self._fetch_range("sleep", days)
@@ -622,6 +847,7 @@ class CoachToolbox:
 
         handler = {
             "get_recent_sessions": self.get_recent_sessions,
+            "get_workout_session": self.get_workout_session,
             "get_exercise_history": self.get_exercise_history,
             "get_todays_plan": self.get_todays_plan,
             "get_current_split": self.get_current_split,
@@ -634,6 +860,7 @@ class CoachToolbox:
             "get_latest_body_scan": self.get_latest_body_scan,
             "get_body_scan_progress": self.get_body_scan_progress,
             "propose_nutrition_edits": self.propose_nutrition_edits,
+            "propose_plan_edits": self.propose_plan_edits,
         }.get(name)
 
         if handler is None:
@@ -656,6 +883,31 @@ def _days_param(description: str, default: int) -> Dict[str, Any]:
 
 
 TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_workout_session",
+            "description": (
+                "Get the complete workout log for one exact date, preserving exercise order "
+                "and every set's weight, reps, RPE, difficulty and completion status. Use this "
+                "instead of get_recent_sessions whenever the user names a specific workout date "
+                "or asks to analyze, repeat, revise, or build from a particular day's session. "
+                "Each exercise also includes lifetime/recent history context and separate best "
+                "weighted and bodyweight performances; use that context before judging ability "
+                "from the selected session alone."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "The requested local calendar date in YYYY-MM-DD format.",
+                    },
+                },
+                "required": ["date"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -852,7 +1104,7 @@ TOOL_SCHEMAS = [
 # nutrition plan for the user to review on the Plan page. It is offered only
 # in nutrition mode, and even then it cannot write the plan itself.
 
-WRITE_TOOLS = {"propose_nutrition_edits"}
+WRITE_TOOLS = {"propose_nutrition_edits", "propose_plan_edits"}
 
 EDIT_OPS = [
     "update_targets",
@@ -950,14 +1202,86 @@ NUTRITION_WRITE_SCHEMAS = [
 READ_TOOL_SCHEMAS = TOOL_SCHEMAS
 
 
+
+
+# Training-plan micro-patches. Offered only in plan mode: the coach may retune
+# a lift the plan already contains, never restructure the program.
+
+PLAN_EDIT_OPS = [
+    "set_rep_range", "set_sets", "set_priority", "set_goal", "set_notes",
+]
+
+PLAN_WRITE_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_plan_edits",
+            "description": (
+                "Stage per-exercise changes to the user's ACTIVE training plan for them "
+                "to accept or discard on the Plan tab. This does NOT change the plan. "
+                "Use it when a lift's target should move based on how sessions have "
+                "actually gone. It can only retarget exercises already in the plan — it "
+                "cannot add or remove exercises or training days, so do not promise "
+                "that. Call get_training_plan first so you use exact day and exercise "
+                "names."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "One short line describing the change set.",
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": "Up to 6 scoped edits.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": {"type": "string", "enum": PLAN_EDIT_OPS},
+                                "day_name": {
+                                    "type": "string",
+                                    "description": "Exact day name from the active plan.",
+                                },
+                                "exercise_name": {
+                                    "type": "string",
+                                    "description": "Exact exercise name from that day.",
+                                },
+                                "value": {
+                                    "description": (
+                                        "set_rep_range: [low, high]. set_sets: integer. "
+                                        "set_priority: high|supporting|normal. "
+                                        "set_goal: strength|hypertrophy|fat_loss|general. "
+                                        "set_notes: short coaching cue."
+                                    ),
+                                },
+                                "rationale": {
+                                    "type": "string",
+                                    "description": "Why, in one sentence, from their data.",
+                                },
+                            },
+                            "required": ["op", "exercise_name", "value"],
+                        },
+                    },
+                },
+                "required": ["edits"],
+            },
+        },
+    },
+]
+
+
 def tools_for_mode(mode: str = "coach") -> List[Dict[str, Any]]:
     """
     The toolset a chat turn may use.
 
-    Nutrition mode is the only place the coach can stage plan edits: that is
-    where the user has explicitly opened a conversation about their plan, so a
-    proposal is expected rather than a surprise.
+    Write tools are offered only in the mode whose plan they touch: the user
+    has explicitly opened a conversation about that plan, so a proposal is
+    expected rather than a surprise. Plain coach chat can read everything and
+    stage nothing.
     """
     if mode == "nutrition":
         return READ_TOOL_SCHEMAS + NUTRITION_WRITE_SCHEMAS
+    if mode == "plan":
+        return READ_TOOL_SCHEMAS + PLAN_WRITE_SCHEMAS
     return READ_TOOL_SCHEMAS

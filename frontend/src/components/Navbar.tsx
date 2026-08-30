@@ -1,22 +1,33 @@
-import { Link } from 'react-router-dom';
+import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 
 interface NavbarProps {
   onLogout: () => void;
+  onNavigate?: (route: string) => void;
 }
 
-export default function Navbar({ onLogout }: NavbarProps) {
+const links = ["Dashboard", "Workouts", "Activity", "Nutrition", "Wellness"];
+
+export default function Navbar({ onLogout, onNavigate }: NavbarProps) {
   return (
-    <nav className="bg-gray-800 p-4 mb-8">
-      <div className="max-w-7xl mx-auto flex justify-between items-center">
-        <div className="flex gap-8">
-          <Link to="/" className="text-white no-underline hover:text-gray-300">Dashboard</Link>
-          <Link to="/workouts" className="text-white no-underline hover:text-gray-300">Workouts</Link>
-          <Link to="/activity" className="text-white no-underline hover:text-gray-300">Activity</Link>
-          <Link to="/nutrition" className="text-white no-underline hover:text-gray-300">Nutrition</Link>
-          <Link to="/wellness" className="text-white no-underline hover:text-gray-300">Wellness</Link>
-        </div>
-        <button onClick={onLogout} className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 cursor-pointer">Logout</button>
-      </div>
-    </nav>
+    <View style={styles.nav}>
+      <View style={styles.links}>
+        {links.map((label) => (
+          <TouchableOpacity key={label} onPress={() => onNavigate?.(label.toLowerCase())}>
+            <Text style={styles.link}>{label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <TouchableOpacity onPress={onLogout} style={styles.logout}>
+        <Text style={styles.logoutText}>Logout</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  nav: { backgroundColor: "#1f2937", padding: 16, flexDirection: "row", justifyContent: "space-between" },
+  links: { flexDirection: "row", gap: 20, alignItems: "center" },
+  link: { color: "#fff" },
+  logout: { backgroundColor: "#dc2626", borderRadius: 6, paddingHorizontal: 12, paddingVertical: 8 },
+  logoutText: { color: "#fff", fontWeight: "600" },
+});

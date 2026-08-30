@@ -24,7 +24,7 @@ import { LevelSlider } from "../wellness/ui";
 import LogFoodForm, { PlanMealPick } from "../nutrition/LogFoodForm";
 import { DEFAULT_TARGETS, FoodItem } from "../nutrition/types";
 import { TodaysWorkout } from "../workouts/types";
-import { getActiveNutritionPlan, mealAnchorKind } from "../../api/nutritionPlan";
+import { getActiveNutritionPlan, mealAnchorKind, daysLabel } from "../../api/nutritionPlan";
 import type { NutritionPlan } from "../../api/nutritionPlan";
 import { normalizeMealLabel } from "../../lib/recentMeals";
 import { foodQuantity, scaleFoodItem } from "../../lib/foodQuantity";
@@ -484,7 +484,7 @@ export default function Home() {
       const toAdd = foods.filter((f) => {
         const t = f.usual_id || f.anchor_id;
         if (!t) return true;
-        return !current.some((x) => x.usual_id === t || x.anchor_id === t);
+        return !current.some((x: FoodItem) => x.usual_id === t || x.anchor_id === t);
       });
       if (!toAdd.length) {
         skipped = true;
@@ -512,6 +512,39 @@ export default function Home() {
   };
 
   const addFood = async (food: FoodItem) => addFoods([food]);
+
+  /** Append foods even when a tagged row already exists (another meal serving). */
+  const repeatFoods = async (foods: FoodItem[]) => {
+    if (!foods.length) return;
+    const tag = foods[0]?.usual_id || foods[0]?.anchor_id || null;
+    if (tag) setLoggingId(tag);
+
+    let snapshot: any[] = [];
+    setMacroRows((prev) => {
+      snapshot = prev;
+      const existing = todayEntry(prev);
+      if (existing?.id && !String(existing.id).startsWith("local-")) {
+        todayMacroIdRef.current = String(existing.id);
+      }
+      const current = existing?.food_items || [];
+      const nextFoods = [...current, ...foods];
+      todayFoodsPendingRef.current = nextFoods;
+      return patchTodayMacroRow(prev, nextFoods);
+    });
+    setLoggingId(null);
+
+    try {
+      await flushTodayMacros();
+    } catch {
+      setMacroRows(snapshot);
+      const existing = todayEntry(snapshot);
+      todayFoodsPendingRef.current = existing?.food_items || [];
+      todayMacroIdRef.current =
+        existing?.id && !String(existing.id).startsWith("local-")
+          ? String(existing.id)
+          : todayMacroIdRef.current;
+    }
+  };
 
   /**
    * Change how many units of a tagged item are logged. `base` is the PER-UNIT
@@ -629,25 +662,27 @@ export default function Home() {
   };
 
   const planMealsFor = (mealLabel: string): PlanMealPick[] => {
-    const slots = mealLabel === "Pre-Workout"
-      ? ["pre_workout", "shake"]
-      : mealLabel === "Snacks"
-        ? ["snack", "late_night", "other"]
-        : [normalizeMealLabel(mealLabel)];
+    const slots =
+      mealLabel === "Pre-Workout"
+        ? ["pre_workout", "shake"]
+        : mealLabel === "Snacks"
+          ? ["snack", "late_night", "other"]
+          : [normalizeMealLabel(mealLabel)];
     const weekday = todayWeekdayKey();
     return (plan?.meal_anchors || [])
-      .filter(
-        (a) =>
-          a.id &&
-          slots.includes(normalizeMealLabel(a.slot)) &&
-          planItemAppliesToday(a, weekday)
-      )
+      .filter((a) => a.id && slots.includes(normalizeMealLabel(a.slot)))
       .map((a) => ({
         id: String(a.id),
         label: a.label || "Plan meal",
         kind: mealAnchorKind(a),
         foods: a.foods || [],
-      }));
+        schedule: daysLabel(a.days, a.frequency),
+        appliesToday: planItemAppliesToday(a, weekday),
+      }))
+      .sort((a, b) => {
+        if (a.appliesToday !== b.appliesToday) return a.appliesToday ? -1 : 1;
+        return a.label.localeCompare(b.label);
+      });
   };
 
   const saveRoutine = async () => {
@@ -743,10 +778,10 @@ export default function Home() {
       <TodayFoodLog
         plan={plan}
         todayFoods={todayFoods}
-        macroRows={macroRows}
         loggingId={loggingId}
         onLogMeal={(meal, uncertain) => openFood(meal, uncertain)}
         onLogFoods={(foods) => addFoods(foods, false)}
+        onRepeatFoods={repeatFoods}
         onRemoveTag={removeByTag}
         onBumpFood={bumpFoodQuantity}
       />

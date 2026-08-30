@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List, Dict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from time import perf_counter
+from firebase_admin import firestore
 from pydantic import BaseModel
 import os
 
@@ -8,6 +10,11 @@ from models import WorkoutSession
 from auth import get_user_id
 from db import db
 from ai_analysis.workout_recommender import WorkoutRecommender
+from ai_analysis.workout_recommender.next_set_recommender import NextSetRecommender
+from ai_analysis.workout_recommender.recommendation_metrics import (
+    record_recommendation_metrics,
+    summarize_recommendation_metrics,
+)
 
 router = APIRouter(prefix="/api/workout-sessions", tags=["workout-sessions"])
 
@@ -23,6 +30,22 @@ class ExerciseRecommendationRequest(BaseModel):
     plan_notes: Optional[str] = None
     day_intensity: Optional[str] = None  # "heavy", "light", "normal"
     exclude_session_id: Optional[str] = None
+
+
+class NextSetRecommendationRequest(BaseModel):
+    exercise_name: str
+    completed_sets: List[Dict]
+    remaining_sets: List[Dict]
+    current_workout_exercises: Optional[List[Dict]] = None
+    base_recommendation: Optional[Dict] = None
+    request_id: Optional[str] = None
+    previous_request_id: Optional[str] = None
+
+
+class RecommendationFeedbackRequest(BaseModel):
+    request_id: str
+    accepted: bool
+    reason: Optional[str] = None
 
 # ============== AI RECOMMENDATION ENDPOINTS (Must come before parameterized routes) ==============
 
@@ -113,6 +136,177 @@ async def get_exercise_ai_recommendation(
         error_trace = traceback.format_exc()
         print(f"Error generating recommendation: {error_trace}")
         raise HTTPException(status_code=500, detail=f"Error generating recommendation: {str(e)}")
+
+
+@router.post("/ai-recommendation/{exercise_id}/next-set")
+async def get_next_set_ai_recommendation(
+    exercise_id: str,
+    request: NextSetRecommendationRequest,
+    user_id: str = Depends(get_user_id),
+):
+    """Recommend the next unfinished set after the user completes a set."""
+    try:
+        recommender = _get_recommender(user_id)
+        engine = NextSetRecommender(recommender.client, recommender.model)
+        event_ref = None
+        safe_request_id = request.request_id and len(request.request_id) <= 128 and all(
+            char.isalnum() or char in "-_" for char in request.request_id
+        )
+        if safe_request_id:
+            event_ref = (
+                db.collection("users").document(user_id)
+                .collection("workout_recommendation_events").document(request.request_id)
+            )
+            existing = event_ref.get()
+            if existing.exists and existing.to_dict().get("response"):
+                return existing.to_dict()["response"]
+        learning_ref = (
+            db.collection("users").document(user_id)
+            .collection("workout_recommendation_learning").document(exercise_id)
+        )
+        learning_doc = learning_ref.get()
+        learning = learning_doc.to_dict() if learning_doc.exists else {}
+
+        safe_previous_id = request.previous_request_id and len(request.previous_request_id) <= 128 and all(
+            char.isalnum() or char in "-_" for char in request.previous_request_id
+        )
+        if safe_previous_id and request.completed_sets:
+            previous_ref = (
+                db.collection("users").document(user_id)
+                .collection("workout_recommendation_events").document(request.previous_request_id)
+            )
+            previous_doc = previous_ref.get()
+            if previous_doc.exists:
+                previous_response = previous_doc.to_dict().get("response") or {}
+                previous_target = previous_response.get("next_set") or {}
+                actual = request.completed_sets[-1]
+                try:
+                    target_weight = float(previous_target.get("weight") or 0)
+                    actual_weight = float(actual.get("weight") or 0)
+                    manual_change = target_weight > 0 and abs(actual_weight - target_weight) > 0.01
+                    rep_error = int(actual.get("reps") or 0) - int(
+                        previous_target.get("preferred_reps") or previous_target.get("reps") or 0
+                    )
+                    if not manual_change:
+                        observations = int(learning.get("observations") or 0) + 1
+                        rep_error_total = float(learning.get("rep_error_total") or 0) + rep_error
+                        learning.update({
+                            "observations": observations,
+                            "rep_error_total": rep_error_total,
+                            "average_rep_error": round(rep_error_total / observations, 3),
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                        learning_ref.set({
+                            "observations": firestore.Increment(1),
+                            "rep_error_total": firestore.Increment(rep_error),
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }, merge=True)
+                    previous_ref.set({
+                        "feedback": {
+                            "accepted": not manual_change,
+                            "reason": "load_changed" if manual_change else "next_set_completed",
+                            "recorded_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    }, merge=True)
+                    metric_ref = (
+                        db.collection("users").document(user_id)
+                        .collection("workout_recommendation_metrics")
+                        .document(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+                    )
+                    metric_ref.set({
+                        "outcomes": firestore.Increment(1),
+                        "missed_targets": firestore.Increment(1 if rep_error < 0 else 0),
+                        "failed_sets": firestore.Increment(
+                            1 if str(actual.get("difficulty") or "").lower() == "failed" else 0
+                        ),
+                        "manual_changes": firestore.Increment(1 if manual_change else 0),
+                    }, merge=True)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+        exercise_record = None
+        try:
+            doc = (
+                db.collection("users").document(user_id).collection("exercises")
+                .document(exercise_id).get()
+            )
+            if doc.exists:
+                exercise_record = doc.to_dict()
+        except Exception:
+            pass
+        started = perf_counter()
+        result = engine.recommend(
+            exercise_id=exercise_id,
+            exercise_name=request.exercise_name,
+            completed_sets=request.completed_sets,
+            remaining_sets=request.remaining_sets,
+            current_workout_exercises=request.current_workout_exercises,
+            base_recommendation=request.base_recommendation,
+            exercise_record=exercise_record,
+            request_id=request.request_id,
+            learned_context={
+                "observations": int(learning.get("observations") or 0),
+                "average_rep_error": float(learning.get("average_rep_error") or 0),
+            },
+        )
+        latency_ms = round((perf_counter() - started) * 1000)
+        record_recommendation_metrics(db, user_id, result, latency_ms)
+        if event_ref is not None:
+            event_ref.set({
+                "exercise_id": exercise_id,
+                "exercise_name": request.exercise_name,
+                "completed_set": request.completed_sets[-1] if request.completed_sets else None,
+                "response": result,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "expires_at": datetime.now(timezone.utc) + timedelta(days=90),
+            })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating next-set recommendation: {str(e)}")
+
+
+@router.get("/ai-recommendation-metrics")
+async def get_recommendation_metrics(user_id: str = Depends(get_user_id)):
+    """Return the authenticated user's recent recommendation health metrics."""
+    docs = (
+        db.collection("users").document(user_id)
+        .collection("workout_recommendation_metrics")
+        .order_by("date", direction=firestore.Query.DESCENDING).limit(30).stream()
+    )
+    return summarize_recommendation_metrics(docs)
+
+
+@router.post("/ai-recommendation-feedback")
+async def save_recommendation_feedback(
+    request: RecommendationFeedbackRequest,
+    user_id: str = Depends(get_user_id),
+):
+    if len(request.request_id) > 128 or not all(
+        char.isalnum() or char in "-_" for char in request.request_id
+    ):
+        raise HTTPException(status_code=400, detail="Invalid request id")
+    ref = (
+        db.collection("users").document(user_id)
+        .collection("workout_recommendation_events").document(request.request_id)
+    )
+    ref.set({
+        "feedback": {
+            "accepted": request.accepted,
+            "reason": request.reason,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+    }, merge=True)
+    metric_ref = (
+        db.collection("users").document(user_id)
+        .collection("workout_recommendation_metrics")
+        .document(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    )
+    metric_ref.set({
+        "feedback_events": firestore.Increment(1),
+        "rejections": firestore.Increment(0 if request.accepted else 1),
+    }, merge=True)
+    return {"status": "success"}
 
 
 @router.get("/suggested-order/{split_name}")

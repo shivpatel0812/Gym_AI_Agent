@@ -36,6 +36,103 @@ interface Props {
   showFootnote?: boolean;
 }
 
+
+/**
+ * What accepting this plan would replace.
+ *
+ * A proposal rendered on its own answers "is this a good plan?" when the
+ * question actually being asked is "should this replace what you have?" Those
+ * differ exactly where it matters: a two-day proposal reads as a reasonable
+ * two-day program right up until you notice it deletes three days you train.
+ * Removals lead, because they are the part that cannot be undone by accepting.
+ */
+function PlanDiffSummary({ plan }: { plan: TrainingPlan }) {
+  const diff = plan.diff;
+  if (!diff || diff.is_first_plan) return null;
+
+  const hasDetail =
+    diff.removed_days.length ||
+    diff.added_days.length ||
+    diff.days.length ||
+    diff.schedule_changes.length;
+  if (!hasDetail) return null;
+
+  return (
+    <View style={[styles.card, diff.is_destructive && styles.destructiveCard]}>
+      <View style={styles.cardHeader}>
+        <MaterialCommunityIcons
+          name={diff.is_destructive ? "alert-outline" : "swap-horizontal"}
+          size={18}
+          color={diff.is_destructive ? colors.warning : colors.accentPrimary}
+        />
+        <Text style={styles.cardTitle}>
+          {diff.is_destructive ? "This replaces part of your plan" : "What changes"}
+        </Text>
+      </View>
+
+      <Text style={styles.cardBody}>{diff.summary}</Text>
+
+      {diff.removed_days.length ? (
+        <View style={styles.diffBlock}>
+          <Text style={styles.diffLabelDanger}>DAYS THAT WOULD BE REMOVED</Text>
+          {diff.removed_days.map((day) => (
+            <Text key={day} style={styles.diffRemoved}>
+              {day} — you would no longer have this workout
+            </Text>
+          ))}
+        </View>
+      ) : null}
+
+      {diff.added_days.length ? (
+        <View style={styles.diffBlock}>
+          <Text style={styles.diffLabel}>NEW DAYS</Text>
+          {diff.added_days.map((day) => (
+            <Text key={day} style={styles.diffAdded}>{day}</Text>
+          ))}
+        </View>
+      ) : null}
+
+      {diff.days.map((day) => (
+        <View key={day.day_name} style={styles.diffBlock}>
+          <Text style={styles.diffLabel}>{day.day_name.toUpperCase()}</Text>
+          {day.removed.map((name) => (
+            <Text key={`r-${name}`} style={styles.diffRemoved}>− {name}</Text>
+          ))}
+          {day.added.map((name) => (
+            <Text key={`a-${name}`} style={styles.diffAdded}>+ {name}</Text>
+          ))}
+          {day.retargeted.map((change) => (
+            <Text key={`t-${change.exercise_name}`} style={styles.diffChanged}>
+              {change.exercise_name}: {change.from} → {change.to}
+            </Text>
+          ))}
+          {day.reordered && !day.added.length && !day.removed.length ? (
+            <Text style={styles.diffChanged}>Exercise order changed</Text>
+          ) : null}
+        </View>
+      ))}
+
+      {plan.carried_forward_days?.length ? (
+        <Text style={styles.diffNote}>
+          Kept from your current plan because this conversation did not mention them:{" "}
+          {plan.carried_forward_days.join(", ")}.
+        </Text>
+      ) : null}
+
+      {plan.dropped_exercises?.length ? (
+        <View style={styles.diffBlock}>
+          <Text style={styles.diffLabelDanger}>COULD NOT BE ADDED</Text>
+          {plan.dropped_exercises.map((item, i) => (
+            <Text key={`${item.exercise_name}-${i}`} style={styles.diffRemoved}>
+              {item.exercise_name} ({item.day_name}) — {item.reason}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export default function PlanReviewContent({
   plan,
   modes = [],
@@ -93,6 +190,8 @@ export default function PlanReviewContent({
           </View>
         ) : null}
       </View>
+
+      <PlanDiffSummary plan={plan} />
 
       {plan.primary_goal ? (
         <Text style={styles.planDescription}>{plan.primary_goal}</Text>
@@ -305,6 +404,32 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
 
+  destructiveCard: { borderColor: colors.warning },
+  diffBlock: { marginTop: 12 },
+  diffLabel: {
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    color: colors.textMuted,
+    marginBottom: 4,
+  },
+  diffLabelDanger: {
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    color: colors.warning,
+    marginBottom: 4,
+  },
+  diffRemoved: { fontSize: 12, lineHeight: 18, color: colors.warning },
+  diffAdded: { fontSize: 12, lineHeight: 18, color: colors.accentPrimary },
+  diffChanged: { fontSize: 12, lineHeight: 18, color: colors.textSecondary },
+  diffNote: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: colors.textSecondary,
+    marginTop: 12,
+    fontStyle: "italic",
+  },
   card: {
     marginTop: spacing.lg,
     backgroundColor: "#1C1C1E",

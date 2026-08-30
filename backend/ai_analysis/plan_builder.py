@@ -9,6 +9,7 @@ Output is validated against a strict schema before it is ever shown to the
 user, because these fields drive real training behaviour.
 """
 
+import copy
 import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional
@@ -74,6 +75,7 @@ class PlanBuilder:
         plan_mode: str,
         existing_plan: Optional[Dict] = None,
         adjustment_request: Optional[str] = None,
+        history_context: Optional[Dict] = None,
     ) -> str:
         transcript = "\n".join(
             f"{m.get('role', 'user').upper()}: {m.get('content', '')}"
@@ -89,11 +91,68 @@ class PlanBuilder:
             f"RECENT TRAINING SUMMARY:\n{json.dumps(history_summary, indent=2, default=str)}",
         ]
 
+        if history_context and history_context.get("exercises"):
+            sections.append(
+                "WHAT THEY ACTUALLY TRAIN (read from every logged session, not from "
+                "day labels — this is the most reliable record of their real routine):\n"
+                + json.dumps(history_context["exercises"], indent=2, default=str)
+                + "\nPrefer these exercises. They are movements the user has chosen, "
+                "knows how to perform, and has load history for, which is what makes "
+                "progression possible from day one."
+            )
+            coverage = history_context.get("coverage") or {}
+            if coverage.get("untrained"):
+                sections.append(
+                    "MUSCLE COVERAGE GAP:\nNothing in their logs trains: "
+                    + ", ".join(coverage["untrained"])
+                    + f" (lower-body sessions logged: {coverage.get('lower_body_sessions', 0)}).\n"
+                    "There is therefore no history to copy for these. Program them "
+                    "anyway when the plan calls for them, choosing conservative "
+                    "catalog movements and starting loads, and say in `changes` that "
+                    "this is new work rather than something carried over."
+                )
+            if history_context.get("labels_to_distrust"):
+                sections.append(
+                    "UNRELIABLE DAY LABELS:\nThese exercises are logged under more than "
+                    "one day name, so CURRENT SPLIT's day contents are partly mislabelled "
+                    "and must not be treated as ground truth:\n"
+                    + json.dumps(history_context["labels_to_distrust"], indent=2)
+                    + "\nAssign each movement to the day it belongs on, not the day it "
+                    "happens to have been logged under."
+                )
+
+        referenced = split_context.get("referenced_workouts") or [split_context.get("referenced_workout")]
+        if any(item and item.get("found") for item in referenced):
+            sections.append(
+                "REFERENCED WORKOUT REQUIREMENT:\nThe user selected one or more logged workouts "
+                "as source templates. For each item in referenced_workouts, preserve every "
+                "exercise in its original order on that item's target_day. You may add supporting work in adapt/build "
+                "modes, but do not omit a source exercise unless the user explicitly asked "
+                "to remove it; list any such removal in changes. Weighted and bodyweight "
+                "sets of the same exercise are one exercise with coordinated progression, "
+                "not duplicate plan entries."
+            )
+
         if existing_plan:
             sections.append(
                 "EXISTING ACTIVE PLAN (you are revising this, not starting over):\n"
                 + json.dumps(existing_plan, indent=2, default=str)
             )
+            existing_days = [
+                day["day_name"]
+                for day in (existing_plan.get("days") or [])
+                if day.get("day_name")
+            ]
+            if existing_days:
+                sections.append(
+                    "EXISTING DAY REQUIREMENT:\nA conversation about two days is not a "
+                    "request to delete the rest. Return every one of these days, carrying "
+                    "any the conversation did not mention over unchanged:\n"
+                    + json.dumps(existing_days, indent=2)
+                    + "\nTo drop a day you must say so explicitly with a "
+                    '{"action": "removed", "day_name": "<day>", "exercise_name": null} '
+                    "entry in changes, and only when the user actually asked for it."
+                )
         if adjustment_request:
             sections.append(f"REQUESTED ADJUSTMENT:\n{adjustment_request}")
 
@@ -167,6 +226,7 @@ RULES:
   most accessories on the user's normal goal
 - Never prescribe weights. Rep ranges and intent only.
 - Every day_name in weekly_schedule (other than "Rest") must exist in days
+- Days in the existing plan the conversation never mentions come back unchanged
 - List every structural difference from the Current Split in "changes"
 Return only the JSON object."""
 
@@ -180,9 +240,23 @@ Return only the JSON object."""
         return ids
 
     @staticmethod
-    def _name_to_id(split_context: Dict) -> Dict[str, str]:
-        """Name -> exercise_id, preferring ids the user's split already uses."""
+    def _name_to_id(
+        split_context: Dict, history_context: Optional[Dict] = None
+    ) -> Dict[str, str]:
+        """
+        Name -> exercise_id, preferring ids the user's own logs already use.
+
+        Layered weakest to strongest: the default catalog, then everything they
+        have ever logged, then the split in front of us. Without the history
+        layer a custom movement the user trains weekly resolves to nothing and
+        is silently dropped from their plan, because it is not in the 135-entry
+        default catalog and may not appear in whichever split was loaded.
+        """
         mapping = dict(CATALOG_BY_NAME)
+        for entry in (history_context or {}).get("exercises", []) or []:
+            name = str(entry.get("exercise_name") or "").strip().lower()
+            if name and entry.get("exercise_id"):
+                mapping[name] = entry["exercise_id"]
         for day in (split_context or {}).get("days", []) or []:
             for ex in day.get("exercises", []) or []:
                 name = str(ex.get("exercise_name") or "").strip().lower()
@@ -209,6 +283,7 @@ Return only the JSON object."""
         plan_mode: str = DEFAULT_PLAN_MODE,
         existing_plan: Optional[Dict] = None,
         adjustment_request: Optional[str] = None,
+        history_context: Optional[Dict] = None,
     ) -> Dict[str, Any]:
         """Generate a plan. Returns {status, plan} or {status, error}."""
         if plan_mode not in PLAN_MODES:
@@ -216,7 +291,7 @@ Return only the JSON object."""
 
         prompt = self._build_prompt(
             conversation, split_context, profile, history_summary,
-            plan_mode, existing_plan, adjustment_request,
+            plan_mode, existing_plan, adjustment_request, history_context,
         )
 
         try:
@@ -234,7 +309,9 @@ Return only the JSON object."""
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.4,
-                max_tokens=3000,
+                # Revisions must re-emit the days they are carrying over, so a
+                # five-day plan needs more room than a fresh two-day proposal.
+                max_tokens=4000,
                 response_format={"type": "json_object"},
             )
             raw = json.loads(response.choices[0].message.content)
@@ -248,7 +325,7 @@ Return only the JSON object."""
             raw,
             allowed_ids=self._allowed_exercises(split_context) if strict else None,
             allowed_day_names=self._allowed_day_names(split_context) if strict else None,
-            name_to_id=self._name_to_id(split_context),
+            name_to_id=self._name_to_id(split_context, history_context),
         )
         plan["plan_mode"] = plan_mode
         plan["plan_type"] = "goal"
@@ -274,11 +351,153 @@ Return only the JSON object."""
                 ),
             }
 
+        # The prompt asks for untouched days back; this guarantees it.
+        plan = PlanBuilder.carry_forward_days(plan, existing_plan)
+
         return {
             "status": "success",
             "plan": plan,
             "tokens_used": getattr(response.usage, "total_tokens", 0),
         }
+
+    # How much of a day's work a proposed day must contain before it counts as
+    # that same day under a new name. High enough that Push and Pull can never
+    # be confused; low enough to survive a couple of swapped accessories.
+    SAME_DAY_OVERLAP = 0.6
+
+    @staticmethod
+    def _day_exercise_keys(day: Dict) -> set:
+        return {
+            str(ex.get("exercise_id") or ex.get("exercise_name") or "").strip().lower()
+            for ex in (day or {}).get("exercises") or []
+            if ex.get("exercise_id") or ex.get("exercise_name")
+        }
+
+    @staticmethod
+    def _same_day_renamed(
+        source: Dict, proposed_days: List[Dict], claimed: set
+    ) -> Optional[str]:
+        """
+        The proposed day that is this existing day renamed, if there is one.
+
+        Judged on contents rather than the name, because the name is the thing
+        that changed. Returns the matched day's key so the caller can mark it
+        used — one proposed day cannot stand in for two existing ones.
+        """
+        source_keys = PlanBuilder._day_exercise_keys(source)
+        if not source_keys:
+            return None
+
+        best, best_overlap = None, 0.0
+        for day in proposed_days:
+            key = str(day.get("day_name", "")).strip().lower()
+            if not key or key in claimed:
+                continue
+            overlap = len(source_keys & PlanBuilder._day_exercise_keys(day)) / len(
+                source_keys
+            )
+            if overlap > best_overlap:
+                best, best_overlap = key, overlap
+
+        return best if best_overlap >= PlanBuilder.SAME_DAY_OVERLAP else None
+
+    @staticmethod
+    def carry_forward_days(plan: Dict, existing_plan: Optional[Dict]) -> Dict:
+        """
+        Restore training days the proposal dropped without saying so.
+
+        A proposal is built from one conversation, and a conversation about two
+        days produces a two-day plan. Left alone, asking the coach to import a
+        Push and a Pull workout deletes Legs — which the user never asked for
+        and which nothing tells them about, since the day is simply absent.
+
+        A day only disappears here if the model explicitly declared it removed,
+        so intentional removals still work. Everything carried back is recorded
+        in `changes` and in `carried_forward_days`, because a plan that quietly
+        edits itself is the problem this method exists to fix.
+        """
+        existing_days = [
+            day for day in ((existing_plan or {}).get("days") or [])
+            if isinstance(day, dict) and day.get("day_name")
+        ]
+        if not existing_days:
+            return plan
+
+        present = {
+            str(day.get("day_name")).strip().lower() for day in plan.get("days") or []
+        }
+        declared_removed = {
+            str(change.get("day_name")).strip().lower()
+            for change in plan.get("changes") or []
+            if str(change.get("action") or "").startswith("remov")
+            and change.get("day_name")
+            and not change.get("exercise_name")  # a named exercise is not the day
+        }
+
+        days = list(plan.get("days") or [])
+        # A day the model renamed is still that day. Matching on the name alone
+        # restored "Pull A" alongside the "Pull" that replaced it — two
+        # near-identical days, one of them unschedulable. Each proposed day can
+        # absorb at most one existing day, so two similar days cannot both be
+        # collapsed into one silently.
+        claimed = {
+            str(day.get("day_name")).strip().lower()
+            for day in days
+            if str(day.get("day_name", "")).strip().lower() in
+            {str(d["day_name"]).strip().lower() for d in existing_days}
+        }
+        renamed = set()
+        for source in existing_days:
+            key = str(source["day_name"]).strip().lower()
+            if key in present or key in declared_removed:
+                continue
+            match = PlanBuilder._same_day_renamed(source, days, claimed)
+            if match:
+                claimed.add(match)
+                renamed.add(key)
+
+        carried = []
+        for index, source in enumerate(existing_days):
+            key = str(source["day_name"]).strip().lower()
+            if key in present or key in declared_removed or key in renamed:
+                continue
+            # Reinsert where it sat before, so Legs lands between Push and Pull
+            # rather than being appended after everything else.
+            days.insert(min(index, len(days)), copy.deepcopy(source))
+            carried.append(source["day_name"])
+
+        if not carried:
+            return plan
+
+        plan["days"] = days
+        plan["carried_forward_days"] = carried
+
+        # A carried day that nothing schedules is present but never trained, so
+        # give it back its old weekday when that slot is still free.
+        old_schedule = (existing_plan or {}).get("weekly_schedule") or {}
+        schedule = plan.get("weekly_schedule") or {}
+        for day_name in carried:
+            if day_name in schedule.values():
+                continue
+            for weekday in DAYS_OF_WEEK:
+                if old_schedule.get(weekday) == day_name and str(
+                    schedule.get(weekday, "Rest")
+                ).lower() == "rest":
+                    schedule[weekday] = day_name
+                    break
+        plan["weekly_schedule"] = schedule
+
+        plan["changes"] = (plan.get("changes") or []) + [
+            {
+                "action": "preserved",
+                "day_name": day_name,
+                "exercise_name": None,
+                "replaces": None,
+                "reason": "Kept from your previous plan — this conversation did not mention it.",
+            }
+            for day_name in carried
+        ]
+        return plan
 
     # --- validation --------------------------------------------------------
 
@@ -324,6 +543,10 @@ Return only the JSON object."""
         )
         seen_day_names = set()
         days = []
+        # Exercises the model asked for that we could not honour. Previously
+        # these vanished with only a print, so a plan could claim in `changes`
+        # to have added a lift that is nowhere in it.
+        dropped: List[Dict[str, Any]] = []
         for day in plan.get("days") or []:
             if not isinstance(day, dict) or not day.get("day_name"):
                 continue
@@ -356,14 +579,29 @@ Return only the JSON object."""
                         exercise_name.lower(), ""
                     )
                 if not exercise_id:
+                    dropped.append({
+                        "day_name": str(day["day_name"]),
+                        "exercise_name": exercise_name or "(unnamed)",
+                        "reason": "not a known exercise, and no id we could match it to",
+                    })
                     continue
                 # Accept catalog ids, plus custom ids the split legitimately uses
                 known = validate_exercise_id(exercise_id) or (
                     allowed_ids is not None and exercise_id in allowed_ids
                 )
                 if allowed_ids is not None and exercise_id not in allowed_ids:
+                    dropped.append({
+                        "day_name": str(day["day_name"]),
+                        "exercise_name": exercise_name or exercise_id,
+                        "reason": "not in your split, and this mode cannot add exercises",
+                    })
                     continue
                 if allowed_ids is None and not known and not exercise_name:
+                    dropped.append({
+                        "day_name": str(day["day_name"]),
+                        "exercise_name": exercise_id,
+                        "reason": "unrecognised exercise with no name",
+                    })
                     continue
 
                 entry = {
@@ -439,9 +677,53 @@ Return only the JSON object."""
                 "replaces": PlanBuilder._optional_text(change.get("replaces"), 80),
                 "reason": PlanBuilder._optional_text(change.get("reason"), 200),
             })
-        plan["changes"] = changes
+        plan["changes"] = PlanBuilder._verify_changes(changes, days)
+        if dropped:
+            plan["dropped_exercises"] = dropped
 
         return plan
+
+    # Change actions that assert an exercise is now present in a day. `removed`
+    # is deliberately absent: it asserts the opposite.
+    PRESENCE_ACTIONS = ("added", "swapped", "reordered", "rep_range", "frequency")
+
+    @staticmethod
+    def _verify_changes(changes: List[Dict], days: List[Dict]) -> List[Dict]:
+        """
+        Drop claims the plan itself contradicts.
+
+        A real one from a shipped plan: `changes` said "added Cable Rear Delt
+        Flyes to Pull A" and Pull A contained no such exercise. The user reads
+        the changelog, believes the lift is programmed, and never finds it. The
+        model's narration is not evidence about the model's output, so anything
+        it asserts is checked against the days actually returned.
+        """
+        by_day = {
+            str(day.get("day_name", "")).strip().lower(): {
+                str(ex.get("exercise_name", "")).strip().lower()
+                for ex in day.get("exercises") or []
+            }
+            for day in days
+        }
+
+        verified = []
+        for change in changes:
+            action = str(change.get("action") or "").lower()
+            day_name = change.get("day_name")
+            exercise_name = change.get("exercise_name")
+
+            if action in PlanBuilder.PRESENCE_ACTIONS and day_name and exercise_name:
+                present = by_day.get(str(day_name).strip().lower())
+                # An unknown day is a separate problem the schedule pass handles;
+                # only contradict a claim about a day we actually returned.
+                if present is not None and str(exercise_name).strip().lower() not in present:
+                    print(
+                        f"[PlanBuilder] Dropped unsupported change: "
+                        f"{action} {exercise_name!r} on {day_name!r}"
+                    )
+                    continue
+            verified.append(change)
+        return verified
 
     # Models fill optional string fields with these instead of omitting them,
     # and they read as bugs when rendered ("replaces n/a")

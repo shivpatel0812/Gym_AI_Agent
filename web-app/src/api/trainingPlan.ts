@@ -83,6 +83,11 @@ export interface ProjectedExercise {
   sets?: number;
   target_rep_range?: [number, number];
   notes?: string;
+  last_trained?: string | null;
+  recent_sessions?: Array<{
+    date?: string;
+    sets?: Array<{ weight?: number; reps?: number; completed?: boolean }>;
+  }>;
 }
 
 export interface ProjectedDay {
@@ -146,6 +151,7 @@ export interface PlanProjection {
   primary_goal?: string;
   strategy?: string[];
   guidelines?: string[];
+  weekly_schedule?: Record<string, string>;
   progress: PlanProgress;
   adherence: Adherence;
   days: ProjectedDay[];

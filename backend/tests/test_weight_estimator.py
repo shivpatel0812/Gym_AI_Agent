@@ -5,6 +5,7 @@ from ai_analysis.workout_recommender.progression_engine import (
 from ai_analysis.workout_recommender.weight_estimator import (
     estimate_comeback_weight,
     estimate_starting_weight,
+    infer_top_lifts_from_related_history,
 )
 
 
@@ -15,6 +16,56 @@ def test_estimate_starting_weight_uses_top_lift_anchor():
         {"bench_press": 225},
     )
     assert weight == 70
+
+
+def test_related_chest_history_produces_calibration_anchor():
+    inferred = infer_top_lifts_from_related_history(
+        "default-chest-db-fly",
+        "Dumbbell Chest Fly",
+        [{
+            "exercises": [{
+                "exercise_id": "default-chest-db-incline-press",
+                "exercise_name": "Incline Dumbbell Press",
+                "sets": [{"weight": 80, "reps": 8}],
+            }]
+        }],
+    )
+    assert inferred is not None
+    assert inferred["source"] == "related_exercise_history"
+    assert inferred["sample_count"] == 1
+
+
+def test_related_history_prefers_recent_sessions_before_sample_cap():
+    sessions = []
+    for day, weight in [
+        ("2026-08-28", 80), ("2026-08-27", 80), ("2026-08-26", 80),
+        ("2026-08-25", 80), ("2026-08-24", 80), ("2026-08-23", 80),
+        ("2024-01-01", 300),
+    ]:
+        sessions.append({
+            "date": day,
+            "exercises": [{
+                "exercise_id": "default-chest-db-incline-press",
+                "exercise_name": "Incline Dumbbell Press",
+                "sets": [{"weight": weight, "reps": 8}],
+            }],
+        })
+    inferred = infer_top_lifts_from_related_history(
+        "default-chest-db-fly", "Dumbbell Chest Fly", list(reversed(sessions))
+    )
+    assert inferred is not None
+    assert inferred["sample_count"] == 6
+    assert inferred["bench_press"]["weight"] < 300
+
+
+def test_custom_target_metadata_controls_starting_ratio():
+    weight = estimate_starting_weight(
+        "custom-fly",
+        "Custom Movement",
+        {"bench_press": 200},
+        exercise_record={"muscle_group": "chest", "type": "strength"},
+    )
+    assert weight is not None
 
 
 def test_representative_set_can_include_reps_without_being_a_one_rep_max():

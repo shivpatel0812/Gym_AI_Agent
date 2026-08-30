@@ -11,7 +11,8 @@ import {
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import CreatePlanModal from "./CreatePlanModal";
-import PlanReviewContent from "./PlanReviewContent";
+import PlanHub from "./PlanHub";
+import ImportWorkoutModal from "./ImportWorkoutModal";
 import {
   TrainingPlan,
   PlanProgress,
@@ -26,15 +27,17 @@ import { colors, spacing, borderRadius } from "../../theme";
 interface Props {
   /** Lets the Plan tab hand a question back to the Coach tab. */
   onAskCoach?: (prompt: string) => void;
+  onOpenPlanMode?: (prompt: string) => void;
 }
 
-export default function PlanTab({ onAskCoach }: Props) {
+export default function PlanTab({ onAskCoach, onOpenPlanMode }: Props) {
   const [plan, setPlan] = useState<TrainingPlan | null>(null);
   const [progress, setProgress] = useState<PlanProgress | null>(null);
   const [history, setHistory] = useState<Partial<TrainingPlan>[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -135,10 +138,13 @@ export default function PlanTab({ onAskCoach }: Props) {
               ) : null}
             </View>
 
-            <PlanReviewContent
-              plan={plan}
-              showFootnote={false}
-              onEditRequest={onAskCoach}
+            {/* Revising a lift must land in Plan Mode: that is the only chat
+                mode allowed to stage a change against the plan, so sending it
+                to ordinary coach chat produced advice the app could not act
+                on. */}
+            <PlanHub
+              onEdit={onOpenPlanMode || onAskCoach}
+              onImport={() => setImportOpen(true)}
             />
 
             <View style={styles.actionsCard}>
@@ -229,6 +235,15 @@ export default function PlanTab({ onAskCoach }: Props) {
         onCreated={() => {
           setCreateOpen(false);
           load();
+        }}
+      />
+      <ImportWorkoutModal
+        visible={importOpen}
+        planDays={plan?.days.map((day) => day.day_name) || []}
+        onClose={() => setImportOpen(false)}
+        onContinue={(prompt) => {
+          setImportOpen(false);
+          onOpenPlanMode?.(prompt);
         }}
       />
     </View>

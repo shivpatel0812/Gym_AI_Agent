@@ -14,7 +14,7 @@ export default function Input({ label, error, icon, style, ...props }: InputProp
       <View style={[styles.inputContainer, error && styles.inputError]}>
         {icon && <View style={styles.iconContainer}>{icon}</View>}
         <TextInput
-          style={[styles.input, icon && styles.inputWithIcon, style]}
+          style={[styles.input, Boolean(icon) && styles.inputWithIcon, style]}
           placeholderTextColor={colors.textSecondary}
           {...props}
         />
@@ -64,7 +64,6 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
 });
-
 
 
 

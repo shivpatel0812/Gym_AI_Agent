@@ -1,0 +1,42 @@
+Feature: Plan Hub
+What we're building
+A dedicated Plan Hub screen, paged by training split (Push / Pull / Legs), that shows every exercise's next-session target and its role in the user's broader goal — sourced from structured plan data, not raw chat text.
+
+How the Initiation of feature works: in the plan section of our application this is where the chat bot goes into user history, personal details like height weight, gender, and than based on that we talk with the user once the user is satisfied than we update the workout goal page
+Core structure
+Paged by day. Each split day (Push/Pull/Legs) is its own page with a summary strip: last trained, next expected, and a count of how many lifts are "building" vs. "maintaining."
+Issue: Plan generation doesn't draw from workout history
+Currently, when a user builds a plan through the AI chat, the Plan page only reflects the single exercise discussed in that conversation — not the user's actual training. The plan should instead be generated from the user's logged workout history: the coach should pull in the exercises the user actually performs and build the plan around those, rather than requiring the user to individually chat about every lift they want tracked.
+Missing: the plan view needs both a forward and backward axis
+Each exercise's chart currently shows only a single line. It needs to represent two distinct things clearly:
+The progression forward — the reps and weights the user should be hitting over time, i.e. what the roadmap toward their goal looks like.
+The history backward — what the user has actually logged for that exercise, session by session, shown on the same chart.
+Right now we aren't doing either of these correctly: the plan isn't sourced from real workout history, and the chart doesn't distinguish projected targets from logged, real performance.
+
+
+
+Per-exercise focus card, the atomic unit of the screen:
+The card's job is "where am I headed," not just "what do I do today."
+When a user gives the AI coach a specific goal (e.g. "get incline press to 85s × 8"), the coach generates a full multi-session roadmap to that goal — not just a reaction to the last set. Same kind of table it already produces in chat today (e.g. "here's what to hit across your next 20 workouts").
+The focus card visualizes that whole roadmap, not just the current step:
+A progression chart — weight/rep trajectory over roughly the next 3 months.
+Today's target shown as the current point on that line.
+End result: the user can always see two things at once —
+What to lift right now
+What they're building toward, and by when
+Status: Building or Maintaining. Building lifts show a goal (target number + target date) and a progress bar. Maintaining lifts show no goal — just a note that the current number is intentional, not a plateau.
+The idea that like for incline lifts and all focus on strength and other focus just on the burn but this would be a decision made by the AI system in what it wants 
+History strip — a compact visual of recent sessions (step up for building, flat line for maintaining), surfacing stalls inline.
+Accessory lifts skip goal/history entirely — just a target rep range and a "support work" label.
+
+Pending AI suggestions surface as a distinct, reviewable card (accept/discard) — never silently overwrite the live plan.
+How the plan gets built and edited
+Two different inputs write to the same underlying plan data, but they're not interchangeable:
+
+Plan Mode (guided, structured conversation) is the editor of record for macro decisions: goals, split, which exercises are in the program, and whether each one is building or maintaining. Because it's a guided flow, answers map directly to plan fields — no inference required. Plan Mode should be re-enterable per exercise, not just a one-time setup, so a user can revise a single lift's goal (e.g. maintain → building) without redoing the whole plan.
+AI coach chat (freeform, in-workout) is for micro patches — adjusting one exercise's next-session target based on how the last session went. It proposes a structured change via a tool call; it never redefines goals or adds/removes exercises. Those proposals are what populate the pending-suggestion card.
+
+The Plan Hub itself is a read view over this shared plan schema — it doesn't generate content, it renders whatever Plan Mode and AI coach patches have written.
+Why this matters
+This turns the AI coach from a source of disposable advice into the thing that keeps one durable plan up to date — and gives the user a single screen that answers "what do I do today, and is it working toward something or just holding steady."
+

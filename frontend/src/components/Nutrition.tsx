@@ -25,10 +25,12 @@ import {
   getActiveNutritionPlan,
   getTodayGuidance,
   mealAnchorKind,
+  daysLabel,
   NutritionPlan,
   TodayGuidance,
 } from "../api/nutritionPlan";
 import { normalizeMealLabel } from "../lib/recentMeals";
+import { planItemAppliesToday, todayWeekdayKey } from "../lib/mealSlots";
 import {
   DEFAULT_TARGETS,
   FoodItem,
@@ -371,6 +373,8 @@ export default function Nutrition() {
   const planMealsForLogging = useMemo((): PlanMealPick[] => {
     if (!loggingMeal || !activePlan?.meal_anchors?.length) return [];
     const slot = normalizeMealLabel(loggingMeal);
+    const [y, m, d] = selectedDate.split("-").map(Number);
+    const weekday = todayWeekdayKey(new Date(y, m - 1, d, 12));
     return (activePlan.meal_anchors || [])
       .filter((a) => a.id && normalizeMealLabel(a.slot) === slot)
       .map((a) => ({
@@ -378,8 +382,14 @@ export default function Nutrition() {
         label: a.label || "Plan meal",
         kind: mealAnchorKind(a),
         foods: a.foods || [],
-      }));
-  }, [loggingMeal, activePlan]);
+        schedule: daysLabel(a.days, a.frequency),
+        appliesToday: planItemAppliesToday(a, weekday),
+      }))
+      .sort((a, b) => {
+        if (a.appliesToday !== b.appliesToday) return a.appliesToday ? -1 : 1;
+        return a.label.localeCompare(b.label);
+      });
+  }, [loggingMeal, activePlan, selectedDate]);
 
   const removeFood = async (row: MealRow) => {
     try {

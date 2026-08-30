@@ -19,22 +19,34 @@ export interface WorkoutSet {
   weight?: number;
   rpe?: number;
   completed?: boolean;
+  rep_low?: number;
+  rep_high?: number;
+  preferred_reps?: number;
+  difficulty?: "easy" | "good" | "hard" | "failed";
 }
 
 export interface ExerciseAiRecommendation {
-  sets?: { set_number?: number; reps?: number; weight?: number }[];
+  sets?: { set_number?: number; reps?: number; weight?: number; rep_low?: number; rep_high?: number; preferred_reps?: number; role?: string }[];
   reasoning?: string;
   progression_type?: string;
   confidence?: string;
   needs_starting_weight?: boolean;
   estimated_from_stale_history?: boolean;
   estimated_from_top_lifts?: boolean;
+  estimated_from_related_exercises?: boolean;
+  calibration_required?: boolean;
   suggested_sets?: number;
   suggested_reps?: number;
   has_implausible_data?: boolean;
   time?: number;
   speed?: number;
   generated_at?: string;
+  rep_range?: [number, number];
+  strategy?: string;
+  branch?: { condition?: string; action?: string; kind?: string };
+  next_set_reasoning?: string;
+  next_set_action?: string;
+  next_set_request_id?: string;
 }
 
 export interface SessionExercise {

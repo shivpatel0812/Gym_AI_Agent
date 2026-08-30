@@ -9,12 +9,17 @@ ordinary conversation never silently changes training behaviour.
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List
 from datetime import datetime
+import re
 from pydantic import BaseModel
 import os
 
 from auth import get_user_id
 from db import db
 from ai_analysis.plan_builder import PlanBuilder, PLAN_MODES, DEFAULT_PLAN_MODE
+from ai_analysis.plan_diff import diff_plans
+from ai_analysis.plan_edits import apply_edits, EDIT_STATUS_PENDING, EDIT_STATUS_APPLIED, EDIT_STATUS_DISMISSED
+from ai_analysis.plan_suggestion_store import PlanSuggestionStore
+from ai_analysis.training_history import build_history_context
 from ai_analysis.plan_store import PlanStore, STATUS_ACTIVE, STATUS_PAUSED, STATUS_COMPLETED
 from ai_analysis.conversation_store import ConversationStore
 from ai_analysis.profile_transformer import get_user_profile_for_ai
@@ -27,6 +32,7 @@ from ai_analysis.plan_projection import (
     PlanProjector,
     measure_adherence,
 )
+from ai_analysis.coach_tools import _exercise_history_context
 from nutrition.plan_store import NutritionPlanStore
 from nutrition.pacing import build_paced_trajectory
 
@@ -46,6 +52,11 @@ class AdjustPlanRequest(BaseModel):
     conversation_id: Optional[str] = None
     adjustment: str
     plan_mode: Optional[str] = None
+
+
+class SuggestionActionRequest(BaseModel):
+    """Which staged edits to act on. Empty means all of them."""
+    edit_ids: Optional[List[str]] = None
 
 
 class UpdatePlanRequest(BaseModel):
@@ -123,12 +134,164 @@ def _history_summary(user_id: str) -> dict:
     }
 
 
+def _history_context(user_id: str) -> dict:
+    """
+    Everything the user has logged, independent of how it was labelled.
+
+    The split reconstruction answers "what is on your Pull day" and gets it
+    wrong whenever `split_day` is missing or mistyped. This answers "what do
+    you train" from the sessions themselves, which is the question the planner
+    actually needs and the one labels cannot corrupt.
+    """
+    sessions = [
+        doc.to_dict() or {}
+        for doc in db.collection("users")
+        .document(user_id)
+        .collection("workout_sessions")
+        .stream()
+    ]
+    return build_history_context(sessions)
+
+
 def _conversation_messages(user_id: str, conversation_id: Optional[str]) -> list:
     if not conversation_id:
         return []
     # Plan interviews run longer than coach Q&A — keep enough turns that the
     # builder still sees the goal, constraints, and follow-ups.
     return ConversationStore(db, user_id).get_history_for_model(conversation_id, limit=40)
+
+
+MONTHS = {
+    name.lower(): index for index, name in enumerate(
+        ("January", "February", "March", "April", "May", "June", "July",
+         "August", "September", "October", "November", "December"), start=1
+    )
+}
+
+
+def _referenced_workout_dates(conversation: list) -> list:
+    """Resolve every explicitly named calendar date, preserving request order."""
+    user_text = "\n".join(
+        str(message.get("content") or "")
+        for message in conversation
+        if message.get("role") == "user"
+    )
+    found = []
+    for match in re.finditer(r"\b(20\d{2})-(\d{2})-(\d{2})\b", user_text):
+        try:
+            found.append((match.start(), datetime.strptime(match.group(0), "%Y-%m-%d").strftime("%Y-%m-%d")))
+        except ValueError:
+            pass
+    month_names = "|".join(MONTHS)
+    matches = list(re.finditer(
+        rf"\b({month_names})\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(20\d{{2}}))?\b",
+        user_text,
+        flags=re.IGNORECASE,
+    ))
+    for match in matches:
+        month, day = MONTHS[match.group(1).lower()], int(match.group(2))
+        today = datetime.now()
+        year = int(match.group(3)) if match.group(3) else today.year
+        try:
+            candidate = datetime(year, month, day)
+        except ValueError:
+            continue
+        if not match.group(3) and candidate.date() > today.date():
+            candidate = candidate.replace(year=year - 1)
+        found.append((match.start(), candidate.strftime("%Y-%m-%d")))
+    ordered = []
+    for _, date in sorted(found):
+        if date not in ordered:
+            ordered.append(date)
+    return ordered
+
+
+def _attach_referenced_workout(user_id: str, split_context: dict, conversation: list) -> dict:
+    """Attach and merge every exact workout a Plan Mode request names."""
+    dates = _referenced_workout_dates(conversation)
+    if not dates:
+        return split_context
+    transcript = " ".join(str(m.get("content") or "") for m in conversation).lower()
+    known_days = [day.get("day_name") for day in split_context.get("days", []) if day.get("day_name")]
+    enriched = {**split_context, "days": [dict(day) for day in split_context.get("days", [])]}
+    references = []
+    imported_by_day = {}
+    sessions_ref = db.collection("users").document(user_id).collection("workout_sessions")
+    for date in dates:
+        docs = sessions_ref.where("date", "==", date).stream()
+        sessions = [{"id": doc.id, **(doc.to_dict() or {})} for doc in docs]
+        if not sessions:
+            references.append({"date": date, "found": False})
+            continue
+        source = sessions[-1]
+        position = transcript.find(date.lower())
+        local_request = transcript[position:position + 180] if position >= 0 else transcript
+        target_day = next((name for name in known_days if name.lower() in local_request), None)
+        target_day = target_day or source.get("split_day")
+        exercises = [{
+            "exercise_id": exercise.get("exercise_id"),
+            "exercise_name": exercise.get("exercise_name") or exercise.get("name") or "Exercise",
+            "sets": max(1, len(exercise.get("sets") or [])),
+            "reps": max([int(workout_set.get("reps") or 0)
+                         for workout_set in exercise.get("sets") or []] or [8]),
+            "order": index + 1,
+            "source_date": date,
+        } for index, exercise in enumerate(source.get("exercises") or [])
+            if exercise.get("exercise_id")]
+        references.append({
+            "date": date, "found": True, "target_day": target_day,
+            "split": source.get("split_name"), "logged_day": source.get("split_day"),
+            "exercise_count": len(exercises), "exercises": exercises,
+        })
+        bucket = imported_by_day.setdefault(target_day, [])
+        seen = {exercise.get("exercise_id") for exercise in bucket}
+        bucket.extend(exercise for exercise in exercises if exercise.get("exercise_id") not in seen)
+
+    for day in enriched["days"]:
+        imported = imported_by_day.get(day.get("day_name"))
+        if not imported:
+            continue
+        imported_ids = {exercise.get("exercise_id") for exercise in imported}
+        extras = [exercise for exercise in day.get("exercises") or []
+                  if exercise.get("exercise_id") not in imported_ids]
+        day["exercises"] = imported + extras
+    enriched["referenced_workouts"] = references
+    enriched["referenced_workout"] = references[0] if references else None
+    return enriched
+
+
+REVISION_FIELDS = (
+    "plan_name", "primary_goal", "strategy", "guidelines",
+    "weekly_schedule", "days", "duration_weeks",
+)
+
+
+def _revision_base(plan: Optional[dict]) -> Optional[dict]:
+    """The parts of a live plan a revision must be built on top of."""
+    if not plan:
+        return None
+    return {field: plan.get(field) for field in REVISION_FIELDS}
+
+
+def _write_days(user_id: str, plan: dict, days: list) -> dict:
+    """
+    Persist an edited `days` list through the same validation a hand edit gets.
+
+    Accepted coach patches are not trusted more than user edits: they go
+    through validate_plan so an accepted suggestion cannot feed the recommender
+    an unknown goal or a nonsense rep range.
+    """
+    validated = PlanBuilder.validate_plan({**plan, "days": days})
+    updates = {
+        "days": validated["days"],
+        "weekly_schedule": validated["weekly_schedule"],
+        "updated_at": datetime.now().isoformat(),
+    }
+    (
+        db.collection("users").document(user_id)
+        .collection("workout_plans").document(plan["id"]).update(updates)
+    )
+    return {**plan, **updates}
 
 
 def _plan_response(plan: dict) -> dict:
@@ -168,13 +331,22 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
             detail="Discuss a goal with the coach first, or provide a goal_statement.",
         )
 
-    split_context = _load_current_split(user_id, request.split_id)
+    split_context = _attach_referenced_workout(
+        user_id, _load_current_split(user_id, request.split_id), conversation
+    )
+    # When a plan is already live, this is a revision of it, not a blank sheet.
+    # Without this the builder only ever saw the conversation, so asking to add
+    # two workouts produced a two-day plan that replaced a five-day one.
+    store = PlanStore(db, user_id)
+    active = store.get_active()
     result = _builder().build_plan(
         conversation=conversation,
         split_context=split_context,
         profile=get_user_profile_for_ai(db, user_id),
         history_summary=_history_summary(user_id),
         plan_mode=plan_mode,
+        existing_plan=_revision_base(active),
+        history_context=_history_context(user_id),
     )
     if result["status"] == "error":
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {result['error']}")
@@ -183,8 +355,10 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
     plan["source_split_id"] = split_context.get("split_id")
     # The Active Plan references the Current Split; it never overwrites it
     plan["owns_linked_split"] = False
+    # Computed from the stored plans, not narrated by the model, so the review
+    # screen can show what this would replace rather than only what it is.
+    plan["diff"] = diff_plans(active, plan)
 
-    store = PlanStore(db, user_id)
     plan_id = store.save_draft(plan, source_conversation_id=request.conversation_id)
     saved = store.get(plan_id)
     return {"status": "success", **_plan_response(saved), "tokens_used": result.get("tokens_used")}
@@ -210,16 +384,20 @@ async def adjust_plan(request: AdjustPlanRequest, user_id: str = Depends(get_use
     if not active:
         raise HTTPException(status_code=404, detail="No active plan to adjust")
 
+    conversation = _conversation_messages(user_id, request.conversation_id)
+    conversation = conversation + [{"role": "user", "content": request.adjustment}]
+    split_context = _attach_referenced_workout(
+        user_id, _load_current_split(user_id, active.get("source_split_id")), conversation
+    )
     result = _builder().build_plan(
-        conversation=_conversation_messages(user_id, request.conversation_id),
-        split_context=_load_current_split(user_id, active.get("source_split_id")),
+        conversation=conversation,
+        split_context=split_context,
         profile=get_user_profile_for_ai(db, user_id),
         history_summary=_history_summary(user_id),
         plan_mode=request.plan_mode or active.get("plan_mode") or DEFAULT_PLAN_MODE,
-        existing_plan={k: active.get(k) for k in
-                       ("plan_name", "primary_goal", "strategy", "guidelines",
-                        "weekly_schedule", "days", "duration_weeks")},
+        existing_plan=_revision_base(active),
         adjustment_request=request.adjustment,
+        history_context=_history_context(user_id),
     )
     if result["status"] == "error":
         raise HTTPException(status_code=500, detail=f"Plan adjustment failed: {result['error']}")
@@ -227,6 +405,7 @@ async def adjust_plan(request: AdjustPlanRequest, user_id: str = Depends(get_use
     plan = result["plan"]
     plan["source_split_id"] = active.get("source_split_id")
     plan["owns_linked_split"] = False
+    plan["diff"] = diff_plans(active, plan)
 
     draft_id = store.replace_active(
         plan, previous_plan_id=active["id"], source_conversation_id=request.conversation_id
@@ -365,6 +544,7 @@ async def get_plan_projection(
 
     recommender = _recommender(user_id)
     profile = recommender.data_fetcher.get_user_profile() or {}
+    all_workout_sessions = recommender.data_fetcher.get_all_workout_sessions()
     user_goal = profile.get("primary_goal") or "Build Muscle"
 
     # How often each plan day comes round, so a lift trained twice a week
@@ -394,11 +574,21 @@ async def get_plan_projection(
             if not ex_id:
                 continue
             rep_range = exercise.get("target_rep_range")
+            history_context = _exercise_history_context(
+                all_workout_sessions,
+                ex_id,
+                exercise.get("exercise_name") or ex_id,
+            )
+            # Recent ID history is preferred. Lifetime context provides the
+            # exact-name fallback for legacy/custom ids and older sessions.
+            projection_history = histories.get(ex_id) or []
+            if not projection_history:
+                projection_history = history_context.get("recent_sessions") or []
             projection = projector.project_exercise(
                 exercise_id=ex_id,
                 exercise_name=exercise.get("exercise_name") or ex_id,
                 day_name=day_name,
-                history=histories.get(ex_id) or [],
+                history=projection_history,
                 user_goal=user_goal,
                 weeks=horizon,
                 sessions_per_week=per_week,
@@ -411,6 +601,11 @@ async def get_plan_projection(
                 adherence=adherence.rate,
                 top_lifts=profile.get("top_lifts"),
             )
+            # ID-only history misses when the plan's exercise_id differs from
+            # logged sessions; history_context also matches by exercise name.
+            logged_sessions = projection_history[:6]
+            if not logged_sessions:
+                logged_sessions = (history_context.get("recent_sessions") or [])[:6]
             exercises.append({
                 **projection.to_dict(),
                 "priority": exercise.get("priority"),
@@ -418,6 +613,11 @@ async def get_plan_projection(
                 "sets": exercise.get("sets"),
                 "target_rep_range": rep_range,
                 "notes": exercise.get("notes"),
+                "recent_sessions": logged_sessions,
+                "last_trained": (
+                    logged_sessions[0].get("date") if logged_sessions else None
+                ),
+                "history_context": history_context,
             })
         days_out.append({
             "day_name": day_name,
@@ -453,12 +653,123 @@ async def get_plan_projection(
             "primary_goal": plan.get("primary_goal"),
             "strategy": plan.get("strategy"),
             "guidelines": plan.get("guidelines"),
+            "weekly_schedule": plan.get("weekly_schedule") or {},
             "progress": progress,
             "adherence": adherence.to_dict(),
             "days": days_out,
             "nutrition": nutrition,
         },
     }
+
+
+@router.get("/suggestions")
+async def get_plan_suggestions(user_id: str = Depends(get_user_id)):
+    """
+    Coach-proposed target changes waiting for review on the Plan tab.
+
+    Only ever returns a set targeting the plan that is currently live, so a
+    patch left over from a retired plan cannot be applied to a new one.
+    """
+    plan = PlanStore(db, user_id).get_active()
+    if not plan:
+        return {"status": "success", "suggestion": None}
+    record = PlanSuggestionStore(db, user_id).get_pending(plan_id=plan["id"])
+    if not record:
+        return {"status": "success", "suggestion": None}
+    pending = [
+        edit for edit in (record.get("edits") or [])
+        if edit.get("status") == EDIT_STATUS_PENDING
+    ]
+    return {
+        "status": "success",
+        "suggestion": record,
+        "pending_count": len(pending),
+        "plan_changed_since": int(plan.get("version") or 1)
+        != int(record.get("plan_version") or 1),
+    }
+
+
+@router.post("/suggestions/{set_id}/accept")
+async def accept_plan_suggestions(
+    set_id: str,
+    request: SuggestionActionRequest = SuggestionActionRequest(),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Accept some or all staged edits. Omit edit_ids to accept every pending one.
+
+    This is the only path by which a chat turn can change the live plan, and it
+    runs on an explicit user action, never on the model's say-so.
+    """
+    suggestions = PlanSuggestionStore(db, user_id)
+    record = suggestions.get(set_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Those suggestions are no longer available.")
+
+    store = PlanStore(db, user_id)
+    plan = store.get(record.get("plan_id") or "")
+    if not plan:
+        raise HTTPException(status_code=404, detail="The plan these suggestions target is gone.")
+
+    wanted = set(request.edit_ids or [])
+    selected = [
+        edit for edit in (record.get("edits") or [])
+        if edit.get("status") == EDIT_STATUS_PENDING
+        and (not wanted or str(edit.get("id")) in wanted)
+    ]
+    if not selected:
+        raise HTTPException(status_code=400, detail="Nothing left to accept.")
+
+    days, applied_ids = apply_edits(plan, selected)
+    if applied_ids:
+        _write_days(user_id, plan, days)
+
+    # An edit whose exercise has since left the plan is marked dismissed rather
+    # than applied, so it cannot resurrect a lift the user already removed.
+    outcomes = {
+        str(edit["id"]): (
+            EDIT_STATUS_APPLIED if str(edit["id"]) in applied_ids
+            else EDIT_STATUS_DISMISSED
+        )
+        for edit in selected
+    }
+    record = suggestions.mark_edits(set_id, outcomes)
+    updated = store.get(plan["id"])
+    return {
+        "status": "success",
+        **_plan_response(updated),
+        "suggestion": record,
+        "applied_edit_ids": applied_ids,
+        "skipped_edit_ids": [
+            eid for eid, outcome in outcomes.items() if outcome != EDIT_STATUS_APPLIED
+        ],
+    }
+
+
+@router.post("/suggestions/{set_id}/dismiss")
+async def dismiss_plan_suggestions(
+    set_id: str,
+    request: SuggestionActionRequest = SuggestionActionRequest(),
+    user_id: str = Depends(get_user_id),
+):
+    """Discard some or all staged edits. Omit edit_ids to clear the whole set."""
+    suggestions = PlanSuggestionStore(db, user_id)
+    record = suggestions.get(set_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Those suggestions are no longer available.")
+
+    wanted = set(request.edit_ids or [])
+    outcomes = {
+        str(edit.get("id")): EDIT_STATUS_DISMISSED
+        for edit in (record.get("edits") or [])
+        if edit.get("status") == EDIT_STATUS_PENDING
+        and (not wanted or str(edit.get("id")) in wanted)
+    }
+    if not outcomes:
+        raise HTTPException(status_code=400, detail="Nothing left to dismiss.")
+
+    record = suggestions.mark_edits(set_id, outcomes)
+    return {"status": "success", "suggestion": record}
 
 
 @router.get("/history")

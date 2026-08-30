@@ -30,14 +30,17 @@ import { persistFromSession, useSessionTimer } from "../../hooks/useSessionTimer
 import Button from "../shared/Button";
 import { todayKey } from "../wellness/types";
 import ExercisePicker, { PickerExercise } from "./ExercisePicker";
+import ImportSessionModal from "./ImportSessionModal";
 import {
   buildSessionPayload,
   confidencePct,
   emptySessionForm,
+  formatExerciseSessionSnapshot,
   formatLastPerformance,
   formatShortDate,
   formatDateOrdinal,
   getBestSetLabel,
+  getRecentMuscleGroupSessions,
   groupSessionsByWeek,
   hasCardioLog,
   hydrateAiRecommendations,
@@ -48,10 +51,15 @@ import {
   isValidSet,
   lastWorkoutHasWeight,
   lastWorkingSets,
+  layoutExercisesFromSession,
   mapRecSets,
   migrateSessionCardioToExercises,
+  MUSCLE_GROUP_LABELS,
+  muscleGroupsForSplitDay,
+  splitHistoryLabel,
   recCopiesLastWorkout,
   recHasWeightedSets,
+  resolveExerciseCategory,
   resolveLastExercise,
   sessionDurationMinutes,
   sessionHeadline,
@@ -107,14 +115,23 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const [maxExerciseData, setMaxExerciseData] = useState<Record<string, any>>({});
   const [aiRecommendations, setAiRecommendations] = useState<Record<string, any>>({});
   const [aiRecommendationLoading, setAiRecommendationLoading] = useState<Record<string, boolean>>({});
+  const [nextSetLoading, setNextSetLoading] = useState<Record<string, boolean>>({});
   const [startingWeights, setStartingWeights] = useState<Record<string, string>>({});
   const [collapsedExercises, setCollapsedExercises] = useState<Record<number, boolean>>({});
   const [showExercisePicker, setShowExercisePicker] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [pickerAnchor, setPickerAnchor] = useState<"top" | "bottom" | "inline">("top");
+  const [exerciseInsertAfter, setExerciseInsertAfter] = useState<number | null>(null);
+  const sessionScrollRef = useRef<ScrollView>(null);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [pickerMode, setPickerMode] = useState<"browse" | "search">("browse");
   const [selectedBodyPart, setSelectedBodyPart] = useState<string | null>(null);
   const [equipmentFilter, setEquipmentFilter] = useState<string | null>(null);
   const [showSessionDetails, setShowSessionDetails] = useState(false);
+  const [activeMuscleFilter, setActiveMuscleFilter] = useState<{
+    cardIdx: number;
+    group: string;
+  } | null>(null);
   const [isAutoSaving, setIsAutoSaving] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -132,6 +149,10 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRecApplyRef = useRef<Set<string>>(new Set());
   const staleRecRetryRef = useRef<Set<string>>(new Set());
+  const latestNextSetRequestRef = useRef<Record<string, string>>({});
+  const previousNextSetRequestRef = useRef<Record<string, string>>({});
+  const previousSuggestedSetRef = useRef<Record<string, { index: number; set: WorkoutSet }>>({});
+  const [updatedSetIndex, setUpdatedSetIndex] = useState<Record<string, number>>({});
   const fetchedLastRef = useRef<Set<string>>(new Set());
   const formDataRef = useRef(formData);
   const editingSessionIdRef = useRef(editingSessionId);
@@ -150,6 +171,37 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const todaySessionExercises = useMemo(
     () => (todaySession ? migrateSessionCardioToExercises(todaySession) : []),
     [todaySession]
+  );
+  const splitMuscleGroups = useMemo(
+    () =>
+      muscleGroupsForSplitDay(
+        formData.split_day || activePlanDay?.day_name,
+        formData.split_name || activePlanDay?.plan_name
+      ),
+    [formData.split_day, formData.split_name, activePlanDay]
+  );
+  const resolveCategory = useCallback(
+    (exerciseId: string, exerciseName: string) =>
+      resolveExerciseCategory(exerciseId, exerciseName, exercises),
+    [exercises]
+  );
+  const recentMuscleGroupSessions = useMemo(() => {
+    if (!activeMuscleFilter) return [];
+    return getRecentMuscleGroupSessions(
+      sessions,
+      activeMuscleFilter.group,
+      resolveCategory,
+      editingSessionId,
+      5
+    );
+  }, [activeMuscleFilter, sessions, resolveCategory, editingSessionId]);
+  const splitHistoryTitle = useMemo(
+    () =>
+      splitHistoryLabel(
+        formData.split_day || activePlanDay?.day_name,
+        formData.split_name || activePlanDay?.plan_name
+      ),
+    [formData.split_day, formData.split_name, activePlanDay]
   );
   const timer = useSessionTimer(
     showForm ? editingSessionId || "draft" : null,
@@ -208,6 +260,10 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
       })
       .catch(() => {});
   }, [fetchSessions, fetchTodaysPlan]);
+
+  useEffect(() => {
+    setActiveMuscleFilter(null);
+  }, [formData.split_day, formData.split_name]);
 
   const performAutoSave = useCallback(
     async () => {
@@ -400,10 +456,17 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     });
   }, [showForm, formData.exercises, editingSessionId]);
 
-  const handleExerciseChange = async (exerciseId: string, exerciseName: string) => {
+  const handleExerciseChange = async (
+    exerciseId: string,
+    exerciseName: string,
+    options?: { insertAfter?: number | null }
+  ) => {
     const selectedExercise = allExercises.find((ex) => ex.id === exerciseId);
     const isCardio = selectedExercise?.category === "CARDIO";
-    const positionInWorkout = formData.exercises.length;
+    const insertAfter =
+      options && "insertAfter" in options ? options.insertAfter ?? null : exerciseInsertAfter;
+    const positionInWorkout =
+      insertAfter != null ? insertAfter + 1 : formData.exercises.length;
     let lastData: any = null;
     try {
       const response = await apiClient.get(lastExerciseUrl(exerciseId));
@@ -422,41 +485,321 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     } catch {}
     if (!isCardio) pendingRecApplyRef.current.add(exerciseId);
     const lastSets = !isCardio ? setsFromLastWorkout(lastData, 3) : null;
-    setFormData({
-      ...formData,
-      exercises: [
-        ...formData.exercises,
-        isCardio
-          ? {
-              exercise_id: exerciseId,
-              exercise_name: exerciseName,
-              time: lastData?.exercise_data?.time ?? lastData?.time,
-              ...(exerciseId.startsWith("default-cardio-sport")
-                ? {
-                    intensity: lastData?.exercise_data?.intensity ?? 5,
-                    fatigue: lastData?.exercise_data?.fatigue ?? 5,
-                  }
-                : { speed: lastData?.exercise_data?.speed }),
-            }
-          : {
-              exercise_id: exerciseId,
-              exercise_name: exerciseName,
-              sets: lastSets || [
-                { set_number: 1, reps: 0, weight: undefined },
-                { set_number: 2, reps: 0, weight: undefined },
-                { set_number: 3, reps: 0, weight: undefined },
-              ],
-            },
-      ],
+    const newExercise: SessionExercise = isCardio
+      ? {
+          exercise_id: exerciseId,
+          exercise_name: exerciseName,
+          time: lastData?.exercise_data?.time ?? lastData?.time,
+          ...(exerciseId.startsWith("default-cardio-sport")
+            ? {
+                intensity: lastData?.exercise_data?.intensity ?? 5,
+                fatigue: lastData?.exercise_data?.fatigue ?? 5,
+              }
+            : { speed: lastData?.exercise_data?.speed }),
+        }
+      : {
+          exercise_id: exerciseId,
+          exercise_name: exerciseName,
+          sets: lastSets || [
+            { set_number: 1, reps: 0, weight: undefined },
+            { set_number: 2, reps: 0, weight: undefined },
+            { set_number: 3, reps: 0, weight: undefined },
+          ],
+        };
+    setFormData((prev) => {
+      const next = [...prev.exercises];
+      if (insertAfter != null && insertAfter >= 0) {
+        next.splice(insertAfter + 1, 0, newExercise);
+      } else {
+        next.push(newExercise);
+      }
+      return { ...prev, exercises: next };
     });
     if (!isCardio) {
       fetchAiRecommendation(exerciseId, exerciseName, positionInWorkout);
     }
+    setExerciseInsertAfter(null);
     setExerciseSearchQuery("");
     setCategoryFilter(null);
     setShowExercisePicker(false);
+    setPickerAnchor("top");
     setSelectedBodyPart(null);
     setEquipmentFilter(null);
+  };
+
+  const addExerciseFromHistory = (
+    exerciseId: string,
+    exerciseName: string,
+    insertAfter?: number | null
+  ) => {
+    if (formData.exercises.some((ex) => ex.exercise_id === exerciseId)) {
+      Alert.alert("Already added", `${exerciseName} is already in this workout.`);
+      return;
+    }
+    void handleExerciseChange(exerciseId, exerciseName, {
+      insertAfter: insertAfter ?? null,
+    });
+  };
+
+  const closeExercisePicker = () => {
+    setExerciseInsertAfter(null);
+    setShowExercisePicker(false);
+    setPickerAnchor("top");
+    setSelectedBodyPart(null);
+    setEquipmentFilter(null);
+    setExerciseSearchQuery("");
+    setCategoryFilter(null);
+  };
+
+  const openExercisePicker = (
+    anchor: "top" | "bottom" | "inline",
+    mode: "browse" | "search" = "browse",
+    insertAfterIndex?: number | null
+  ) => {
+    if (insertAfterIndex !== undefined) {
+      setExerciseInsertAfter(insertAfterIndex);
+    }
+    setPickerAnchor(anchor);
+    setShowExercisePicker(true);
+    setPickerMode(mode);
+    if (mode === "browse" && anchor === "top") {
+      setSelectedBodyPart(null);
+      setEquipmentFilter(null);
+    }
+    if (anchor === "bottom") {
+      setTimeout(() => sessionScrollRef.current?.scrollToEnd({ animated: true }), 150);
+    }
+  };
+
+  const renderExercisePickerPanel = (panelKey: string) => (
+    <>
+      <View style={[styles.searchWrap, panelKey !== "top" && { marginTop: 8 }]}>
+        <MaterialCommunityIcons
+          name="magnify"
+          size={18}
+          color={colors.textSecondary}
+          style={styles.searchIcon}
+        />
+        <TextInput
+          value={exerciseSearchQuery}
+          onChangeText={(q) => {
+            setExerciseSearchQuery(q);
+            if (q) openExercisePicker(pickerAnchor, "search");
+          }}
+          onFocus={() =>
+            openExercisePicker(pickerAnchor, exerciseSearchQuery ? "search" : "browse")
+          }
+          placeholder="Search exercises..."
+          placeholderTextColor={colors.textMuted}
+          style={styles.searchInput}
+        />
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pills}>
+        {categoryFilterPills.map((pill) => (
+          <TouchableOpacity
+            key={`${panelKey}-${pill.label}`}
+            onPress={() => {
+              setCategoryFilter(pill.id);
+              openExercisePicker(pickerAnchor, "browse");
+              if (pill.id === "ARMS") setSelectedBodyPart("BICEPS");
+              else if (pill.id === "CORE") setSelectedBodyPart("CORE / ABS");
+              else if (pill.id) setSelectedBodyPart(pill.id);
+              else setSelectedBodyPart(null);
+            }}
+            style={[styles.pill, categoryFilter === pill.id && styles.pillActive]}
+          >
+            <Text style={[styles.pillText, categoryFilter === pill.id && styles.pillTextActive]}>
+              {pill.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+      <ExercisePicker
+        allExercises={allExercises}
+        pickerMode={pickerMode}
+        selectedBodyPart={selectedBodyPart}
+        equipmentFilter={equipmentFilter}
+        searchQuery={exerciseSearchQuery}
+        onModeChange={setPickerMode}
+        onBodyPartChange={setSelectedBodyPart}
+        onEquipmentFilterChange={setEquipmentFilter}
+        onSearchChange={setExerciseSearchQuery}
+        onSelect={handleExerciseChange}
+        onClose={closeExercisePicker}
+      />
+    </>
+  );
+
+  const renderMuscleHistory = (cardIdx: number) => {
+    if (activeMuscleFilter?.cardIdx !== cardIdx) return null;
+    const groupLabel =
+      MUSCLE_GROUP_LABELS[activeMuscleFilter.group]?.toLowerCase() || "muscle";
+    if (!recentMuscleGroupSessions.length) {
+      return (
+        <Text style={styles.muscleHistoryEmpty}>No recent {groupLabel} work logged yet.</Text>
+      );
+    }
+    return (
+      <View style={styles.muscleHistory}>
+        {recentMuscleGroupSessions.map(({ session, exercises: groupExercises }) => {
+          const sessionLabel =
+            session.split_day || session.split_name || session.workout_name || "Workout";
+          return (
+            <View
+              key={session.id || `${session.date}-${sessionLabel}`}
+              style={styles.muscleHistorySession}
+            >
+              <Text style={styles.muscleHistoryDate}>
+                {formatShortDate(String(session.date || ""))} · {sessionLabel}
+              </Text>
+              {groupExercises.map((hit) => {
+                const alreadyAdded = formData.exercises.some(
+                  (ex) => ex.exercise_id === hit.exercise_id
+                );
+                return (
+                  <TouchableOpacity
+                    key={`${session.id}-${hit.exercise_id}`}
+                    style={[
+                      styles.muscleHistoryRow,
+                      alreadyAdded && styles.muscleHistoryRowAdded,
+                    ]}
+                    disabled={alreadyAdded}
+                    onPress={() =>
+                      addExerciseFromHistory(hit.exercise_id, hit.exercise_name, cardIdx)
+                    }
+                  >
+                    <Text
+                      style={[
+                        styles.muscleHistoryName,
+                        alreadyAdded && styles.muscleHistoryNameAdded,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {hit.exercise_name}
+                    </Text>
+                    <Text style={styles.muscleHistoryPerf}>
+                      {formatExerciseSessionSnapshot(hit)}
+                    </Text>
+                    {!alreadyAdded ? (
+                      <MaterialCommunityIcons
+                        name="plus-circle-outline"
+                        size={15}
+                        color={colors.accentPrimary}
+                      />
+                    ) : (
+                      <MaterialCommunityIcons
+                        name="check-circle-outline"
+                        size={15}
+                        color={colors.textMuted}
+                      />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          );
+        })}
+      </View>
+    );
+  };
+
+  const hydrateImportedExercises = async (imported: SessionExercise[], startIdx: number) => {
+    for (let i = 0; i < imported.length; i++) {
+      const ex = imported[i];
+      const idx = startIdx + i;
+      try {
+        const response = await apiClient.get(lastExerciseUrl(ex.exercise_id));
+        if (response.data) {
+          setLastExerciseData((prev) => ({ ...prev, [ex.exercise_id]: response.data }));
+          if (!isCardioExercise(ex)) {
+            const setCount = Array.isArray(ex.sets) ? ex.sets.length : 3;
+            const lastSets = setsFromLastWorkout(response.data, setCount);
+            if (lastSets) {
+              setFormData((prev) => {
+                const exercises = [...prev.exercises];
+                if (exercises[idx]) {
+                  exercises[idx] = { ...exercises[idx], sets: lastSets };
+                }
+                return { ...prev, exercises };
+              });
+            }
+          }
+        }
+      } catch {}
+      try {
+        const maxResponse = await apiClient.get(
+          `/api/workout-sessions/max-exercise/${ex.exercise_id}`
+        );
+        if (maxResponse.data) {
+          setMaxExerciseData((prev) => ({ ...prev, [ex.exercise_id]: maxResponse.data }));
+        }
+      } catch {}
+      if (!isCardioExercise(ex)) {
+        pendingRecApplyRef.current.add(ex.exercise_id);
+        fetchAiRecommendation(ex.exercise_id, ex.exercise_name, idx);
+      }
+    }
+  };
+
+  const applyImportedLayout = (source: WorkoutSession, mode: "replace" | "append") => {
+    const imported = layoutExercisesFromSession(source);
+    if (!imported.length) {
+      Alert.alert("Nothing to import", "That workout has no exercises to copy.");
+      return;
+    }
+
+    const splitPatch =
+      mode === "replace" || !formData.split_day
+        ? {
+            split_id: source.split_id || formData.split_id,
+            split_name: source.split_name || source.workout_name || formData.split_name,
+            split_day: source.split_day || formData.split_day,
+          }
+        : {};
+
+    let nextExercises: SessionExercise[];
+    let startIdx: number;
+    if (mode === "replace") {
+      nextExercises = imported;
+      startIdx = 0;
+    } else {
+      const existingIds = new Set(formData.exercises.map((ex) => ex.exercise_id));
+      const toAdd = imported.filter((ex) => !existingIds.has(ex.exercise_id));
+      if (!toAdd.length) {
+        Alert.alert("Already added", "Every exercise from that workout is already in this session.");
+        return;
+      }
+      startIdx = formData.exercises.length;
+      nextExercises = [...formData.exercises, ...toAdd];
+    }
+
+    setFormData((prev) => ({
+      ...prev,
+      ...splitPatch,
+      exercises: nextExercises,
+    }));
+    setShowImportModal(false);
+    closeExercisePicker();
+
+    const importedSlice =
+      mode === "replace" ? imported : nextExercises.slice(startIdx);
+    hydrateImportedExercises(importedSlice, startIdx);
+  };
+
+  const handleImportSession = (source: WorkoutSession) => {
+    if (formData.exercises.length === 0) {
+      applyImportedLayout(source, "replace");
+      return;
+    }
+    Alert.alert(
+      "Import workout layout",
+      "Add these exercises to your current list, or replace what you have?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Add to list", onPress: () => applyImportedLayout(source, "append") },
+        { text: "Replace all", style: "destructive", onPress: () => applyImportedLayout(source, "replace") },
+      ]
+    );
   };
 
   const resetForm = () => {
@@ -465,6 +808,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     setEditingSessionId(null);
     setShowForm(false);
     setShowExercisePicker(false);
+    setPickerAnchor("top");
     setExerciseSearchQuery("");
     setCategoryFilter(null);
     setPickerMode("browse");
@@ -673,6 +1017,125 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     patchExercise(exerciseIdx, { sets: currentSets });
   };
 
+  const completeSetAndRecommendNext = async (exerciseIdx: number, setIdx: number) => {
+    const exercise = formDataRef.current.exercises[exerciseIdx];
+    if (!exercise || !Array.isArray(exercise.sets)) return;
+    const sets = [...exercise.sets];
+    const set = sets[setIdx];
+
+    if (set.completed) {
+      sets[setIdx] = { ...set, completed: false };
+      patchExercise(exerciseIdx, { sets });
+      return;
+    }
+    if (!isValidSet(set)) {
+      Alert.alert("Finish the set", "Enter the reps and weight before marking this set complete.");
+      return;
+    }
+    if (set.rpe == null && !set.difficulty) {
+      Alert.alert("How did it feel?", "Enter RPE or tap FEEL before completing the set so the next recommendation can adapt.");
+      return;
+    }
+
+    sets[setIdx] = { ...set, completed: true };
+    patchExercise(exerciseIdx, { sets });
+    const remaining = sets.filter((s) => !s.completed);
+    if (!remaining.length) return;
+
+    const completed = sets.filter((s) => s.completed);
+    const earlierExercises = formDataRef.current.exercises.slice(0, exerciseIdx).map((ex) => ({
+      exercise_id: ex.exercise_id,
+      exercise_name: ex.exercise_name,
+      sets: Array.isArray(ex.sets) ? ex.sets.filter((s) => s.completed === true) : [],
+    }));
+    const requestId = `${exercise.exercise_id}-${set.set_number}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    latestNextSetRequestRef.current[exercise.exercise_id] = requestId;
+    setNextSetLoading((prev) => ({ ...prev, [exercise.exercise_id]: true }));
+    try {
+      const response = await apiClient.post(
+        `/api/workout-sessions/ai-recommendation/${exercise.exercise_id}/next-set`,
+        {
+          exercise_name: exercise.exercise_name,
+          completed_sets: completed,
+          remaining_sets: remaining,
+          current_workout_exercises: earlierExercises,
+          base_recommendation: aiRecommendations[exercise.exercise_id] || exercise.ai_recommendation,
+          request_id: requestId,
+          previous_request_id:
+            previousNextSetRequestRef.current[exercise.exercise_id] ||
+            exercise.ai_recommendation?.next_set_request_id,
+        }
+      );
+      if (latestNextSetRequestRef.current[exercise.exercise_id] !== requestId) return;
+      if (response.data?.request_id && response.data.request_id !== requestId) return;
+      previousNextSetRequestRef.current[exercise.exercise_id] = requestId;
+      if (response.data?.status !== "success" || !response.data.next_set) return;
+      const nextIndex = sets.findIndex((s) => !s.completed);
+      if (nextIndex < 0) return;
+      const next = response.data.next_set;
+      previousSuggestedSetRef.current[exercise.exercise_id] = {
+        index: nextIndex,
+        set: { ...sets[nextIndex] },
+      };
+      sets[nextIndex] = {
+        ...sets[nextIndex],
+        reps: Number(next.preferred_reps ?? next.reps) || sets[nextIndex].reps,
+        weight: next.weight,
+        rep_low: next.rep_low,
+        rep_high: next.rep_high,
+        preferred_reps: next.preferred_reps,
+        completed: false,
+      };
+      const updatedRecommendation = {
+        ...(aiRecommendations[exercise.exercise_id] || exercise.ai_recommendation || {}),
+        next_set_reasoning: response.data.reasoning,
+        next_set_action: response.data.action,
+        next_set_request_id: requestId,
+      };
+      patchExercise(exerciseIdx, {
+        sets,
+        ai_recommendation: toStoredRecommendation(updatedRecommendation),
+      });
+      setAiRecommendations((prev) => ({ ...prev, [exercise.exercise_id]: updatedRecommendation }));
+      setUpdatedSetIndex((prev) => ({ ...prev, [exercise.exercise_id]: nextIndex }));
+    } catch {
+      Alert.alert("Recommendation unavailable", "Your set was saved, but the next-set suggestion could not be refreshed.");
+    } finally {
+      setNextSetLoading((prev) => ({ ...prev, [exercise.exercise_id]: false }));
+    }
+  };
+
+  const undoNextSetRecommendation = (exerciseIdx: number) => {
+    const exercise = formDataRef.current.exercises[exerciseIdx];
+    const previous = exercise && previousSuggestedSetRef.current[exercise.exercise_id];
+    if (!exercise || !Array.isArray(exercise.sets) || !previous) return;
+    const sets = [...exercise.sets];
+    sets[previous.index] = previous.set;
+    const requestId = previousNextSetRequestRef.current[exercise.exercise_id];
+    delete previousSuggestedSetRef.current[exercise.exercise_id];
+    patchExercise(exerciseIdx, { sets });
+    setUpdatedSetIndex((current) => {
+      const next = { ...current };
+      delete next[exercise.exercise_id];
+      return next;
+    });
+    setAiRecommendations((prev) => ({
+      ...prev,
+      [exercise.exercise_id]: {
+        ...(prev[exercise.exercise_id] || {}),
+        next_set_reasoning: "Original planned set restored.",
+        next_set_action: "rejected",
+      },
+    }));
+    if (requestId) {
+      apiClient.post("/api/workout-sessions/ai-recommendation-feedback", {
+        request_id: requestId,
+        accepted: false,
+        reason: "user_restored_original_set",
+      }).catch(() => {});
+    }
+  };
+
   const applyAiSets = (exerciseId: string, exerciseIdx: number) => {
     const rec = aiRecommendations[exerciseId];
     if (!rec?.sets || !Array.isArray(rec.sets)) return;
@@ -698,14 +1161,10 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   };
 
   const getExerciseCategory = (exerciseId: string, exerciseName: string) => {
-    const fromDefault = defaultExercises.find(
-      (e) => e.id === exerciseId || e.name === exerciseName
-    );
-    if (fromDefault?.category) {
-      return fromDefault.category.charAt(0) + fromDefault.category.slice(1).toLowerCase();
+    const category = resolveExerciseCategory(exerciseId, exerciseName, exercises);
+    if (category) {
+      return MUSCLE_GROUP_LABELS[category] || category.charAt(0) + category.slice(1).toLowerCase();
     }
-    const fromCustom = exercises.find((e) => e.id === exerciseId || e.name === exerciseName);
-    if (fromCustom?.muscle_group) return fromCustom.muscle_group;
     return "Exercise";
   };
 
@@ -727,6 +1186,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView
+          ref={sessionScrollRef}
           style={styles.flex}
           contentContainerStyle={styles.formPad}
           keyboardShouldPersistTaps="handled"
@@ -747,23 +1207,59 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
             </View>
           ) : null}
 
-          <View style={styles.formHeader}>
-            <TouchableOpacity onPress={handleCancel} style={styles.backBtn}>
-              <MaterialCommunityIcons name="arrow-left" size={20} color={colors.textSecondary} />
-            </TouchableOpacity>
-            <View style={styles.flex}>
-              <View style={styles.titleRow}>
-                <Text style={styles.formTitle}>
-                  {sessionHeadline(
-                    formData.split_name,
-                    formData.split_day,
-                    formData.date
-                  )}
-                </Text>
-                <View>
-                  <TouchableOpacity onPress={() => setShowDatePicker(true)} hitSlop={8}>
-                    <MaterialCommunityIcons name="calendar" size={18} color={colors.accentPrimary} />
+          <View style={styles.sessionHeaderCard}>
+            <View style={styles.formHeader}>
+              <TouchableOpacity onPress={handleCancel} style={styles.backBtn}>
+                <MaterialCommunityIcons name="arrow-left" size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+              <View style={styles.flex}>
+                <View style={styles.titleRow}>
+                  <Text style={styles.formTitle} numberOfLines={1}>
+                    {formData.split_day || formData.split_name || "Workout"}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.dateChip}
+                    onPress={() => setShowDatePicker(true)}
+                    hitSlop={8}
+                  >
+                    <MaterialCommunityIcons
+                      name="calendar-outline"
+                      size={12}
+                      color={colors.accentPrimary}
+                    />
+                    <Text style={styles.dateChipText}>{formatShortDate(formData.date)}</Text>
                   </TouchableOpacity>
+                  <View style={styles.saveBadgeInline}>
+                    <MaterialCommunityIcons
+                      name={
+                        isAutoSaving
+                          ? "cloud-sync-outline"
+                          : lastSaved
+                            ? "cloud-check-outline"
+                            : "cloud-outline"
+                      }
+                      size={13}
+                      color={
+                        isAutoSaving
+                          ? colors.warning
+                          : lastSaved
+                            ? colors.success
+                            : colors.textMuted
+                      }
+                    />
+                    <Text style={styles.saveBadgeText} numberOfLines={1}>
+                      {isAutoSaving
+                        ? "Saving"
+                        : lastSaved
+                          ? lastSaved.toLocaleTimeString([], {
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })
+                          : formData.exercises.length > 0
+                            ? "Auto-save"
+                            : ""}
+                    </Text>
+                  </View>
                   {Platform.OS === "web" ? (
                     <input
                       type="date"
@@ -776,9 +1272,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                       aria-label="Workout date"
                       style={{
                         position: "absolute",
-                        left: 0,
+                        right: 0,
                         top: 0,
-                        width: 28,
+                        width: 88,
                         height: 28,
                         opacity: 0,
                         cursor: "pointer",
@@ -786,168 +1282,178 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                     />
                   ) : null}
                 </View>
-              </View>
-              {Platform.OS !== "web" && showDatePicker && (
-                <DateTimePicker
-                  value={new Date(`${formData.date}T00:00:00`)}
-                  mode="date"
-                  display="spinner"
-                  onChange={(_, date) => {
-                    setShowDatePicker(false);
-                    if (date) {
-                      const y = date.getFullYear();
-                      const m = String(date.getMonth() + 1).padStart(2, "0");
-                      const d = String(date.getDate()).padStart(2, "0");
-                      setFormData({ ...formData, date: `${y}-${m}-${d}` });
-                    }
-                  }}
-                />
-              )}
-              <View style={styles.splitRow}>
-                <TouchableOpacity
-                  style={styles.dropBtn}
-                  onPress={() => {
-                    setShowSplitDropdown(!showSplitDropdown);
-                    setShowDayDropdown(false);
-                  }}
-                >
-                  <Text style={styles.dropBtnText}>
-                    {formData.split_id
-                      ? splits.find((s) => s.id === formData.split_id)?.name ||
-                        formData.split_name ||
-                        "Split"
-                      : "Split"}
-                  </Text>
-                  <MaterialCommunityIcons name="chevron-down" size={16} color={colors.textSecondary} />
-                </TouchableOpacity>
-                {formData.split_id && selectedSplit?.days?.length ? (
-                  <TouchableOpacity
-                    style={styles.dropBtn}
-                    onPress={() => {
-                      setShowDayDropdown(!showDayDropdown);
-                      setShowSplitDropdown(false);
+                {Platform.OS !== "web" && showDatePicker ? (
+                  <DateTimePicker
+                    value={new Date(`${formData.date}T00:00:00`)}
+                    mode="date"
+                    display="spinner"
+                    onChange={(_, date) => {
+                      setShowDatePicker(false);
+                      if (date) {
+                        const y = date.getFullYear();
+                        const m = String(date.getMonth() + 1).padStart(2, "0");
+                        const d = String(date.getDate()).padStart(2, "0");
+                        setFormData({ ...formData, date: `${y}-${m}-${d}` });
+                      }
                     }}
-                  >
-                    <Text style={styles.dropBtnText}>
-                      {formData.split_day || "Day"}
-                    </Text>
-                    <MaterialCommunityIcons name="chevron-down" size={16} color={colors.textSecondary} />
-                  </TouchableOpacity>
+                  />
                 ) : null}
-              </View>
-              {showSplitDropdown && (
-                <View style={styles.menu}>
+                <View style={styles.splitRow}>
                   <TouchableOpacity
+                    style={[styles.dropBtn, styles.dropBtnFlex]}
                     onPress={() => {
-                      setFormData({ ...formData, split_id: "", split_name: "", split_day: "" });
-                      setShowSplitDropdown(false);
+                      setShowSplitDropdown(!showSplitDropdown);
+                      setShowDayDropdown(false);
                     }}
-                    style={[styles.menuItem, !formData.split_id && styles.menuItemActive]}
                   >
-                    <Text style={styles.menuText}>No split</Text>
+                    <Text style={styles.dropBtnLabel}>Split</Text>
+                    <View style={styles.dropBtnValueRow}>
+                      <Text style={styles.dropBtnText} numberOfLines={1}>
+                        {formData.split_id
+                          ? splits.find((s) => s.id === formData.split_id)?.name ||
+                            formData.split_name ||
+                            "Split"
+                          : "None"}
+                      </Text>
+                      <MaterialCommunityIcons
+                        name="chevron-down"
+                        size={14}
+                        color={colors.textSecondary}
+                      />
+                    </View>
                   </TouchableOpacity>
-                  {splits.map((split) => (
+                  {formData.split_id && selectedSplit?.days?.length ? (
                     <TouchableOpacity
-                      key={split.id}
+                      style={[styles.dropBtn, styles.dropBtnFlex]}
                       onPress={() => {
-                        const onlyDay = split.days?.length === 1 ? split.days[0] : "";
-                        setFormData({
-                          ...formData,
-                          split_id: split.id || "",
-                          split_name: split.name,
-                          split_day: onlyDay,
-                        });
+                        setShowDayDropdown(!showDayDropdown);
                         setShowSplitDropdown(false);
                       }}
-                      style={[
-                        styles.menuItem,
-                        formData.split_id === split.id && styles.menuItemActive,
-                      ]}
                     >
-                      <Text style={styles.menuText}>{split.name}</Text>
+                      <Text style={styles.dropBtnLabel}>Day</Text>
+                      <View style={styles.dropBtnValueRow}>
+                        <Text style={styles.dropBtnText} numberOfLines={1}>
+                          {formData.split_day || "Pick day"}
+                        </Text>
+                        <MaterialCommunityIcons
+                          name="chevron-down"
+                          size={14}
+                          color={colors.textSecondary}
+                        />
+                      </View>
                     </TouchableOpacity>
-                  ))}
+                  ) : null}
                 </View>
-              )}
-              {showDayDropdown && selectedSplit?.days && (
-                <View style={styles.menu}>
-                  {selectedSplit.days.map((day, index) => (
+                {showSplitDropdown ? (
+                  <View style={styles.menu}>
                     <TouchableOpacity
-                      key={index}
                       onPress={() => {
-                        setFormData({ ...formData, split_day: day });
-                        setShowDayDropdown(false);
+                        setFormData({ ...formData, split_id: "", split_name: "", split_day: "" });
+                        setShowSplitDropdown(false);
                       }}
-                      style={[
-                        styles.menuItem,
-                        formData.split_day === day && styles.menuItemActive,
-                      ]}
+                      style={[styles.menuItem, !formData.split_id && styles.menuItemActive]}
                     >
-                      <Text style={styles.menuText}>{day}</Text>
+                      <Text style={styles.menuText}>No split</Text>
                     </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-              {timer.firstStartedAt ? (
-                <Text style={styles.muted}>
-                  Started{" "}
-                  {new Date(timer.firstStartedAt).toLocaleTimeString([], {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  })}
-                </Text>
-              ) : null}
+                    {splits.map((split) => (
+                      <TouchableOpacity
+                        key={split.id}
+                        onPress={() => {
+                          const onlyDay = split.days?.length === 1 ? split.days[0] : "";
+                          setFormData({
+                            ...formData,
+                            split_id: split.id || "",
+                            split_name: split.name,
+                            split_day: onlyDay,
+                          });
+                          setShowSplitDropdown(false);
+                        }}
+                        style={[
+                          styles.menuItem,
+                          formData.split_id === split.id && styles.menuItemActive,
+                        ]}
+                      >
+                        <Text style={styles.menuText}>{split.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
+                {showDayDropdown && selectedSplit?.days ? (
+                  <View style={styles.menu}>
+                    {selectedSplit.days.map((day, index) => (
+                      <TouchableOpacity
+                        key={index}
+                        onPress={() => {
+                          setFormData({ ...formData, split_day: day });
+                          setShowDayDropdown(false);
+                        }}
+                        style={[
+                          styles.menuItem,
+                          formData.split_day === day && styles.menuItemActive,
+                        ]}
+                      >
+                        <Text style={styles.menuText}>{day}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
             </View>
-          </View>
 
-          <Text style={styles.savedHint}>
-            {isAutoSaving
-              ? "Saving..."
-              : lastSaved
-              ? `Saved ${lastSaved.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
-              : formData.exercises.length > 0
-              ? "Auto-saves as you log"
-              : ""}
-          </Text>
-
-          <View style={styles.timerRow}>
-            <Text style={styles.timerText}>{timer.formattedTime}</Text>
-            <TouchableOpacity
-              style={styles.timerBtn}
-              onPress={timer.isRunning ? timer.stop : timer.start}
-            >
-              <MaterialCommunityIcons
-                name={timer.isRunning ? "stop" : "play"}
-                size={16}
-                color={colors.textSecondary}
-              />
-              <Text style={styles.timerBtnText}>{timer.isRunning ? "Stop" : "Start"}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.iconCircle} onPress={timer.refresh}>
-              <MaterialCommunityIcons name="refresh" size={16} color={colors.textSecondary} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.finishBtn,
-                ((formData.exercises.length === 0 && !hasCardioLog(formData)) || isSaving) &&
-                  styles.disabled,
-              ]}
-              disabled={
-                (formData.exercises.length === 0 && !hasCardioLog(formData)) || isSaving
-              }
-              onPress={handleFinish}
-            >
-              <Text style={styles.finishText}>
-                {isSaving ? "Finishing..." : "Finish Workout"}
-              </Text>
-            </TouchableOpacity>
+            <View style={styles.controlDivider} />
+            <View style={styles.controlRow}>
+              <Text style={styles.timerTextLarge}>{timer.formattedTime}</Text>
+              <View style={styles.timerControls}>
+                <TouchableOpacity
+                  style={[styles.timerBtn, timer.isRunning && styles.timerBtnActive]}
+                  onPress={timer.isRunning ? timer.stop : timer.start}
+                >
+                  <MaterialCommunityIcons
+                    name={timer.isRunning ? "pause" : "play"}
+                    size={14}
+                    color={timer.isRunning ? colors.accentPrimary : colors.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.timerBtnText,
+                      timer.isRunning && styles.timerBtnTextActive,
+                    ]}
+                  >
+                    {timer.isRunning ? "Pause" : "Start"}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.iconCircle} onPress={timer.refresh}>
+                  <MaterialCommunityIcons name="refresh" size={14} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.finishBtn,
+                  styles.finishBtnFlex,
+                  ((formData.exercises.length === 0 && !hasCardioLog(formData)) || isSaving) &&
+                    styles.disabled,
+                ]}
+                disabled={
+                  (formData.exercises.length === 0 && !hasCardioLog(formData)) || isSaving
+                }
+                onPress={handleFinish}
+              >
+                <Text style={styles.finishText}>{isSaving ? "..." : "Finish"}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
           {saveError ? <Text style={styles.error}>{saveError}</Text> : null}
 
-          <TouchableOpacity onPress={() => setShowSessionDetails(!showSessionDetails)}>
-            <Text style={styles.detailsToggle}>
-              {showSessionDetails ? "Hide session details" : "Session details"}
-            </Text>
+          <TouchableOpacity
+            style={styles.detailsRow}
+            onPress={() => setShowSessionDetails(!showSessionDetails)}
+          >
+            <Text style={styles.detailsToggle}>Session details</Text>
+            <MaterialCommunityIcons
+              name={showSessionDetails ? "chevron-up" : "chevron-down"}
+              size={16}
+              color={colors.textSecondary}
+            />
           </TouchableOpacity>
           {showSessionDetails && (
             <TextInput
@@ -960,86 +1466,69 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
             />
           )}
 
-          <View style={styles.searchWrap}>
-            <MaterialCommunityIcons
-              name="magnify"
-              size={18}
-              color={colors.textSecondary}
-              style={styles.searchIcon}
-            />
-            <TextInput
-              value={exerciseSearchQuery}
-              onChangeText={(q) => {
-                setExerciseSearchQuery(q);
-                if (q) {
-                  setShowExercisePicker(true);
-                  setPickerMode("search");
-                }
-              }}
-              onFocus={() => setShowExercisePicker(true)}
-              placeholder="Search exercises..."
-              placeholderTextColor={colors.textMuted}
-              style={styles.searchInput}
-            />
-          </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pills}>
-            {categoryFilterPills.map((pill) => (
-              <TouchableOpacity
-                key={pill.label}
-                onPress={() => {
-                  setCategoryFilter(pill.id);
-                  setShowExercisePicker(true);
-                  if (pill.id === "ARMS") setSelectedBodyPart("BICEPS");
-                  else if (pill.id === "CORE") setSelectedBodyPart("CORE / ABS");
-                  else if (pill.id) setSelectedBodyPart(pill.id);
-                  else setSelectedBodyPart(null);
-                  setPickerMode("browse");
-                }}
-                style={[styles.pill, categoryFilter === pill.id && styles.pillActive]}
-              >
-                <Text
-                  style={[styles.pillText, categoryFilter === pill.id && styles.pillTextActive]}
-                >
-                  {pill.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          {(!showExercisePicker || pickerAnchor === "top") && (
+            <>
+              <View style={styles.searchWrap}>
+                <MaterialCommunityIcons
+                  name="magnify"
+                  size={18}
+                  color={colors.textSecondary}
+                  style={styles.searchIcon}
+                />
+                <TextInput
+                  value={exerciseSearchQuery}
+                  onChangeText={(q) => {
+                    setExerciseSearchQuery(q);
+                    if (q) openExercisePicker("top", "search");
+                  }}
+                  onFocus={() => openExercisePicker("top", exerciseSearchQuery ? "search" : "browse")}
+                  placeholder="Search exercises..."
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.searchInput}
+                />
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pills}>
+                {categoryFilterPills.map((pill) => (
+                  <TouchableOpacity
+                    key={pill.label}
+                    onPress={() => {
+                      setCategoryFilter(pill.id);
+                      openExercisePicker("top", "browse");
+                      if (pill.id === "ARMS") setSelectedBodyPart("BICEPS");
+                      else if (pill.id === "CORE") setSelectedBodyPart("CORE / ABS");
+                      else if (pill.id) setSelectedBodyPart(pill.id);
+                      else setSelectedBodyPart(null);
+                    }}
+                    style={[styles.pill, categoryFilter === pill.id && styles.pillActive]}
+                  >
+                    <Text
+                      style={[styles.pillText, categoryFilter === pill.id && styles.pillTextActive]}
+                    >
+                      {pill.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </>
+          )}
+
+          <TouchableOpacity
+            style={styles.importButton}
+            onPress={() => setShowImportModal(true)}
+          >
+            <MaterialCommunityIcons name="history" size={18} color={colors.accentPrimary} />
+            <Text style={styles.importButtonText}>Import from previous workout</Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.addDashed}
-            onPress={() => {
-              setShowExercisePicker(true);
-              setPickerMode("browse");
-              setSelectedBodyPart(null);
-              setEquipmentFilter(null);
-            }}
+            onPress={() => openExercisePicker("top", "browse", null)}
           >
             <MaterialCommunityIcons name="plus" size={18} color={colors.textSecondary} />
             <Text style={styles.addDashedText}>Add exercise</Text>
           </TouchableOpacity>
 
-          {showExercisePicker && (
-            <ExercisePicker
-              allExercises={allExercises}
-              pickerMode={pickerMode}
-              selectedBodyPart={selectedBodyPart}
-              equipmentFilter={equipmentFilter}
-              searchQuery={exerciseSearchQuery}
-              onModeChange={setPickerMode}
-              onBodyPartChange={setSelectedBodyPart}
-              onEquipmentFilterChange={setEquipmentFilter}
-              onSearchChange={setExerciseSearchQuery}
-              onSelect={handleExerciseChange}
-              onClose={() => {
-                setShowExercisePicker(false);
-                setSelectedBodyPart(null);
-                setEquipmentFilter(null);
-                setExerciseSearchQuery("");
-                setCategoryFilter(null);
-              }}
-            />
-          )}
+          {showExercisePicker && pickerAnchor === "top" && renderExercisePickerPanel("top")}
 
           {formData.exercises.map((ex, idx) => {
             const exerciseSets = Array.isArray(ex.sets) ? ex.sets : [];
@@ -1047,7 +1536,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
             const sportCardio = isSportCardio(ex);
             const treadmillCardio = isTreadmillCardio(ex);
             const isCollapsed = collapsedExercises[idx] ?? false;
-            const completedCount = exerciseSets.filter(isValidSet).length;
+            const completedCount = exerciseSets.filter((set) => set.completed).length;
             const categoryLabel = getExerciseCategory(ex.exercise_id, ex.exercise_name);
             const roleLabel = idx === 0 ? "Primary" : "Secondary";
             const lastData = resolveLastExercise(
@@ -1178,7 +1667,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                                 <View key={setIdx} style={styles.recSet}>
                                   <Text style={styles.recSetLabel}>SET {setIdx + 1}</Text>
                                   <Text style={styles.recSetVal}>
-                                    {set.reps} reps
+                                    {set.rep_low != null && set.rep_high != null
+                                      ? `${set.rep_low}-${set.rep_high} reps${set.preferred_reps ? ` · aim ${set.preferred_reps}` : ""}`
+                                      : `${set.reps} reps`}
                                     {set.weight != null && Number(set.weight) > 0
                                       ? `\n${set.weight} lbs`
                                       : ""}
@@ -1187,8 +1678,27 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                               ))}
                             </View>
                           )}
+                          {aiRec.calibration_required ? (
+                            <Text style={styles.calibrationHint}>
+                              Calibration set: complete 6 controlled reps, choose how it felt, and the next set will adapt.
+                            </Text>
+                          ) : null}
                           {aiRec.reasoning ? (
                             <Text style={styles.reasoning}>{aiRec.reasoning}</Text>
+                          ) : null}
+                          {aiRec.next_set_reasoning ? (
+                            <View style={styles.nextSetCoach}>
+                              <Text style={styles.nextSetLabel}>NEXT SET</Text>
+                              <Text style={styles.nextSetText}>{aiRec.next_set_reasoning}</Text>
+                              {previousSuggestedSetRef.current[ex.exercise_id] ? (
+                                <TouchableOpacity
+                                  style={styles.undoRecommendation}
+                                  onPress={() => undoNextSetRecommendation(idx)}
+                                >
+                                  <Text style={styles.undoRecommendationText}>Undo recommendation</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
                           ) : null}
                           {recHasWeightedSets(aiRec) && (
                             <TouchableOpacity
@@ -1331,12 +1841,17 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                             <Text style={[styles.setCol, { flex: 2 }]}>REPS</Text>
                             <Text style={[styles.setCol, { flex: 2 }]}>WEIGHT</Text>
                             <Text style={[styles.setCol, { flex: 1.2 }]}>RPE</Text>
-                            <View style={{ width: 22 }} />
+                            <View style={{ width: 50 }} />
                           </View>
                           {exerciseSets.map((set, setIdx) => {
                             const lastSet = lastSets[setIdx];
                             return (
-                              <View key={setIdx} style={styles.setRow}>
+                              <View key={setIdx} style={[
+                                styles.setBlock,
+                                updatedSetIndex[ex.exercise_id] === setIdx && styles.updatedSetBlock,
+                                set.completed && styles.completedSetRow,
+                              ]}>
+                              <View style={styles.setRow}>
                                 <View style={{ flex: 0.7 }}>
                                   <Text style={styles.setNum}>{set.set_number}</Text>
                                   {lastSet ? (
@@ -1389,6 +1904,20 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                                   placeholderTextColor={colors.textMuted}
                                   style={[styles.setInput, { flex: 1.2 }]}
                                 />
+                                <TouchableOpacity
+                                  disabled={nextSetLoading[ex.exercise_id]}
+                                  onPress={() => completeSetAndRecommendNext(idx, setIdx)}
+                                >
+                                  {nextSetLoading[ex.exercise_id] && setIdx === exerciseSets.findIndex((s) => !s.completed) ? (
+                                    <ActivityIndicator size="small" color={colors.ai} />
+                                  ) : (
+                                    <MaterialCommunityIcons
+                                      name={set.completed ? "check-circle" : "check-circle-outline"}
+                                      size={20}
+                                      color={set.completed ? colors.ai : colors.textMuted}
+                                    />
+                                  )}
+                                </TouchableOpacity>
                                 <TouchableOpacity onPress={() => removeSet(idx, setIdx)}>
                                   <MaterialCommunityIcons
                                     name="close"
@@ -1397,14 +1926,90 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                                   />
                                 </TouchableOpacity>
                               </View>
+                              {!set.completed ? (
+                                <View style={styles.feelChoices}>
+                                  <Text style={styles.feelPrompt}>How did it feel?</Text>
+                                  {(["easy", "good", "hard", "failed"] as const).map((value) => (
+                                    <TouchableOpacity
+                                      key={value}
+                                      style={[styles.feelChoice, set.difficulty === value && styles.feelChoiceActive]}
+                                      onPress={() => updateSet(idx, setIdx, { difficulty: value })}
+                                    >
+                                      <Text style={[styles.feelChoiceText, set.difficulty === value && styles.feelChoiceTextActive]}>
+                                        {value.charAt(0).toUpperCase() + value.slice(1)}
+                                      </Text>
+                                    </TouchableOpacity>
+                                  ))}
+                                </View>
+                              ) : null}
+                              </View>
                             );
                           })}
-                          <TouchableOpacity style={styles.addSet} onPress={() => addSet(idx)}>
-                            <Text style={styles.addSetText}>+ Add set</Text>
-                          </TouchableOpacity>
                         </View>
                       )}
                     </View>
+                  </View>
+                )}
+
+                {!isCardio && (
+                  <View style={styles.cardActionBar}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.cardActionRow}
+                    >
+                      <TouchableOpacity style={styles.actionPillDashed} onPress={() => addSet(idx)}>
+                        <Text style={styles.actionPillDashedText}>+ Set</Text>
+                      </TouchableOpacity>
+                      {splitMuscleGroups.map((group) => {
+                        const selected =
+                          activeMuscleFilter?.cardIdx === idx &&
+                          activeMuscleFilter.group === group;
+                        return (
+                          <TouchableOpacity
+                            key={group}
+                            style={[styles.actionPillSolid, selected && styles.actionPillSolidActive]}
+                            onPress={() =>
+                              setActiveMuscleFilter((current) =>
+                                current?.cardIdx === idx && current.group === group
+                                  ? null
+                                  : { cardIdx: idx, group }
+                              )
+                            }
+                          >
+                            <Text
+                              style={[
+                                styles.actionPillSolidText,
+                                selected && styles.actionPillSolidTextActive,
+                              ]}
+                            >
+                              {MUSCLE_GROUP_LABELS[group] || group}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                      <TouchableOpacity
+                        style={styles.actionAddCircle}
+                        onPress={() => openExercisePicker("inline", "browse", idx)}
+                      >
+                        <MaterialCommunityIcons name="plus" size={16} color={colors.textSecondary} />
+                      </TouchableOpacity>
+                    </ScrollView>
+                    {splitMuscleGroups.length > 0 ? (
+                      <View style={styles.muscleHistoryBlock}>
+                        <Text style={styles.recentHistoryLabel}>{splitHistoryTitle}</Text>
+                        {renderMuscleHistory(idx)}
+                      </View>
+                    ) : null}
+                  </View>
+                )}
+
+                {showExercisePicker && pickerAnchor === "inline" && exerciseInsertAfter === idx && (
+                  <View style={styles.inlinePickerWrap}>
+                    <Text style={styles.inlinePickerHint}>
+                      Insert after {ex.exercise_name}
+                    </Text>
+                    {renderExercisePickerPanel(`inline-${idx}`)}
                   </View>
                 )}
               </View>
@@ -1414,16 +2019,22 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
           {formData.exercises.length > 0 && (
             <TouchableOpacity
               style={[styles.addDashed, { marginTop: 8 }]}
-              onPress={() => {
-                setShowExercisePicker(true);
-                setPickerMode("browse");
-              }}
+              onPress={() => openExercisePicker("bottom", "browse", null)}
             >
               <MaterialCommunityIcons name="plus" size={18} color={colors.textSecondary} />
               <Text style={styles.addDashedText}>Add exercise</Text>
             </TouchableOpacity>
           )}
+
+          {showExercisePicker && pickerAnchor === "bottom" && renderExercisePickerPanel("bottom")}
         </ScrollView>
+        <ImportSessionModal
+          visible={showImportModal}
+          sessions={sessions}
+          excludeSessionId={editingSessionId}
+          onClose={() => setShowImportModal(false)}
+          onSelect={handleImportSession}
+        />
       </KeyboardAvoidingView>
     );
   }
@@ -1679,42 +2290,108 @@ const styles = StyleSheet.create({
   },
   splitBadgeText: { fontSize: 11, fontWeight: "700" },
   sessionMeta: { color: colors.textSecondary, fontSize: 13, marginTop: 4 },
-  formHeader: { flexDirection: "row", gap: 10, marginBottom: 8 },
-  backBtn: { paddingTop: 4 },
-  titleRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
-  formTitle: { color: "#fff", fontSize: 18, fontWeight: "700", flexShrink: 1 },
-  splitRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
+  formHeader: { flexDirection: "row", gap: 8, flex: 1 },
+  sessionHeaderCard: {
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+    gap: spacing.sm,
+  },
+  backBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+    marginBottom: 2,
+  },
+  formTitle: { color: colors.textPrimary, fontSize: 17, fontWeight: "800", flex: 1 },
+  dateChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  dateChipText: { fontSize: 10, fontWeight: "700", color: colors.accentPrimary },
+  saveBadgeInline: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    marginLeft: "auto",
+  },
+  splitRow: { flexDirection: "row", gap: 6, marginTop: 4 },
   dropBtn: {
-    height: 36,
-    paddingHorizontal: 12,
-    borderRadius: 8,
+    minHeight: 36,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: borderRadius.sm,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "flex-start",
-    gap: 6,
   },
-  dropBtnText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  dropBtnFlex: { flex: 1 },
+  dropBtnLabel: {
+    fontSize: 8,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    color: colors.textMuted,
+    marginBottom: 1,
+  },
+  dropBtnValueRow: { flexDirection: "row", alignItems: "center", gap: 2 },
+  dropBtnText: { color: colors.textPrimary, fontSize: 12, fontWeight: "700", flex: 1 },
   menu: {
     marginTop: 6,
     backgroundColor: colors.cardBackground,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 8,
+    borderRadius: borderRadius.md,
     overflow: "hidden",
   },
   menuItem: { paddingHorizontal: 12, paddingVertical: 10 },
   menuItemActive: { backgroundColor: "rgba(156, 192, 232,0.2)" },
-  menuText: { color: "#fff", fontSize: 13 },
-  muted: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
-  savedHint: { color: colors.textMuted, fontSize: 11, marginBottom: 8 },
-  timerRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 },
-  timerText: { color: "#fff", fontSize: 18, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  menuText: { color: colors.textPrimary, fontSize: 13 },
+  muted: { color: colors.textSecondary, fontSize: 12 },
+  controlDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginTop: 2,
+  },
+  controlRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingTop: 2,
+  },
+  timerTextLarge: {
+    color: colors.textPrimary,
+    fontSize: 22,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
+    lineHeight: 24,
+    minWidth: 72,
+  },
+  saveBadgeText: { color: colors.textSecondary, fontSize: 10 },
+  timerControls: { flexDirection: "row", alignItems: "center", gap: 4, flex: 1 },
   timerBtn: {
     height: 32,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: colors.border,
@@ -1723,7 +2400,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
   },
-  timerBtnText: { color: colors.textSecondary, fontSize: 12, fontWeight: "600" },
+  timerBtnActive: {
+    borderColor: colors.accentPrimary,
+    backgroundColor: "rgba(156, 192, 232, 0.12)",
+  },
+  timerBtnText: { color: colors.textSecondary, fontSize: 11, fontWeight: "700" },
+  timerBtnTextActive: { color: colors.accentPrimary },
   iconCircle: {
     width: 32,
     height: 32,
@@ -1735,16 +2417,30 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   finishBtn: {
-    marginLeft: "auto",
     backgroundColor: colors.accentPrimary,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
-  finishText: { color: colors.onAccent, fontWeight: "700", fontSize: 13 },
+  finishBtnFlex: {
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 32,
+  },
+  finishText: { color: colors.onAccent, fontWeight: "800", fontSize: 12 },
   disabled: { opacity: 0.4 },
   error: { color: colors.danger, fontSize: 12, marginBottom: 8 },
-  detailsToggle: { color: colors.textSecondary, fontSize: 12, fontWeight: "600", marginBottom: 12 },
+  detailsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+    paddingHorizontal: 2,
+    marginBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  detailsToggle: { color: colors.textSecondary, fontSize: 12, fontWeight: "700" },
   notes: {
     minHeight: 72,
     borderRadius: 12,
@@ -1782,6 +2478,20 @@ const styles = StyleSheet.create({
   },
   pillText: { color: colors.textSecondary, fontSize: 12, fontWeight: "600" },
   pillTextActive: { color: colors.accentPrimary },
+  importButton: {
+    width: "100%",
+    paddingVertical: 11,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.borderHover,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginBottom: 8,
+    backgroundColor: colors.surface,
+  },
+  importButtonText: { color: colors.accentPrimary, fontSize: 13, fontWeight: "700" },
   addDashed: {
     width: "100%",
     paddingVertical: 12,
@@ -1892,6 +2602,12 @@ const styles = StyleSheet.create({
   recSetLabel: { color: colors.textMuted, fontSize: 10, fontWeight: "700" },
   recSetVal: { color: "#fff", fontSize: 13, fontWeight: "700", marginTop: 4 },
   reasoning: { color: colors.textSecondary, fontSize: 12, lineHeight: 18, marginBottom: 10 },
+  nextSetCoach: { backgroundColor: "rgba(94,234,212,0.08)", borderRadius: 8, padding: 10, marginBottom: 10 },
+  nextSetLabel: { color: colors.ai, fontSize: 10, fontWeight: "700", marginBottom: 4 },
+  nextSetText: { color: colors.text, fontSize: 12, lineHeight: 18 },
+  undoRecommendation: { alignSelf: "flex-start", marginTop: 8, paddingVertical: 4 },
+  undoRecommendationText: { color: colors.ai, fontSize: 11, fontWeight: "700" },
+  calibrationHint: { color: colors.ai, fontSize: 11, lineHeight: 16, marginBottom: 10 },
   applySets: {
     borderWidth: 1,
     borderColor: "rgba(94,234,212,0.4)",
@@ -1957,6 +2673,15 @@ const styles = StyleSheet.create({
   setHead: { flexDirection: "row", gap: 8, marginBottom: 8 },
   setCol: { color: colors.textMuted, fontSize: 10, fontWeight: "700" },
   setRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  setBlock: { borderWidth: 1, borderColor: "transparent", borderRadius: 10, padding: 5, marginBottom: 5 },
+  updatedSetBlock: { borderColor: "rgba(94,234,212,0.5)", backgroundColor: "rgba(94,234,212,0.06)" },
+  completedSetRow: { opacity: 0.72 },
+  feelChoices: { flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 34 },
+  feelPrompt: { color: colors.textMuted, fontSize: 9, marginRight: 2 },
+  feelChoice: { borderWidth: 1, borderColor: colors.border, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 5 },
+  feelChoiceActive: { borderColor: colors.ai, backgroundColor: "rgba(94,234,212,0.12)" },
+  feelChoiceText: { color: colors.textMuted, fontSize: 9, fontWeight: "600" },
+  feelChoiceTextActive: { color: colors.ai },
   setNum: { color: colors.textSecondary, fontSize: 14 },
   lastHint: { color: colors.textMuted, fontSize: 9 },
   setInput: {
@@ -1979,4 +2704,104 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   addSetText: { color: colors.textSecondary, fontWeight: "600" },
+  cardActionBar: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  cardActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingRight: 4,
+  },
+  actionPillDashed: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.borderHover,
+  },
+  actionPillDashedText: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  actionPillSolid: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  actionPillSolidActive: {
+    borderColor: colors.accentPrimary,
+    backgroundColor: "rgba(156, 192, 232, 0.12)",
+  },
+  actionPillSolidText: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  actionPillSolidTextActive: { color: colors.accentPrimary },
+  actionAddCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.borderHover,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 2,
+  },
+  recentHistoryLabel: {
+    color: colors.textMuted,
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginTop: 8,
+    marginBottom: 6,
+  },
+  muscleHistoryBlock: {
+    paddingBottom: 2,
+  },
+  inlinePickerWrap: {
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  inlinePickerHint: {
+    color: colors.accentPrimary,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  muscleHistory: { gap: 8 },
+  muscleHistorySession: { gap: 4 },
+  muscleHistoryDate: { color: colors.textMuted, fontSize: 11, fontWeight: "700" },
+  muscleHistoryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  muscleHistoryRowAdded: { opacity: 0.55 },
+  muscleHistoryName: { flex: 1, color: colors.textPrimary, fontSize: 13, fontWeight: "600" },
+  muscleHistoryNameAdded: { color: colors.textMuted },
+  muscleHistoryPerf: { color: colors.accentPrimary, fontSize: 12, fontWeight: "700" },
+  muscleHistoryEmpty: { color: colors.textMuted, fontSize: 11, paddingBottom: 2 },
 });

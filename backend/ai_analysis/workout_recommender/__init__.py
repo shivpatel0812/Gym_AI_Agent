@@ -25,7 +25,9 @@ from .reasoning_generator import ReasoningGenerator
 from .training_focus import TrainingFocusStore
 from .plan_context import PlanContextResolver, PlanContext
 from .readiness_context import ReadinessResolver, ReadinessContext
-from .weight_estimator import days_since_session
+from .weight_estimator import days_since_session, infer_top_lifts_from_related_history
+from .exercise_metadata import resolve_exercise_metadata
+from .personalization import learn_position_factor, apply_position_factor
 
 
 class WorkoutRecommender:
@@ -297,6 +299,23 @@ class WorkoutRecommender:
 
         readiness = self.readiness_resolver.resolve()
 
+        top_lifts = profile.get("top_lifts") if profile else None
+        all_sessions = self.data_fetcher.get_all_workout_sessions()
+        try:
+            exercise_records = self.data_fetcher.get_exercise_records()
+        except Exception:
+            exercise_records = {}
+        related_lift_context = None
+        if not recent_exercise_data and not stale_last_session:
+            related_lift_context = infer_top_lifts_from_related_history(
+                exercise_id,
+                exercise_name,
+                all_sessions,
+                exercise_records=exercise_records,
+            )
+            if related_lift_context:
+                top_lifts = related_lift_context
+
         # Use deterministic progression engine for all cases
         progression_result = self.progression_engine.compute_recommendation(
             exercise_id=exercise_id,
@@ -309,10 +328,31 @@ class WorkoutRecommender:
             day_intensity=day_intensity,
             heavy_day_weight=None,
             exercise_record=exercise_record,
-            top_lifts=profile.get("top_lifts") if profile else None,
+            top_lifts=top_lifts,
             stale_last_session=stale_last_session,
             readiness=readiness,
         )
+        position_context = learn_position_factor(
+            all_sessions,
+            exercise_id,
+            exercise_name,
+            position_in_workout,
+            exercise_records,
+        )
+        metadata = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
+        progression_result = apply_position_factor(
+            progression_result, position_context, metadata.min_increment_lb
+        )
+        if related_lift_context and progression_result.reasoning_context.get("estimated_from_top_lifts"):
+            progression_result.reasoning_context.update({
+                "estimated_from_related_exercises": True,
+                "related_sample_count": related_lift_context.get("sample_count", 0),
+            })
+            if progression_result.sets:
+                progression_result.sets[0].reps = 6
+                progression_result.sets[0].rep_low = 6
+                progression_result.sets[0].rep_high = 6
+                progression_result.sets[0].role = "calibration"
 
         # Generate reasoning text (LLM-optional, template fallback)
         reasoning = self.reasoning_generator.generate_reasoning(
@@ -320,6 +360,12 @@ class WorkoutRecommender:
             reasoning_context=progression_result.reasoning_context,
             exercise_name=exercise_name,
         )
+        if position_context.get("source") == "personal_position_history":
+            reduction = round((1.0 - position_context["factor"]) * 100)
+            reasoning = (
+                f"{reasoning} Your history shows about {reduction}% less capacity at this "
+                "workout position, so the load is adjusted for fatigue."
+            )
 
         # Build response in the same shape as before for frontend compatibility
         # Frontend reads: response.data.recommendation.sets as [{set_number, reps, weight}]
@@ -353,6 +399,9 @@ class WorkoutRecommender:
                 recommendation["rep_range"] = list(rep_range)
             if progression_result.reasoning_context.get("estimated_from_top_lifts"):
                 recommendation["estimated_from_top_lifts"] = True
+            if progression_result.reasoning_context.get("estimated_from_related_exercises"):
+                recommendation["estimated_from_related_exercises"] = True
+                recommendation["calibration_required"] = True
             if progression_result.reasoning_context.get("estimated_from_stale_history"):
                 recommendation["estimated_from_stale_history"] = True
         else:
@@ -386,6 +435,8 @@ class WorkoutRecommender:
         # Same for capacity, but only when it actually had something to say.
         if readiness.usable:
             recommendation["readiness_context"] = readiness.to_dict()
+        if position_context.get("source") == "personal_position_history":
+            recommendation["position_context"] = position_context
 
         return {
             "status": "success",

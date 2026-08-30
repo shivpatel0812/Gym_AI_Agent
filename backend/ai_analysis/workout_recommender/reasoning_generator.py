@@ -124,6 +124,12 @@ class ReasoningGenerator:
             parts.append(f"Consecutive sessions going backwards: {ctx['consecutive_failures']}")
         if "deload_pct" in ctx:
             parts.append(f"Deload percentage: {int(ctx['deload_pct'] * 100)}%")
+        if "position_adjustment" in ctx:
+            adjustment = ctx["position_adjustment"]
+            parts.append(
+                f"Personal workout-position capacity factor: {adjustment.get('factor')} "
+                f"from {adjustment.get('samples')} historical observations"
+            )
 
         parts.append(
             "Explain WHY in 1-2 sentences, referring to what they actually did last "
@@ -174,6 +180,12 @@ class ReasoningGenerator:
                 )
             if ctx.get("estimated_from_top_lifts"):
                 weight = ctx.get("estimated_weight", 0)
+                if ctx.get("estimated_from_related_exercises"):
+                    return (
+                        f"Your related {exercise_name} training suggests {weight:g} lbs as a "
+                        "conservative calibration set. Do 6 controlled reps and use the difficulty "
+                        "rating to adjust the remaining sets."
+                    )
                 return (
                     f"Based on the lift context you shared, {weight:g} lbs is a conservative "
                     "starting estimate. Adjust it if your first set feels too heavy or light."
