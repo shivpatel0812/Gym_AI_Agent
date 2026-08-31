@@ -230,6 +230,15 @@ export function lastWorkingSets(
   }));
 }
 
+export function emptyWorkoutSets(count = 3): WorkoutSet[] {
+  return Array.from({ length: Math.max(1, count) }, (_, i) => ({
+    set_number: i + 1,
+    reps: 0,
+    weight: undefined,
+    completed: false,
+  }));
+}
+
 export function setsFromLastWorkout(
   lastData: any,
   targetCount = 3
@@ -427,6 +436,7 @@ export function toStoredRecommendation(rec: any) {
     rep_range: rec.rep_range,
     strategy: rec.strategy,
     branch: rec.branch,
+    progression_options: rec.progression_options,
     next_set_reasoning: rec.next_set_reasoning,
     next_set_action: rec.next_set_action,
     next_set_request_id: rec.next_set_request_id,
@@ -440,6 +450,9 @@ export function toStoredRecommendation(rec: any) {
     has_implausible_data: rec.has_implausible_data,
     time: rec.time,
     speed: rec.speed,
+    cardio_modality: rec.cardio_modality,
+    target_intensity: rec.target_intensity,
+    guidance: rec.guidance,
     generated_at: rec.generated_at || new Date().toISOString(),
   };
 }

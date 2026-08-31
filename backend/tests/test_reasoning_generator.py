@@ -153,6 +153,43 @@ class TestLLMFallback:
         assert "75" in reasoning
         assert "80" in reasoning
 
+    def test_verbose_llm_falls_back_to_complete_template(self):
+        """Workout-card explanations stay short without being visually cut off."""
+        class VerboseClient:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def create(**kwargs):
+                        message = type("Message", (), {
+                            "content": (
+                                "This recommendation is based on your very consistent "
+                                "performance during the previous workout, where every set "
+                                "demonstrated that you are prepared to progress while still "
+                                "remaining inside the intended training range."
+                            )
+                        })()
+                        choice = type("Choice", (), {"message": message})()
+                        return type("Response", (), {"choices": [choice]})()
+
+        gen = ReasoningGenerator(openai_client=VerboseClient())
+        reasoning = gen.generate_reasoning(
+            decision=Decision.INCREASE_REPS,
+            reasoning_context={
+                "reason": "advance_in_band",
+                "prev_reps": [7, 8, 8],
+                "weight": 10,
+                "aim": 9,
+                "band": "6-10",
+            },
+            exercise_name="Bench cable row single",
+        )
+
+        assert reasoning == (
+            "Last time you got 7/8/8 at 10 lbs. Same weight, aim 9 across all sets. "
+            "Anything in the 6-10 range counts."
+        )
+        assert "..." not in reasoning
+
 
 class TestReasoningNeverEmpty:
     """Reasoning should never be empty regardless of decision."""

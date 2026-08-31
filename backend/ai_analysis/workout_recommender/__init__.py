@@ -121,13 +121,24 @@ class WorkoutRecommender:
                     for s in self._normalize_exercise_sets(ex)
                     if (s.get("reps") or 0) > 0 and (s.get("weight") or 0) > 0
                 ]
-                if not sets and not ex.get("time") and not ex.get("speed"):
+                # Sport cardio records effort, not sets or pace. Requiring
+                # time or speed dropped those sessions before the engine ever
+                # saw them, which is why basketball produced no recommendation.
+                is_cardio_entry = any(
+                    ex.get(field) is not None
+                    for field in ("time", "speed", "intensity", "fatigue")
+                )
+                if not sets and not is_cardio_entry:
                     continue
                 result.append({
                     "date": session.get("date"),
                     "sets": sets or self._normalize_exercise_sets(ex),
                     "time": ex.get("time"),
                     "speed": ex.get("speed"),
+                    # Read by the cardio progression to decide whether the last
+                    # session earned an increase.
+                    "intensity": ex.get("intensity"),
+                    "fatigue": ex.get("fatigue"),
                 })
         result.sort(key=lambda item: item.get("date") or "", reverse=True)
         return result
@@ -394,6 +405,8 @@ class WorkoutRecommender:
                 recommendation["strategy"] = progression_result.strategy
             if progression_result.branch:
                 recommendation["branch"] = progression_result.branch.to_dict()
+            if progression_result.progression_options:
+                recommendation["progression_options"] = progression_result.progression_options
             rep_range = progression_result.reasoning_context.get("rep_range")
             if rep_range:
                 recommendation["rep_range"] = list(rep_range)

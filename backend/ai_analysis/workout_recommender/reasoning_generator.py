@@ -11,6 +11,24 @@ from typing import Dict, Optional
 from .progression_engine import Decision
 
 
+# Workout cards need a quick explanation, not a chat response. If optional LLM
+# prose exceeds either limit, use the deterministic template instead of cutting
+# a sentence off in the UI.
+MAX_LLM_REASONING_WORDS = 22
+MAX_LLM_REASONING_CHARS = 150
+
+
+# Every cardio outcome routes to the engine's own guidance string.
+CARDIO_DECISIONS = {
+    Decision.CARDIO_PROGRESS,
+    Decision.CARDIO_HOLD,
+    Decision.CARDIO_BACKOFF,
+    Decision.CARDIO_MAINTAIN,
+    Decision.CARDIO_NEEDS_PACE,
+    Decision.CARDIO_FIRST_SESSION,
+}
+
+
 class ReasoningGenerator:
     """
     Generates human-readable reasoning for progression decisions.
@@ -77,19 +95,23 @@ class ReasoningGenerator:
                 {
                     "role": "system",
                     "content": (
-                        "You are a concise fitness coach. Write 1-2 sentences explaining "
-                        "WHY this progression decision was made. Do NOT suggest different "
-                        "numbers or contradict the decision. Be encouraging but direct."
+                        "You are a concise fitness coach. Write exactly one plain sentence "
+                        "of at most 18 words explaining why this progression decision was "
+                        "made. Do not suggest different numbers or contradict the decision."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
             temperature=0.5,
-            max_tokens=100,
+            max_tokens=40,
         )
 
-        reasoning = response.choices[0].message.content.strip()
-        if not reasoning:
+        reasoning = " ".join(response.choices[0].message.content.split())
+        if (
+            not reasoning
+            or len(reasoning) > MAX_LLM_REASONING_CHARS
+            or len(reasoning.split()) > MAX_LLM_REASONING_WORDS
+        ):
             return self._template_reasoning(decision, reasoning_context, exercise_name)
         return reasoning
 
@@ -132,8 +154,8 @@ class ReasoningGenerator:
             )
 
         parts.append(
-            "Explain WHY in 1-2 sentences, referring to what they actually did last "
-            "session. Do NOT suggest different numbers."
+            "Explain why in one complete sentence of at most 18 words, referring to "
+            "what they did last session. Do not suggest different numbers."
         )
         return "\n".join(parts)
 
@@ -269,14 +291,16 @@ class ReasoningGenerator:
                 f"Focus on form and recovery."
             )
 
-        if decision == Decision.CARDIO_PROGRESS:
+        if decision in CARDIO_DECISIONS:
+            # The cardio engine already writes the "why" — it knows which
+            # variable moved and why the other one didn't, which this cannot
+            # reconstruct from the decision alone.
+            guidance = ctx.get("guidance")
+            if guidance:
+                return guidance
             prev_time = ctx.get("prev_time")
-            new_time = ctx.get("new_time")
-            if prev_time and new_time:
-                return (
-                    f"Based on your last session ({prev_time} min), "
-                    f"adding 1 minute for progressive overload."
-                )
+            if prev_time:
+                return f"Building on your last session ({prev_time} min)."
             return "Starting with a baseline cardio session."
 
         if decision == Decision.BODYWEIGHT_PROGRESS:

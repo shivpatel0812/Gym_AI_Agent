@@ -727,13 +727,24 @@ export default function SessionForm({
                     )}
                   </View>
                   <View style={styles.aiRecommendationDetails}>
-                    {/* Cardio recommendation */}
+                    {/* Cardio recommendation. Sport has no pace to show, so
+                        it gets an effort target instead of a speed. */}
                     {aiRecommendations[ex.exercise_id].time !== undefined ? (
-                      <Text style={styles.aiRecommendationText}>
-                        Target: {aiRecommendations[ex.exercise_id].time} min
-                        {aiRecommendations[ex.exercise_id].speed && 
-                          ` @ ${aiRecommendations[ex.exercise_id].speed} mph`}
-                      </Text>
+                      <View>
+                        <Text style={styles.aiRecommendationText}>
+                          Target: {aiRecommendations[ex.exercise_id].time} min
+                          {aiRecommendations[ex.exercise_id].speed
+                            ? ` @ ${aiRecommendations[ex.exercise_id].speed} mph`
+                            : aiRecommendations[ex.exercise_id].target_intensity
+                              ? ` @ effort ${aiRecommendations[ex.exercise_id].target_intensity}/10`
+                              : ""}
+                        </Text>
+                        {aiRecommendations[ex.exercise_id].guidance ? (
+                          <Text style={styles.aiRecommendationSetText}>
+                            {aiRecommendations[ex.exercise_id].guidance}
+                          </Text>
+                        ) : null}
+                      </View>
                     ) : aiRecommendations[ex.exercise_id].sets && Array.isArray(aiRecommendations[ex.exercise_id].sets) ? (
                       /* Strength recommendation with sets array */
                       <View>

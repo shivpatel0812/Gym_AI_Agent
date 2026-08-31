@@ -105,6 +105,27 @@ class TestIncreaseReps:
         assert result.sets[1].reps == 10
         assert result.sets[2].reps == 10
 
+    def test_custom_cable_keeps_12_lb_and_offers_target_and_stretch(self, engine):
+        """7/8/8 at 12 lb becomes 12x9, never a rounded-down 10 lb target."""
+        result = engine.compute_recommendation(
+            exercise_id="custom-bench-cable-row-single",
+            exercise_name="Bench cable row single",
+            user_goal="Build Muscle",
+            recent_sessions=[build_session(12, [7, 8, 8])],
+            num_sets=3,
+        )
+
+        assert result.decision == Decision.INCREASE_REPS
+        assert [s.weight for s in result.sets] == [12, 12, 12]
+        assert [s.reps for s in result.sets] == [9, 9, 9]
+        assert [s.preferred_reps for s in result.sets] == [9, 9, 9]
+        assert result.progression_options == [
+            {"kind": "target", "label": "Target", "weight": 12, "reps": 9},
+            {"kind": "stretch", "label": "If strong", "weight": 12, "reps": 10},
+        ]
+        assert result.branch.action == "Move up to 15 lbs next session"
+        assert result.sets[0].to_dict()["preferred_reps"] == 9
+
 
 # === Increase Weight ===
 
@@ -343,6 +364,13 @@ class TestLightDay:
 # === Cardio ===
 
 class TestCardio:
+    """
+    Cardio used to add a minute AND half a mile per hour every session,
+    unconditionally. These pin the replacement: one variable moves at a time,
+    duration first, and only when the last session earned it. Detailed
+    behaviour lives in test_cardio_progression.py.
+    """
+
     def test_cardio_no_history(self, engine):
         result = engine.compute_recommendation(
             exercise_id="default-cardio-run",
@@ -351,11 +379,12 @@ class TestCardio:
             recent_sessions=[],
             num_sets=1,
         )
-        assert result.decision == Decision.CARDIO_PROGRESS
-        assert result.time == 10
+        assert result.decision == Decision.CARDIO_FIRST_SESSION
+        assert result.time == 15
+        assert result.speed is None, "no pace until the user has logged one"
         assert result.sets == []
 
-    def test_cardio_with_history(self, engine):
+    def test_cardio_builds_duration_before_pace(self, engine):
         sessions = [{"date": "2024-01-01", "sets": [], "time": 20, "speed": 6.0}]
         result = engine.compute_recommendation(
             exercise_id="default-cardio-run",
@@ -365,8 +394,21 @@ class TestCardio:
             num_sets=1,
         )
         assert result.decision == Decision.CARDIO_PROGRESS
-        assert result.time == 21
-        assert result.speed == 6.5
+        assert result.time == 22, "duration moves by the goal's step"
+        assert result.speed == 6.0, "pace is held while duration is still building"
+
+    def test_cardio_raises_pace_once_duration_target_is_held(self, engine):
+        # Build Muscle targets 25 minutes; at the target, pace starts moving.
+        sessions = [{"date": "2024-01-01", "sets": [], "time": 25, "speed": 6.0}]
+        result = engine.compute_recommendation(
+            exercise_id="default-cardio-run",
+            exercise_name="Run",
+            user_goal="Build Muscle",
+            recent_sessions=sessions,
+            num_sets=1,
+        )
+        assert result.time == 25, "duration is held while pace builds"
+        assert result.speed == 6.2
 
 
 # === Bodyweight ===
@@ -508,4 +550,3 @@ class TestAlwaysProgressFromLastHit:
         )
         assert result.decision == Decision.INCREASE_REPS
         assert [s.reps for s in result.sets[:3]] == [8, 8, 8]
-

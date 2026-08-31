@@ -18,6 +18,7 @@ import {
   dismissPlanSuggestions,
   getPlanProjection,
   getPlanSuggestions,
+  type CardioWeekPoint,
   type PendingPlanSuggestions,
   type PlanProjection,
   type ProjectedDay,
@@ -237,6 +238,53 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
   );
 }
 
+/**
+ * A cardio lift on a plan day.
+ *
+ * Cardio has no load and no rep band, so the lifting card had nothing to put
+ * in it — before the projector understood cardio it rendered an empty shell
+ * with no target and no chart. This shows the two things cardio actually has:
+ * how long, and how hard.
+ */
+function CardioSummary({ exercise }: { exercise: ProjectedExercise }) {
+  const next = exercise.cardio_realistic?.[0] || exercise.cardio_current;
+  const target = (exercise.cardio_realistic || []).reduce<CardioWeekPoint | undefined>(
+    (best, point) => (!best || point.minutes > best.minutes ? point : best),
+    undefined
+  );
+  const isSport = exercise.cardio_modality === "sport";
+
+  return (
+    <View style={styles.accessory}>
+      <View style={styles.accessoryCopy}>
+        <View style={styles.nameRow}>
+          <Text style={styles.exerciseName}>{exercise.exercise_name}</Text>
+          <View style={[styles.roleBadge, styles.maintainBadge]}>
+            <Text style={[styles.roleBadgeText, styles.maintainText]}>
+              {isSport ? "SPORT" : "CARDIO"}
+            </Text>
+          </View>
+        </View>
+        <Text style={styles.roleCopy}>
+          {target && next && target.minutes > next.minutes
+            ? `Building toward ${target.minutes} min`
+            : isSport
+              ? "Play at a hard but repeatable effort."
+              : "Holding this session length on purpose."}
+        </Text>
+      </View>
+      <View>
+        <Text style={[styles.label, { textAlign: "right" }]}>NEXT SESSION</Text>
+        <Text style={styles.accessoryTarget}>
+          {next ? `${next.minutes} min` : "—"}
+          {next?.speed ? ` @ ${next.speed}` : ""}
+        </Text>
+        {next?.speed ? <Text style={styles.mutedSmall}>mph</Text> : null}
+      </View>
+    </View>
+  );
+}
+
 function ExerciseSummary({
   exercise,
   onPress,
@@ -244,6 +292,7 @@ function ExerciseSummary({
   exercise: ProjectedExercise;
   onPress: () => void;
 }) {
+  if (exercise.is_cardio) return <CardioSummary exercise={exercise} />;
   const role = roleFor(exercise);
   const target = peak(exercise.realistic);
   const sessions = lastSessions(exercise, 2);

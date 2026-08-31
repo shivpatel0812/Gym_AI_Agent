@@ -28,6 +28,12 @@ from typing import Any, Dict, List, Optional
 
 from .workout_recommender.goal_configs import RepRangeConfig, resolve_goal_config
 from .workout_recommender.prescription import SessionOutcome, evaluate_session
+from .workout_recommender.exercise_metadata import is_cardio
+from .workout_recommender.cardio_progression import (
+    CardioModality,
+    classify_modality,
+    compute_cardio_progression,
+)
 from .workout_recommender.progression_engine import ProgressionEngine
 
 # Beyond this the projection is fantasy — the plan will have been revised, the
@@ -100,6 +106,30 @@ class WeekPoint:
 
 
 @dataclass
+class CardioWeekPoint:
+    """
+    A projected cardio session.
+
+    Kept separate from WeekPoint rather than borrowing its fields: a cardio
+    week has minutes and a pace, not a load and a rep count, and squeezing it
+    into the lifting shape would render "45 lb x 6" on a treadmill card.
+    """
+
+    week: int
+    minutes: int
+    speed: Optional[float] = None
+    decision: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"week": self.week, "minutes": self.minutes}
+        if self.speed is not None:
+            payload["speed"] = self.speed
+        if self.decision:
+            payload["decision"] = self.decision
+        return payload
+
+
+@dataclass
 class ExerciseProjection:
     exercise_id: str
     exercise_name: str
@@ -112,7 +142,17 @@ class ExerciseProjection:
     # estimate and should be presented with much less confidence.
     seeded_from_history: bool = True
 
+    # Cardio projects duration and pace instead of load. When this is set the
+    # lifting curves are empty and clients should read these.
+    is_cardio: bool = False
+    cardio_modality: Optional[str] = None
+    cardio_current: Optional[CardioWeekPoint] = None
+    cardio_best_case: List[CardioWeekPoint] = field(default_factory=list)
+    cardio_realistic: List[CardioWeekPoint] = field(default_factory=list)
+
     def to_dict(self) -> Dict[str, Any]:
+        if self.is_cardio:
+            return self._cardio_dict()
         start = self.current.e1rm if self.current else 0
         # Peak rather than final: estimated 1RM dips on the session a weight
         # jump lands (50x10 estimates higher than 55x6), so reading the gain off
@@ -134,6 +174,30 @@ class ExerciseProjection:
                 "realistic_e1rm": round(end_real - start, 1),
                 "best_case_pct": round((end_best - start) / start * 100, 1) if start else None,
                 "realistic_pct": round((end_real - start) / start * 100, 1) if start else None,
+            },
+        }
+
+    def _cardio_dict(self) -> Dict[str, Any]:
+        start = self.cardio_current.minutes if self.cardio_current else 0
+        end_best = max((p.minutes for p in self.cardio_best_case), default=start)
+        end_real = max((p.minutes for p in self.cardio_realistic), default=start)
+        return {
+            "exercise_id": self.exercise_id,
+            "exercise_name": self.exercise_name,
+            "day_name": self.day_name,
+            "sessions_per_week": self.sessions_per_week,
+            "seeded_from_history": self.seeded_from_history,
+            "is_cardio": True,
+            "cardio_modality": self.cardio_modality,
+            "current": None,
+            "best_case": [],
+            "realistic": [],
+            "cardio_current": self.cardio_current.to_dict() if self.cardio_current else None,
+            "cardio_best_case": [p.to_dict() for p in self.cardio_best_case],
+            "cardio_realistic": [p.to_dict() for p in self.cardio_realistic],
+            "gain": {
+                "best_case_minutes": end_best - start,
+                "realistic_minutes": end_real - start,
             },
         }
 
@@ -246,6 +310,24 @@ class PlanProjector:
         simulated = list(history or [])
         seeded = bool(simulated)
 
+        # Cardio progresses minutes and pace, not load. Running it through the
+        # lifting walk below produced an empty projection — `result.sets` is
+        # always [] for cardio, so the loop broke on week one and the Plan Hub
+        # rendered a card with no target and no chart.
+        if is_cardio(exercise_id, exercise_name, exercise_record):
+            return self._project_cardio(
+                exercise_id=exercise_id,
+                exercise_name=exercise_name,
+                day_name=day_name,
+                history=simulated,
+                user_goal=user_goal,
+                weeks=weeks,
+                sessions_per_week=sessions_per_week,
+                focus_goal=focus_goal,
+                adherence=adherence,
+                seeded=seeded,
+            )
+
         current = None
         if simulated:
             latest = simulated[0].get("sets") or []
@@ -340,6 +422,115 @@ class PlanProjector:
             realistic=self._stretch(best_case, current, adherence),
             seeded_from_history=seeded,
         )
+
+    def _project_cardio(
+        self,
+        exercise_id: str,
+        exercise_name: str,
+        day_name: str,
+        history: List[Dict],
+        user_goal: str,
+        weeks: int,
+        sessions_per_week: int,
+        focus_goal: Optional[str],
+        adherence: float,
+        seeded: bool,
+    ) -> "ExerciseProjection":
+        """
+        Walk the cardio engine forward the same way the lifting one is walked.
+
+        The simulated trainee does what is asked and reports it went fine, so
+        this is the ceiling. Because the engine builds duration to a goal
+        target and then stops, the curve flattens on its own — there is no
+        plausibility cap to apply here, the prescription already has one.
+        """
+        simulated = list(history)
+        current = None
+        if simulated:
+            latest = simulated[0]
+            minutes = latest.get("time")
+            if minutes:
+                current = CardioWeekPoint(
+                    week=0,
+                    minutes=int(minutes),
+                    speed=latest.get("speed"),
+                )
+
+        best_case: List[CardioWeekPoint] = []
+        for week in range(1, weeks + 1):
+            point = None
+            for _ in range(sessions_per_week):
+                prescription = compute_cardio_progression(
+                    exercise_id=exercise_id,
+                    exercise_name=exercise_name,
+                    history=simulated[:4],
+                    user_goal=user_goal,
+                    focus_goal=focus_goal,
+                )
+                point = CardioWeekPoint(
+                    week=week,
+                    minutes=prescription.time,
+                    speed=prescription.speed,
+                    decision=prescription.decision,
+                )
+                simulated.insert(0, {
+                    "date": f"week-{week}",
+                    "time": prescription.time,
+                    "speed": prescription.speed,
+                    # The simulated trainee finishes comfortably; anything else
+                    # would be modelling a user who is not following the plan.
+                    "fatigue": 5,
+                })
+            if point:
+                best_case.append(point)
+
+        if current is None and best_case:
+            first = best_case[0]
+            current = CardioWeekPoint(week=0, minutes=first.minutes, speed=first.speed)
+
+        return ExerciseProjection(
+            exercise_id=exercise_id,
+            exercise_name=exercise_name,
+            day_name=day_name,
+            sessions_per_week=sessions_per_week,
+            current=None,
+            seeded_from_history=seeded,
+            is_cardio=True,
+            cardio_modality=classify_modality(exercise_id, exercise_name).value,
+            cardio_current=current,
+            cardio_best_case=best_case,
+            cardio_realistic=self._stretch_cardio(best_case, current, adherence),
+        )
+
+    @staticmethod
+    def _stretch_cardio(
+        best_case: List[CardioWeekPoint],
+        current: Optional[CardioWeekPoint],
+        adherence: float,
+    ) -> List[CardioWeekPoint]:
+        """
+        The same time-stretch the lifting curve gets, for the same reason.
+
+        Someone training two sessions in three takes half again as long to
+        reach the same duration. Reporting the ceiling as the forecast is the
+        failure this whole module was written to avoid.
+        """
+        if not best_case:
+            return []
+        rate = max(0.1, min(1.0, adherence or DEFAULT_ADHERENCE))
+        stretched = []
+        for index in range(len(best_case)):
+            source_index = int(index * rate)
+            source = best_case[min(source_index, len(best_case) - 1)]
+            stretched.append(
+                CardioWeekPoint(
+                    week=index + 1,
+                    minutes=source.minutes,
+                    speed=source.speed,
+                    decision=source.decision,
+                )
+            )
+        return stretched
 
     @staticmethod
     def _stretch(

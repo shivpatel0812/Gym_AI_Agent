@@ -479,8 +479,8 @@ class TestFillerSetPadding:
         assert result.sets[1].reps == 9
         assert result.sets[2].reps == 9
 
-    def test_odd_logged_weight_is_normalized_in_recommendation(self, engine):
-        """Recommendations use the exercise's valid 5 lb resolution."""
+    def test_logged_weight_is_preserved_while_adding_reps(self, engine):
+        """A load proven on the user's equipment is valid even off a 5 lb grid."""
         sessions = [build_session(77.3, [8, 8, 7])]
         result = engine.compute_recommendation(
             exercise_id="default-chest-db-bench-press",
@@ -490,4 +490,4 @@ class TestFillerSetPadding:
             num_sets=3,
         )
         assert result.decision == Decision.INCREASE_REPS
-        assert all(s.weight == 75 for s in result.sets)
+        assert all(s.weight == 77.3 for s in result.sets)

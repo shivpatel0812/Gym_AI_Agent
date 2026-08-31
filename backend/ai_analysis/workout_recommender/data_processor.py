@@ -40,6 +40,8 @@ class DataProcessor:
                     "sets": exercise.get("sets", []),
                     "time": exercise.get("time"),
                     "speed": exercise.get("speed"),
+                    "intensity": exercise.get("intensity"),
+                    "fatigue": exercise.get("fatigue"),
                     "session_id": session.get("id")
                 })
         

@@ -334,18 +334,21 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
     split_context = _attach_referenced_workout(
         user_id, _load_current_split(user_id, request.split_id), conversation
     )
-    # When a plan is already live, this is a revision of it, not a blank sheet.
-    # Without this the builder only ever saw the conversation, so asking to add
-    # two workouts produced a two-day plan that replaced a five-day one.
+    # What this proposal is revising. A live plan first; failing that, the draft
+    # the user is still deciding on. Consulting only the active plan meant that
+    # a user with none — having just ended one — had every regeneration built
+    # from the conversation alone, so "put dips on the push day" returned a plan
+    # containing only push days and quietly lost pull and legs.
     store = PlanStore(db, user_id)
     active = store.get_active()
+    baseline = active or store.latest_draft(conversation_id=request.conversation_id)
     result = _builder().build_plan(
         conversation=conversation,
         split_context=split_context,
         profile=get_user_profile_for_ai(db, user_id),
         history_summary=_history_summary(user_id),
         plan_mode=plan_mode,
-        existing_plan=_revision_base(active),
+        existing_plan=_revision_base(baseline),
         history_context=_history_context(user_id),
     )
     if result["status"] == "error":
@@ -357,9 +360,16 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
     plan["owns_linked_split"] = False
     # Computed from the stored plans, not narrated by the model, so the review
     # screen can show what this would replace rather than only what it is.
-    plan["diff"] = diff_plans(active, plan)
+    plan["diff"] = diff_plans(baseline, plan)
+    if baseline is not None and baseline is not active:
+        # Say which draft this supersedes, so the review screen can explain a
+        # removed day as "this drops Legs from your last draft".
+        plan["revises_draft_id"] = baseline.get("id")
 
     plan_id = store.save_draft(plan, source_conversation_id=request.conversation_id)
+    # One reviewable draft per conversation; the rest are superseded so the next
+    # regeneration cannot pick up a version the user already moved past.
+    store.supersede_drafts(keep_id=plan_id, conversation_id=request.conversation_id)
     saved = store.get(plan_id)
     return {"status": "success", **_plan_response(saved), "tokens_used": result.get("tokens_used")}
 
@@ -380,9 +390,16 @@ async def adjust_plan(request: AdjustPlanRequest, user_id: str = Depends(get_use
     the active plan is untouched until the user activates the revision.
     """
     store = PlanStore(db, user_id)
-    active = store.get_active()
+    # Adjusting a draft is the common case during review — refusing unless a
+    # plan is already live sent users back through /propose, which is where the
+    # days went missing.
+    active = store.get_active() or store.latest_draft(
+        conversation_id=request.conversation_id
+    )
     if not active:
-        raise HTTPException(status_code=404, detail="No active plan to adjust")
+        raise HTTPException(
+            status_code=404, detail="No active or draft plan to adjust"
+        )
 
     conversation = _conversation_messages(user_id, request.conversation_id)
     conversation = conversation + [{"role": "user", "content": request.adjustment}]

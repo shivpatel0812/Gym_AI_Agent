@@ -18,6 +18,9 @@ STATUS_DRAFT = "draft"
 STATUS_ACTIVE = "active"
 STATUS_PAUSED = "paused"
 STATUS_COMPLETED = "completed"
+# A draft replaced by a newer proposal. Kept rather than deleted so the
+# history of what was offered stays readable.
+STATUS_SUPERSEDED = "superseded"
 
 LIVE_STATUSES = {STATUS_ACTIVE}
 
@@ -77,6 +80,47 @@ class PlanStore:
             for plan in self.list_plans(limit=limit)
             if plan.get("status") != STATUS_DRAFT
         ]
+
+    def latest_draft(self, conversation_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        The newest draft still awaiting review, optionally from one conversation.
+
+        A draft is a plan the user is mid-way through deciding on. Regenerating
+        while one is pending is iteration on *that* draft — "put dips on the
+        push day" — not a request to start from nothing. Because only the
+        active plan was ever consulted, a user with no active plan had every
+        regeneration built from the conversation alone, which silently dropped
+        the days that conversation happened not to mention.
+        """
+        for plan in self.list_plans():
+            if plan.get("status") != STATUS_DRAFT:
+                continue
+            if conversation_id and plan.get("source_conversation_id") != conversation_id:
+                continue
+            return plan
+        return None
+
+    def supersede_drafts(self, keep_id: Optional[str] = None,
+                         conversation_id: Optional[str] = None) -> int:
+        """
+        Retire drafts that a newer proposal has replaced.
+
+        Without this every regeneration leaves another reviewable draft behind,
+        and `latest_draft` starts picking between plans the user has mentally
+        discarded.
+        """
+        now = datetime.now().isoformat()
+        retired = 0
+        for plan in self.list_plans():
+            if plan["id"] == keep_id or plan.get("status") != STATUS_DRAFT:
+                continue
+            if conversation_id and plan.get("source_conversation_id") != conversation_id:
+                continue
+            self._collection().document(plan["id"]).update(
+                {"status": STATUS_SUPERSEDED, "updated_at": now}
+            )
+            retired += 1
+        return retired
 
     # --- writes -----------------------------------------------------------
 

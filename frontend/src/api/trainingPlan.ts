@@ -139,6 +139,13 @@ export interface WeekPoint {
   decision?: string;
 }
 
+export interface CardioWeekPoint {
+  week: number;
+  minutes: number;
+  speed?: number;
+  decision?: string;
+}
+
 export interface ProjectedExercise extends PlanExercise {
   day_name: string;
   sessions_per_week: number;
@@ -152,6 +159,12 @@ export interface ProjectedExercise extends PlanExercise {
     best_case_pct: number | null;
     realistic_pct: number | null;
   };
+  /** Cardio projects minutes and pace; the lifting curves are empty when set. */
+  is_cardio?: boolean;
+  cardio_modality?: "steady" | "sport";
+  cardio_current?: CardioWeekPoint | null;
+  cardio_best_case?: CardioWeekPoint[];
+  cardio_realistic?: CardioWeekPoint[];
   last_trained?: string | null;
   recent_sessions?: Array<{
     date?: string;

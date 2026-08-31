@@ -12,6 +12,7 @@ from typing import List, Dict, Optional, Any
 import math
 from statistics import median
 
+from .cardio_progression import compute_cardio_progression
 from .goal_configs import get_goal_config, resolve_goal_config, GoalConfig, RepRangeConfig
 from .prescription import (
     Branch,
@@ -65,7 +66,27 @@ class Decision(str, Enum):
     DELOAD = "deload"
     LIGHT_DAY = "light_day"
     CARDIO_PROGRESS = "cardio_progress"
+    # Cardio has more than one outcome now: it can hold on high fatigue, back
+    # off after an abandoned session, sit at a pace ceiling, or need a pace
+    # logged before it can progress one.
+    CARDIO_HOLD = "cardio_hold"
+    CARDIO_BACKOFF = "cardio_backoff"
+    CARDIO_MAINTAIN = "cardio_maintain"
+    CARDIO_NEEDS_PACE = "cardio_needs_pace"
+    CARDIO_FIRST_SESSION = "cardio_first_session"
     BODYWEIGHT_PROGRESS = "bodyweight_progress"
+
+
+# Cardio prescriptions name their own decision; this maps them onto the enum
+# the rest of the pipeline switches on.
+CARDIO_DECISIONS = {
+    "cardio_progress": Decision.CARDIO_PROGRESS,
+    "cardio_hold": Decision.CARDIO_HOLD,
+    "cardio_backoff": Decision.CARDIO_BACKOFF,
+    "cardio_maintain": Decision.CARDIO_MAINTAIN,
+    "cardio_needs_pace": Decision.CARDIO_NEEDS_PACE,
+    "cardio_first_session": Decision.CARDIO_FIRST_SESSION,
+}
 
 
 @dataclass
@@ -81,6 +102,9 @@ class RecommendedSet:
     rep_high: Optional[int] = None
     # "straight" | "top" | "backoff" — what this set is for, under TOP_SET.
     role: str = "straight"
+    # The single target inside rep_low-rep_high. Keeping this structured lets
+    # the workout card say "6-10, aim 9" instead of presenting a vague range.
+    preferred_reps: Optional[int] = None
 
     def to_dict(self) -> Dict:
         payload = {
@@ -93,6 +117,8 @@ class RecommendedSet:
             payload["rep_low"] = self.rep_low
         if self.rep_high is not None:
             payload["rep_high"] = self.rep_high
+        if self.preferred_reps is not None:
+            payload["preferred_reps"] = self.preferred_reps
         return payload
 
 
@@ -106,12 +132,19 @@ class ProgressionResult:
     # Cardio fields (optional)
     time: Optional[int] = None
     speed: Optional[float] = None
+    # "steady" | "sport". Sport has no pace to prescribe, so clients render an
+    # effort target instead of a speed.
+    cardio_modality: Optional[str] = None
+    target_intensity: Optional[int] = None
+    # The cardio analogue of `branch`: what to do if today does not go to plan.
+    guidance: Optional[str] = None
 
     # Which shape of prescription this is, and the "if this, then that" the
     # user reads mid-set. Absent on the states where no branch makes sense
     # (needs-starting-weight, cardio, a first session with no history).
     strategy: Optional[str] = None
     branch: Optional[Branch] = None
+    progression_options: List[Dict] = field(default_factory=list)
 
     def to_dict(self) -> Dict:
         result = {
@@ -123,10 +156,18 @@ class ProgressionResult:
             result["time"] = self.time
         if self.speed is not None:
             result["speed"] = self.speed
+        if self.cardio_modality is not None:
+            result["cardio_modality"] = self.cardio_modality
+        if self.target_intensity is not None:
+            result["target_intensity"] = self.target_intensity
+        if self.guidance is not None:
+            result["guidance"] = self.guidance
         if self.strategy is not None:
             result["strategy"] = self.strategy
         if self.branch is not None:
             result["branch"] = self.branch.to_dict()
+        if self.progression_options:
+            result["progression_options"] = self.progression_options
         return result
 
 
@@ -254,7 +295,13 @@ class ProgressionEngine:
 
         # 1. Cardio?
         if metadata.muscle_group == "cardio":
-            return self._handle_cardio(recent_sessions, num_sets)
+            return self._handle_cardio(
+                exercise_id=exercise_id,
+                exercise_name=exercise_name,
+                recent_sessions=recent_sessions,
+                user_goal=user_goal,
+                focus_goal=focus_goal,
+            )
 
         # 2. Bodyweight (0 increment)?
         if metadata.min_increment_lb == 0.0:
@@ -695,38 +742,45 @@ class ProgressionEngine:
 
         return filtered, has_implausible
 
-    def _handle_cardio(self, recent_sessions: List[Dict], num_sets: int) -> ProgressionResult:
-        """Cardio progression: increase time by 1 min or speed by 0.5."""
-        if not recent_sessions:
-            return ProgressionResult(
-                sets=[],
-                decision=Decision.CARDIO_PROGRESS,
-                confidence="low",
-                reasoning_context={"reason": "first_cardio_session"},
-                time=10,
-                speed=None,
-            )
+    def _handle_cardio(
+        self,
+        exercise_id: str,
+        exercise_name: str,
+        recent_sessions: List[Dict],
+        user_goal: str,
+        focus_goal: Optional[str] = None,
+    ) -> ProgressionResult:
+        """
+        Modality-aware cardio progression.
 
-        latest = recent_sessions[0]
-        prev_time = latest.get("time", 10)
-        prev_speed = latest.get("speed")
-
-        new_time = prev_time + 1
-        new_speed = (prev_speed + 0.5) if prev_speed else None
-
+        Delegates to `cardio_progression`, which builds duration to the goal's
+        target before touching pace and caps both. The old version here added a
+        minute and half a mile per hour every session regardless of goal,
+        modality or how the last one went.
+        """
+        prescription = compute_cardio_progression(
+            exercise_id=exercise_id,
+            exercise_name=exercise_name,
+            history=recent_sessions or [],
+            user_goal=user_goal,
+            focus_goal=focus_goal,
+        )
         return ProgressionResult(
             sets=[],
-            decision=Decision.CARDIO_PROGRESS,
-            confidence="medium",
+            decision=CARDIO_DECISIONS.get(
+                prescription.decision, Decision.CARDIO_PROGRESS
+            ),
+            confidence=prescription.confidence,
             reasoning_context={
-                "reason": "cardio_progression",
-                "prev_time": prev_time,
-                "new_time": new_time,
-                "prev_speed": prev_speed,
-                "new_speed": new_speed,
+                "reason": prescription.context.get("reason", prescription.decision),
+                **prescription.context,
+                "guidance": prescription.guidance,
             },
-            time=new_time,
-            speed=new_speed,
+            time=prescription.time,
+            speed=prescription.speed,
+            cardio_modality=prescription.modality.value,
+            target_intensity=prescription.target_intensity,
+            guidance=prescription.guidance,
         )
 
     def _handle_bodyweight(
@@ -976,6 +1030,7 @@ class ProgressionEngine:
                 rep_low=rep_range.low,
                 rep_high=rep_range.high,
                 role="straight",
+                preferred_reps=aim,
             )
             for i in range(num_sets)
         ]
@@ -1006,6 +1061,7 @@ class ProgressionEngine:
                 rep_low=rep_range.low,
                 rep_high=rep_range.high,
                 role="top",
+                preferred_reps=aim,
             )
         ]
         for i in range(1, num_sets):
@@ -1017,6 +1073,7 @@ class ProgressionEngine:
                     rep_low=rep_range.low,
                     rep_high=rep_range.high,
                     role="backoff",
+                    preferred_reps=rep_range.high,
                 )
             )
 
@@ -1046,10 +1103,11 @@ class ProgressionEngine:
         session actually landed, rather than adding one rep to every set every
         time regardless of what happened.
         """
-        resolution = self._weight_resolution(metadata)
-        weight = self._round_to_increment(
-            max((s.get("weight", 0) for s in latest_sets), default=0), resolution
-        )
+        # A load the user actually logged is a valid load on their equipment.
+        # Do not round 12 lb down to 10 merely because generic cable metadata
+        # assumes 5 lb increments. Resolution matters when moving to a NEW
+        # load, not while adding reps at the same proven load.
+        weight = max((s.get("weight", 0) for s in latest_sets), default=0)
         reps = [int(s.get("reps") or 0) for s in latest_sets if (s.get("reps") or 0) > 0]
         lowest = min(reps) if reps else rep_range.low
         typical = int(median(reps)) if reps else rep_range.low
@@ -1078,11 +1136,28 @@ class ProgressionEngine:
             )
         else:
             sets = self._straight_sets(num_sets, rep_range, weight, aim=aim)
+            next_weight = self._round_to_increment(
+                weight + increment, self._weight_resolution(metadata)
+            )
             branch = Branch(
                 condition=f"All {num_sets} sets at {rep_range.high} reps",
-                action=f"Move up to {weight + increment:g} lbs next session",
+                action=f"Move up to {next_weight:g} lbs next session",
                 kind="earn_weight" if outcome != SessionOutcome.PARTIAL else "fill_band",
             )
+
+        options = [{
+            "kind": "target",
+            "label": "Target",
+            "weight": weight,
+            "reps": aim,
+        }]
+        if rep_range.high > aim:
+            options.append({
+                "kind": "stretch",
+                "label": "If strong",
+                "weight": weight,
+                "reps": rep_range.high,
+            })
 
         return ProgressionResult(
             sets=sets,
@@ -1090,6 +1165,7 @@ class ProgressionEngine:
             confidence="high",
             strategy=strategy.value,
             branch=branch,
+            progression_options=options,
             reasoning_context={
                 "reason": reason,
                 "outcome": outcome.value,
@@ -1114,29 +1190,47 @@ class ProgressionEngine:
         # For padding: use the last available set's data for consistency
         last_available = latest_sets[-1] if latest_sets else {}
         last_reps = last_available.get("reps", rep_range.low)
-        resolution = self._weight_resolution(metadata)
-        last_weight = self._round_to_increment(
-            last_available.get("weight", max_weight), resolution
-        )
+        last_weight = last_available.get("weight", max_weight)
 
         new_sets = []
         for i in range(num_sets):
             if i < len(latest_sets):
                 prev_reps = latest_sets[i].get("reps", rep_range.low)
-                prev_weight = self._round_to_increment(
-                    latest_sets[i].get("weight", max_weight), resolution
-                )
+                prev_weight = latest_sets[i].get("weight", max_weight)
             else:
                 # Pad with last set's data for consistency (not rep_range.low)
                 prev_reps = last_reps
                 prev_weight = last_weight
             new_reps = min(prev_reps + 1, rep_range.high)
-            new_sets.append(RecommendedSet(set_number=i + 1, reps=new_reps, weight=prev_weight))
+            new_sets.append(RecommendedSet(
+                set_number=i + 1,
+                reps=new_reps,
+                weight=prev_weight,
+                rep_low=rep_range.low,
+                rep_high=rep_range.high,
+                preferred_reps=new_reps,
+            ))
+
+        target_reps = max((s.reps for s in new_sets), default=rep_range.low)
+        options = [{
+            "kind": "target",
+            "label": "Target",
+            "weight": max_weight,
+            "reps": target_reps,
+        }]
+        if rep_range.high > target_reps:
+            options.append({
+                "kind": "stretch",
+                "label": "If strong",
+                "weight": max_weight,
+                "reps": rep_range.high,
+            })
 
         return ProgressionResult(
             sets=new_sets,
             decision=Decision.INCREASE_REPS,
             confidence="high",
+            progression_options=options,
             reasoning_context={
                 "reason": "increase_reps",
                 "prev_reps": [s.get("reps", 0) for s in latest_sets[:num_sets]],
@@ -1180,7 +1274,6 @@ class ProgressionEngine:
             # Pad with last available set for consistency
             last_best = best_sets[-1] if best_sets else {}
 
-            resolution = self._weight_resolution(metadata)
             sets = []
             for i in range(num_sets):
                 if i < len(best_sets):
@@ -1189,7 +1282,6 @@ class ProgressionEngine:
                 else:
                     weight = last_best.get("weight", max_weight)
                     reps = last_best.get("reps", rep_range.low)
-                weight = self._round_to_increment(weight, resolution)
                 sets.append(RecommendedSet(set_number=i + 1, reps=reps, weight=weight))
 
             return ProgressionResult(
@@ -1211,8 +1303,7 @@ class ProgressionEngine:
             # its reps, which is how a lifter who had just moved up got handed
             # back the load they had outgrown. The load they last worked is the
             # right one to try again; only the rep target rewinds.
-            resolution = self._weight_resolution(metadata)
-            weight = self._round_to_increment(max_weight, resolution)
+            weight = max_weight
 
             prev_typical = None
             if len(recent_sessions) >= 2:
@@ -1223,12 +1314,26 @@ class ProgressionEngine:
             aim = max(rep_range.low, min(aim, rep_range.high))
 
             sets = self._straight_sets(num_sets, rep_range, weight, aim=aim)
+            options = [{
+                "kind": "target",
+                "label": "Target",
+                "weight": weight,
+                "reps": aim,
+            }]
+            if rep_range.high > aim:
+                options.append({
+                    "kind": "stretch",
+                    "label": "If strong",
+                    "weight": weight,
+                    "reps": rep_range.high,
+                })
 
             return ProgressionResult(
                 sets=sets,
                 decision=Decision.INCREASE_REPS,
                 confidence="medium",
                 strategy=ProgressionStrategy.BAND.value,
+                progression_options=options,
                 branch=Branch(
                     condition=f"If {aim} reps will not go again",
                     action="Hold this load once more before backing it off",

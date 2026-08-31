@@ -24,6 +24,17 @@ class ExerciseMetadata:
     is_unilateral: bool = False  # True for single-arm/leg exercises
 
 
+# Every catalog cardio id shares this prefix.
+CARDIO_ID_PREFIX = "default-cardio"
+
+CARDIO_METADATA = ExerciseMetadata(
+    compound=False,
+    muscle_group="cardio",
+    equipment="Treadmill",
+    min_increment_lb=0.0,
+    is_unilateral=False,
+)
+
 DEFAULT_METADATA = ExerciseMetadata(
     compound=False,
     muscle_group="unknown",
@@ -163,6 +174,14 @@ def resolve_exercise_metadata(
     # 1. Check seeded catalog first
     if exercise_id in EXERCISE_METADATA:
         return EXERCISE_METADATA[exercise_id]
+
+    # 1b. The catalog namespaces cardio by id, and the eleven sport entries
+    # (default-cardio-sport-*) were never seeded individually. Without this
+    # they resolved to DEFAULT_METADATA — a 5 lb-increment machine exercise —
+    # so a logged basketball game was routed through the lifting progression
+    # and came back asking for a starting weight.
+    if str(exercise_id or "").startswith(CARDIO_ID_PREFIX):
+        return CARDIO_METADATA
 
     # 2. Try to build from exercise record + name inference
     record = exercise_record or {}

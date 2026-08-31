@@ -35,6 +35,7 @@ import {
   buildSessionPayload,
   confidencePct,
   emptySessionForm,
+  emptyWorkoutSets,
   formatExerciseSessionSnapshot,
   formatLastPerformance,
   formatShortDate,
@@ -64,7 +65,6 @@ import {
   sessionDurationMinutes,
   sessionHeadline,
   sessionToForm,
-  setsFromLastWorkout,
   splitBadgeColors,
   splitLabel,
   toStoredRecommendation,
@@ -81,6 +81,51 @@ const PLAN_GOAL_LABELS: Record<string, string> = {
   fat_loss: "Fat Loss Focus",
   general: "General Focus",
 };
+
+/**
+ * Older saved recommendations may contain paragraph-length LLM prose. Keep
+ * short explanations as written; replace verbose ones with a complete summary
+ * derived from the recommendation itself instead of clipping them in the UI.
+ */
+function compactRecommendationReasoning(recommendation: any): string {
+  const reasoning = String(recommendation?.reasoning || "").replace(/\s+/g, " ").trim();
+  if (!reasoning || (reasoning.length <= 150 && reasoning.split(" ").length <= 22)) {
+    return reasoning;
+  }
+
+  const firstSet = Array.isArray(recommendation?.sets) ? recommendation.sets[0] : null;
+  const weight = Number(firstSet?.weight || 0);
+  const reps = Number(
+    firstSet?.preferred_reps ?? firstSet?.reps ?? recommendation?.suggested_reps ?? 0
+  );
+  const load = weight > 0 ? ` at ${weight} lbs` : "";
+
+  switch (recommendation?.progression_type) {
+    case "increase_reps":
+    case "bodyweight_progress":
+      return reps > 0
+        ? `Last session earned a rep increase—aim for ${reps} reps${load}.`
+        : "Last session earned a small rep increase while keeping the same load.";
+    case "increase_weight":
+      return weight > 0
+        ? `You reached the top of your range, so move to ${weight} lbs and rebuild reps.`
+        : "You reached the top of your range, so increase the load and rebuild reps.";
+    case "fill_band":
+      return `Keep the same load and bring every set into the target rep range.`;
+    case "maintain":
+      return `Hold the current load while you rebuild consistent reps.`;
+    case "deload":
+      return weight > 0
+        ? `Use ${weight} lbs this session to recover before resuming progression.`
+        : "Use a lighter session to recover before resuming progression.";
+    case "first_session":
+      return weight > 0
+        ? `Use this session to establish a clean baseline at ${weight} lbs.`
+        : "Use this session to establish a clean baseline.";
+    default:
+      return "This target follows your latest completed session and current rep range.";
+  }
+}
 
 /**
  * Label an exercise only when the plan genuinely changes how it's trained.
@@ -115,7 +160,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const [maxExerciseData, setMaxExerciseData] = useState<Record<string, any>>({});
   const [aiRecommendations, setAiRecommendations] = useState<Record<string, any>>({});
   const [aiRecommendationLoading, setAiRecommendationLoading] = useState<Record<string, boolean>>({});
-  const [nextSetLoading, setNextSetLoading] = useState<Record<string, boolean>>({});
   const [startingWeights, setStartingWeights] = useState<Record<string, string>>({});
   const [collapsedExercises, setCollapsedExercises] = useState<Record<number, boolean>>({});
   const [showExercisePicker, setShowExercisePicker] = useState(false);
@@ -147,7 +191,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   } | null>(null);
 
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRecApplyRef = useRef<Set<string>>(new Set());
   const staleRecRetryRef = useRef<Set<string>>(new Set());
   const latestNextSetRequestRef = useRef<Record<string, string>>({});
   const previousNextSetRequestRef = useRef<Record<string, string>>({});
@@ -385,9 +428,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         setAiRecommendations((prev) => ({ ...prev, [exerciseId]: rec }));
         setFormData((prev) => {
           if (!prev.exercises.some((ex) => ex.exercise_id === exerciseId)) return prev;
-          const shouldApplySets =
-            recHasWeightedSets(rec) && pendingRecApplyRef.current.has(exerciseId);
-          if (shouldApplySets) pendingRecApplyRef.current.delete(exerciseId);
           return {
             ...prev,
             exercises: prev.exercises.map((ex) =>
@@ -396,7 +436,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                     ...ex,
                     ai_recommendation: stored,
                     ...(rec?.plan_context ? { plan_context: rec.plan_context } : {}),
-                    ...(shouldApplySets ? { sets: mapRecSets(rec) } : {}),
                   }
                 : ex
             ),
@@ -483,8 +522,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         setMaxExerciseData((prev) => ({ ...prev, [exerciseId]: maxResponse.data }));
       }
     } catch {}
-    if (!isCardio) pendingRecApplyRef.current.add(exerciseId);
-    const lastSets = !isCardio ? setsFromLastWorkout(lastData, 3) : null;
     const newExercise: SessionExercise = isCardio
       ? {
           exercise_id: exerciseId,
@@ -500,11 +537,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
       : {
           exercise_id: exerciseId,
           exercise_name: exerciseName,
-          sets: lastSets || [
-            { set_number: 1, reps: 0, weight: undefined },
-            { set_number: 2, reps: 0, weight: undefined },
-            { set_number: 3, reps: 0, weight: undefined },
-          ],
+          sets: emptyWorkoutSets(3),
         };
     setFormData((prev) => {
       const next = [...prev.exercises];
@@ -711,19 +744,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         const response = await apiClient.get(lastExerciseUrl(ex.exercise_id));
         if (response.data) {
           setLastExerciseData((prev) => ({ ...prev, [ex.exercise_id]: response.data }));
-          if (!isCardioExercise(ex)) {
-            const setCount = Array.isArray(ex.sets) ? ex.sets.length : 3;
-            const lastSets = setsFromLastWorkout(response.data, setCount);
-            if (lastSets) {
-              setFormData((prev) => {
-                const exercises = [...prev.exercises];
-                if (exercises[idx]) {
-                  exercises[idx] = { ...exercises[idx], sets: lastSets };
-                }
-                return { ...prev, exercises };
-              });
-            }
-          }
         }
       } catch {}
       try {
@@ -735,7 +755,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         }
       } catch {}
       if (!isCardioExercise(ex)) {
-        pendingRecApplyRef.current.add(ex.exercise_id);
         fetchAiRecommendation(ex.exercise_id, ex.exercise_name, idx);
       }
     }
@@ -921,21 +940,13 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
             ...(sport ? { intensity: 5, fatigue: 5 } : { speed: undefined }),
           };
         }
-        const lastSets = setsFromLastWorkout(lastResults[idx], ex.sets || 3);
-        pendingRecApplyRef.current.add(ex.exercise_id);
+        const setCount = Math.max(1, Number(ex.sets) || 3);
         return {
           exercise_id: ex.exercise_id,
           exercise_name: ex.exercise_name,
           // Resolved server-side; carried through for display only
           plan_context: ex.plan_context,
-          sets:
-            lastSets ||
-            Array.from({ length: ex.sets || 3 }, (_, i) => ({
-              set_number: i + 1,
-              reps: 0,
-              weight: undefined,
-              completed: false,
-            })),
+          sets: emptyWorkoutSets(setCount),
         };
       });
       setFormData({
@@ -983,14 +994,13 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const addSet = (idx: number) => {
     const exercise = formData.exercises[idx];
     const currentSets = Array.isArray(exercise.sets) ? exercise.sets : [];
-    const last = currentSets[currentSets.length - 1];
     patchExercise(idx, {
       sets: [
         ...currentSets,
         {
           set_number: currentSets.length + 1,
-          reps: last?.reps || 0,
-          weight: last?.weight,
+          reps: 0,
+          weight: undefined,
           completed: false,
         },
       ],
@@ -1013,36 +1023,31 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const updateSet = (exerciseIdx: number, setIdx: number, patch: Partial<WorkoutSet>) => {
     const exercise = formData.exercises[exerciseIdx];
     const currentSets = Array.isArray(exercise.sets) ? [...exercise.sets] : [];
-    currentSets[setIdx] = { ...currentSets[setIdx], ...patch };
+    const previous = currentSets[setIdx];
+    const updated: WorkoutSet = { ...previous, ...patch };
+    const wasComplete = Boolean(previous?.completed);
+    updated.completed = isValidSet(updated);
+    currentSets[setIdx] = updated;
     patchExercise(exerciseIdx, { sets: currentSets });
+
+    if (!wasComplete && updated.completed) {
+      void recommendNextAfterCompletedSet(exerciseIdx, currentSets, setIdx);
+    }
   };
 
-  const completeSetAndRecommendNext = async (exerciseIdx: number, setIdx: number) => {
+  const recommendNextAfterCompletedSet = async (
+    exerciseIdx: number,
+    sets: WorkoutSet[],
+    completedSetIdx: number
+  ) => {
     const exercise = formDataRef.current.exercises[exerciseIdx];
     if (!exercise || !Array.isArray(exercise.sets)) return;
-    const sets = [...exercise.sets];
-    const set = sets[setIdx];
 
-    if (set.completed) {
-      sets[setIdx] = { ...set, completed: false };
-      patchExercise(exerciseIdx, { sets });
-      return;
-    }
-    if (!isValidSet(set)) {
-      Alert.alert("Finish the set", "Enter the reps and weight before marking this set complete.");
-      return;
-    }
-    if (set.rpe == null && !set.difficulty) {
-      Alert.alert("How did it feel?", "Enter RPE or tap FEEL before completing the set so the next recommendation can adapt.");
-      return;
-    }
-
-    sets[setIdx] = { ...set, completed: true };
-    patchExercise(exerciseIdx, { sets });
     const remaining = sets.filter((s) => !s.completed);
     if (!remaining.length) return;
 
     const completed = sets.filter((s) => s.completed);
+    const set = sets[completedSetIdx];
     const earlierExercises = formDataRef.current.exercises.slice(0, exerciseIdx).map((ex) => ({
       exercise_id: ex.exercise_id,
       exercise_name: ex.exercise_name,
@@ -1050,7 +1055,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     }));
     const requestId = `${exercise.exercise_id}-${set.set_number}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     latestNextSetRequestRef.current[exercise.exercise_id] = requestId;
-    setNextSetLoading((prev) => ({ ...prev, [exercise.exercise_id]: true }));
     try {
       const response = await apiClient.post(
         `/api/workout-sessions/ai-recommendation/${exercise.exercise_id}/next-set`,
@@ -1073,35 +1077,21 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
       const nextIndex = sets.findIndex((s) => !s.completed);
       if (nextIndex < 0) return;
       const next = response.data.next_set;
-      previousSuggestedSetRef.current[exercise.exercise_id] = {
-        index: nextIndex,
-        set: { ...sets[nextIndex] },
-      };
-      sets[nextIndex] = {
-        ...sets[nextIndex],
-        reps: Number(next.preferred_reps ?? next.reps) || sets[nextIndex].reps,
-        weight: next.weight,
-        rep_low: next.rep_low,
-        rep_high: next.rep_high,
-        preferred_reps: next.preferred_reps,
-        completed: false,
-      };
       const updatedRecommendation = {
         ...(aiRecommendations[exercise.exercise_id] || exercise.ai_recommendation || {}),
         next_set_reasoning: response.data.reasoning,
         next_set_action: response.data.action,
         next_set_request_id: requestId,
+        suggested_next_set: next,
+        suggested_next_set_index: nextIndex,
       };
       patchExercise(exerciseIdx, {
-        sets,
         ai_recommendation: toStoredRecommendation(updatedRecommendation),
       });
       setAiRecommendations((prev) => ({ ...prev, [exercise.exercise_id]: updatedRecommendation }));
       setUpdatedSetIndex((prev) => ({ ...prev, [exercise.exercise_id]: nextIndex }));
     } catch {
-      Alert.alert("Recommendation unavailable", "Your set was saved, but the next-set suggestion could not be refreshed.");
-    } finally {
-      setNextSetLoading((prev) => ({ ...prev, [exercise.exercise_id]: false }));
+      // Set is still logged; next-set suggestion is best-effort.
     }
   };
 
@@ -1684,7 +1674,26 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                             </Text>
                           ) : null}
                           {aiRec.reasoning ? (
-                            <Text style={styles.reasoning}>{aiRec.reasoning}</Text>
+                            <Text style={styles.reasoning}>
+                              {compactRecommendationReasoning(aiRec)}
+                            </Text>
+                          ) : null}
+                          {Array.isArray(aiRec.progression_options) &&
+                          aiRec.progression_options.length > 1 ? (
+                            <View style={styles.progressionOptions}>
+                              {aiRec.progression_options.slice(0, 2).map((option: any) => (
+                                <View key={option.kind || option.label} style={styles.progressionOption}>
+                                  <Text style={styles.progressionOptionLabel}>
+                                    {(option.label || "Option").toUpperCase()}
+                                  </Text>
+                                  <Text style={styles.progressionOptionValue}>
+                                    {Number(option.weight) > 0
+                                      ? `${option.weight} lb × ${option.reps}`
+                                      : `${option.reps} reps`}
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
                           ) : null}
                           {aiRec.next_set_reasoning ? (
                             <View style={styles.nextSetCoach}>
@@ -1841,10 +1850,25 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                             <Text style={[styles.setCol, { flex: 2 }]}>REPS</Text>
                             <Text style={[styles.setCol, { flex: 2 }]}>WEIGHT</Text>
                             <Text style={[styles.setCol, { flex: 1.2 }]}>RPE</Text>
-                            <View style={{ width: 50 }} />
+                            <View style={{ width: 24 }} />
                           </View>
                           {exerciseSets.map((set, setIdx) => {
                             const lastSet = lastSets[setIdx];
+                            const recSet =
+                              aiRec?.suggested_next_set_index === setIdx
+                                ? aiRec?.suggested_next_set
+                                : Array.isArray(aiRec?.sets)
+                                  ? aiRec.sets[setIdx]
+                                  : null;
+                            const repPlaceholder =
+                              recSet?.preferred_reps ??
+                              recSet?.reps ??
+                              (lastSet && lastSet.reps > 0 ? lastSet.reps : undefined);
+                            const weightPlaceholder =
+                              recSet?.weight ??
+                              (lastSet?.weight != null && lastSet.weight > 0
+                                ? lastSet.weight
+                                : undefined);
                             return (
                               <View key={setIdx} style={[
                                 styles.setBlock,
@@ -1871,7 +1895,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                                     })
                                   }
                                   placeholder={
-                                    lastSet && lastSet.reps > 0 ? String(lastSet.reps) : "—"
+                                    repPlaceholder != null && Number(repPlaceholder) > 0
+                                      ? String(repPlaceholder)
+                                      : "—"
                                   }
                                   placeholderTextColor={colors.textMuted}
                                   style={[styles.setInput, { flex: 2 }]}
@@ -1885,8 +1911,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                                     })
                                   }
                                   placeholder={
-                                    lastSet && lastSet.weight != null && lastSet.weight > 0
-                                      ? String(lastSet.weight)
+                                    weightPlaceholder != null && Number(weightPlaceholder) > 0
+                                      ? String(weightPlaceholder)
                                       : "—"
                                   }
                                   placeholderTextColor={colors.textMuted}
@@ -1904,20 +1930,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                                   placeholderTextColor={colors.textMuted}
                                   style={[styles.setInput, { flex: 1.2 }]}
                                 />
-                                <TouchableOpacity
-                                  disabled={nextSetLoading[ex.exercise_id]}
-                                  onPress={() => completeSetAndRecommendNext(idx, setIdx)}
-                                >
-                                  {nextSetLoading[ex.exercise_id] && setIdx === exerciseSets.findIndex((s) => !s.completed) ? (
-                                    <ActivityIndicator size="small" color={colors.ai} />
-                                  ) : (
-                                    <MaterialCommunityIcons
-                                      name={set.completed ? "check-circle" : "check-circle-outline"}
-                                      size={20}
-                                      color={set.completed ? colors.ai : colors.textMuted}
-                                    />
-                                  )}
-                                </TouchableOpacity>
                                 <TouchableOpacity onPress={() => removeSet(idx, setIdx)}>
                                   <MaterialCommunityIcons
                                     name="close"
@@ -1926,22 +1938,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                                   />
                                 </TouchableOpacity>
                               </View>
-                              {!set.completed ? (
-                                <View style={styles.feelChoices}>
-                                  <Text style={styles.feelPrompt}>How did it feel?</Text>
-                                  {(["easy", "good", "hard", "failed"] as const).map((value) => (
-                                    <TouchableOpacity
-                                      key={value}
-                                      style={[styles.feelChoice, set.difficulty === value && styles.feelChoiceActive]}
-                                      onPress={() => updateSet(idx, setIdx, { difficulty: value })}
-                                    >
-                                      <Text style={[styles.feelChoiceText, set.difficulty === value && styles.feelChoiceTextActive]}>
-                                        {value.charAt(0).toUpperCase() + value.slice(1)}
-                                      </Text>
-                                    </TouchableOpacity>
-                                  ))}
-                                </View>
-                              ) : null}
                               </View>
                             );
                           })}
@@ -1956,6 +1952,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                     <ScrollView
                       horizontal
                       showsHorizontalScrollIndicator={false}
+                      style={styles.cardActionScroll}
                       contentContainerStyle={styles.cardActionRow}
                     >
                       <TouchableOpacity style={styles.actionPillDashed} onPress={() => addSet(idx)}>
@@ -2542,11 +2539,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderBottomWidth: 1,
     borderColor: "rgba(94,234,212,0.2)",
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   aiLoading: { color: colors.ai, fontWeight: "600", marginLeft: 8 },
-  aiHead: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 8 },
+  aiHead: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 7, marginBottom: 6 },
   aiCoach: {
     color: colors.ai,
     fontSize: 10,
@@ -2592,16 +2589,33 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   useStartText: { color: colors.ai, fontWeight: "600", fontSize: 13 },
-  recSets: { flexDirection: "row", gap: 8, marginBottom: 10 },
+  recSets: { flexDirection: "row", gap: 7, marginBottom: 8 },
   recSet: {
     flex: 1,
     backgroundColor: "rgba(11,12,16,0.5)",
-    borderRadius: 12,
-    padding: 10,
+    borderRadius: 10,
+    padding: 8,
   },
   recSetLabel: { color: colors.textMuted, fontSize: 10, fontWeight: "700" },
-  recSetVal: { color: "#fff", fontSize: 13, fontWeight: "700", marginTop: 4 },
-  reasoning: { color: colors.textSecondary, fontSize: 12, lineHeight: 18, marginBottom: 10 },
+  recSetVal: { color: "#fff", fontSize: 13, fontWeight: "700", marginTop: 3 },
+  reasoning: { color: colors.textSecondary, fontSize: 11, lineHeight: 16, marginBottom: 8 },
+  progressionOptions: { flexDirection: "row", gap: 7, marginBottom: 8 },
+  progressionOption: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "rgba(94,234,212,0.22)",
+    borderRadius: 9,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    backgroundColor: "rgba(11,12,16,0.3)",
+  },
+  progressionOptionLabel: {
+    color: colors.textMuted,
+    fontSize: 8,
+    fontWeight: "800",
+    letterSpacing: 0.7,
+  },
+  progressionOptionValue: { color: colors.ai, fontSize: 12, fontWeight: "800", marginTop: 2 },
   nextSetCoach: { backgroundColor: "rgba(94,234,212,0.08)", borderRadius: 8, padding: 10, marginBottom: 10 },
   nextSetLabel: { color: colors.ai, fontSize: 10, fontWeight: "700", marginBottom: 4 },
   nextSetText: { color: colors.text, fontSize: 12, lineHeight: 18 },
@@ -2611,8 +2625,8 @@ const styles = StyleSheet.create({
   applySets: {
     borderWidth: 1,
     borderColor: "rgba(94,234,212,0.4)",
-    borderRadius: 12,
-    paddingVertical: 10,
+    borderRadius: 10,
+    paddingVertical: 8,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -2644,7 +2658,7 @@ const styles = StyleSheet.create({
   statLabelOrange: { color: colors.accentPrimary, fontSize: 10, fontWeight: "700" },
   statLabel: { color: colors.textMuted, fontSize: 10, fontWeight: "600" },
   statVal: { color: "#fff", fontSize: 14, fontWeight: "700", marginTop: 2 },
-  exBody: { paddingHorizontal: 16, paddingVertical: 16 },
+  exBody: { paddingHorizontal: 14, paddingVertical: 10 },
   fieldLabel: {
     fontSize: 10,
     fontWeight: "700",
@@ -2670,29 +2684,23 @@ const styles = StyleSheet.create({
   },
   sliderVal: { color: colors.accentPrimary, fontWeight: "700" },
   sliderEnds: { flexDirection: "row", justifyContent: "space-between" },
-  setHead: { flexDirection: "row", gap: 8, marginBottom: 8 },
-  setCol: { color: colors.textMuted, fontSize: 10, fontWeight: "700" },
-  setRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
-  setBlock: { borderWidth: 1, borderColor: "transparent", borderRadius: 10, padding: 5, marginBottom: 5 },
+  setHead: { flexDirection: "row", gap: 6, marginBottom: 4 },
+  setCol: { color: colors.textMuted, fontSize: 9, fontWeight: "700" },
+  setRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 },
+  setBlock: { borderWidth: 1, borderColor: "transparent", borderRadius: 8, padding: 2, marginBottom: 2 },
   updatedSetBlock: { borderColor: "rgba(94,234,212,0.5)", backgroundColor: "rgba(94,234,212,0.06)" },
   completedSetRow: { opacity: 0.72 },
-  feelChoices: { flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 34 },
-  feelPrompt: { color: colors.textMuted, fontSize: 9, marginRight: 2 },
-  feelChoice: { borderWidth: 1, borderColor: colors.border, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 5 },
-  feelChoiceActive: { borderColor: colors.ai, backgroundColor: "rgba(94,234,212,0.12)" },
-  feelChoiceText: { color: colors.textMuted, fontSize: 9, fontWeight: "600" },
-  feelChoiceTextActive: { color: colors.ai },
-  setNum: { color: colors.textSecondary, fontSize: 14 },
-  lastHint: { color: colors.textMuted, fontSize: 9 },
+  setNum: { color: colors.textSecondary, fontSize: 13 },
+  lastHint: { color: colors.textMuted, fontSize: 8 },
   setInput: {
-    height: 40,
+    height: 34,
     borderRadius: 8,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     color: "#fff",
     textAlign: "center",
-    fontSize: 14,
+    fontSize: 13,
   },
   addSet: {
     marginTop: 4,
@@ -2710,12 +2718,18 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
     backgroundColor: colors.surface,
+    alignItems: "center",
   },
   cardActionRow: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 6,
-    paddingRight: 4,
+    flexGrow: 1,
+    paddingHorizontal: 4,
+  },
+  cardActionScroll: {
+    alignSelf: "stretch",
   },
   actionPillDashed: {
     paddingHorizontal: 12,
@@ -2757,7 +2771,6 @@ const styles = StyleSheet.create({
     borderColor: colors.borderHover,
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: 2,
   },
   recentHistoryLabel: {
     color: colors.textMuted,
@@ -2767,9 +2780,13 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     marginTop: 8,
     marginBottom: 6,
+    textAlign: "center",
+    alignSelf: "stretch",
   },
   muscleHistoryBlock: {
     paddingBottom: 2,
+    alignSelf: "stretch",
+    alignItems: "center",
   },
   inlinePickerWrap: {
     paddingHorizontal: 12,

@@ -40,10 +40,22 @@ export interface ExerciseAiRecommendation {
   has_implausible_data?: boolean;
   time?: number;
   speed?: number;
+  /** "steady" | "sport". Sport has no pace, so clients show an effort target. */
+  cardio_modality?: string;
+  /** 1-10 effort target, for sport cardio where there is no speed to give. */
+  target_intensity?: number;
+  /** The cardio analogue of `branch` — what to do if today doesn't go to plan. */
+  guidance?: string;
   generated_at?: string;
   rep_range?: [number, number];
   strategy?: string;
   branch?: { condition?: string; action?: string; kind?: string };
+  progression_options?: Array<{
+    kind?: "target" | "stretch";
+    label?: string;
+    weight?: number;
+    reps?: number;
+  }>;
   next_set_reasoning?: string;
   next_set_action?: string;
   next_set_request_id?: string;
