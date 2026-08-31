@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
   Modal,
+  PanResponder,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +14,7 @@ import {
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import Svg, { Circle, Line, Polyline, Text as SvgText } from "react-native-svg";
 import Ring from "../nutrition/Ring";
+import ReviseGoalSheet from "./ReviseGoalSheet";
 import {
   acceptPlanSuggestions,
   dismissPlanSuggestions,
@@ -26,6 +28,16 @@ import {
   type WeekPoint,
 } from "../../api/trainingPlan";
 import { borderRadius, colors, spacing } from "../../theme";
+import HistoryStrip from "./HistoryStrip";
+import MuscleGroupCharts from "./MuscleGroupChart";
+import ScrubbableLineChart from "./ScrubbableLineChart";
+import WorkoutDetailCallout from "./WorkoutDetailCallout";
+import {
+  buildExerciseChartPoints,
+  calcE1rm,
+  getSessionRecords,
+  type LoggedSession,
+} from "./chartUtils";
 
 type Role = "building" | "maintaining" | "support";
 type DetailTab = "history" | "roadmap";
@@ -34,13 +46,7 @@ type DetailSelection =
   | { kind: "single"; exercise: ProjectedExercise }
   | { kind: "combined"; exercises: ProjectedExercise[]; label: string };
 
-type SessionRecord = {
-  key: string;
-  date: string;
-  sets: Array<{ setNumber: number; weight: number; reps: number }>;
-  topSet: { weight: number; reps: number };
-  e1rm: number;
-};
+type SessionRecord = LoggedSession;
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -197,7 +203,12 @@ export default function PlanHub({
         </View>
       )}
 
-      <ExerciseDetailModal detail={detail} onClose={() => setDetail(null)} onEdit={onEdit} />
+      <ExerciseDetailModal
+        detail={detail}
+        onClose={() => setDetail(null)}
+        onEdit={onEdit}
+        onSaved={loadProjection}
+      />
     </View>
   );
 }
@@ -225,6 +236,7 @@ function DaySummary({ day, schedule }: { day: ProjectedDay; schedule?: Record<st
         <Metric label="BUILDING" value={`${counts.building} lifts`} accent />
         <Metric label="MAINTAINING" value={`${counts.maintaining} lifts`} />
       </View>
+      <MuscleGroupCharts exercises={day.exercises} />
     </View>
   );
 }
@@ -299,30 +311,33 @@ function ExerciseSummary({
   const goalLine = summaryGoalLine(exercise, role, target);
 
   return (
-    <TouchableOpacity style={styles.summaryCard} onPress={onPress} activeOpacity={0.85}>
-      <View style={styles.summaryHead}>
-        <View style={styles.cardTitleWrap}>
-          <View style={styles.nameRow}>
-            <Text style={styles.exerciseName}>{exercise.exercise_name}</Text>
-            <RoleBadge role={role} />
+    <View style={styles.summaryCard}>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+        <View style={styles.summaryHead}>
+          <View style={styles.cardTitleWrap}>
+            <View style={styles.nameRow}>
+              <Text style={styles.exerciseName}>{exercise.exercise_name}</Text>
+              <RoleBadge role={role} />
+            </View>
+            <Text style={styles.goalLine}>{goalLine}</Text>
           </View>
-          <Text style={styles.goalLine}>{goalLine}</Text>
+          <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textMuted} />
         </View>
-        <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textMuted} />
-      </View>
-      <View style={styles.sessionLogs}>
-        <Text style={styles.label}>LAST SESSIONS</Text>
-        {sessions.length ? (
-          sessions.map((session) => (
-            <Text key={session.key} style={styles.sessionRow}>
-              {session.label}
-            </Text>
-          ))
-        ) : (
-          <Text style={styles.mutedSmall}>No sessions logged yet</Text>
-        )}
-      </View>
-    </TouchableOpacity>
+        <View style={styles.sessionLogs}>
+          <Text style={styles.label}>LAST SESSIONS</Text>
+          {sessions.length ? (
+            sessions.map((session) => (
+              <Text key={session.key} style={styles.sessionRow}>
+                {session.label}
+              </Text>
+            ))
+          ) : (
+            <Text style={styles.mutedSmall}>No sessions logged yet</Text>
+          )}
+        </View>
+      </TouchableOpacity>
+      {role !== "support" ? <HistoryStrip exercise={exercise} flat={role === "maintaining"} /> : null}
+    </View>
   );
 }
 
@@ -369,10 +384,12 @@ function ExerciseDetailModal({
   detail,
   onClose,
   onEdit,
+  onSaved,
 }: {
   detail: DetailSelection | null;
   onClose: () => void;
   onEdit?: (prompt: string) => void;
+  onSaved?: () => void;
 }) {
   if (!detail) return null;
 
@@ -401,7 +418,7 @@ function ExerciseDetailModal({
             {detail.kind === "combined" ? (
               <CombinedExerciseDetail exercises={detail.exercises} onEdit={onEdit} onClose={onClose} />
             ) : (
-              <FocusExerciseDetail exercise={detail.exercise} onEdit={onEdit} onClose={onClose} />
+              <FocusExerciseDetail exercise={detail.exercise} onEdit={onEdit} onClose={onClose} onSaved={onSaved} />
             )}
           </ScrollView>
         </View>
@@ -414,10 +431,13 @@ function FocusExerciseDetail({
   exercise,
   onEdit,
   onClose,
+  onSaved,
 }: {
   exercise: ProjectedExercise;
   onEdit?: (prompt: string) => void;
   onClose: () => void;
+  /** Refetch the projection — a revised target changes the whole roadmap. */
+  onSaved?: () => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("history");
   const role = roleFor(exercise);
@@ -426,7 +446,7 @@ function FocusExerciseDetail({
     <>
       <DetailTabBar tab={tab} onChange={setTab} />
       {tab === "history" ? (
-        <GoalHistoryTab exercise={exercise} role={role} onEdit={onEdit} onClose={onClose} />
+        <GoalHistoryTab exercise={exercise} role={role} onEdit={onEdit} onClose={onClose} onSaved={onSaved} />
       ) : (
         <RoadmapTab exercise={exercise} role={role} />
       )}
@@ -463,11 +483,13 @@ function GoalHistoryTab({
   role,
   onEdit,
   onClose,
+  onSaved,
 }: {
   exercise: ProjectedExercise;
   role: Role;
   onEdit?: (prompt: string) => void;
   onClose: () => void;
+  onSaved?: () => void;
 }) {
   const sessions = useMemo(() => getSessionRecords(exercise), [exercise]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -486,18 +508,33 @@ function GoalHistoryTab({
 
   const maxSets = sessions.reduce((max, session) => Math.max(max, session.sets.length), 0);
   const setFilters: SetFilter[] = ["all", ...Array.from({ length: maxSets }, (_, i) => i + 1)];
+  const chartPoints = useMemo(
+    () =>
+      buildExerciseChartPoints(exercise, (session) => {
+        if (setFilter === "all") return session.e1rm;
+        const set = session.sets[setFilter - 1];
+        return set ? calcE1rm(set.weight, set.reps) : 0;
+      }),
+    [exercise, setFilter]
+  );
+  const [scrubSessions, setScrubSessions] = useState<LoggedSession[]>([]);
+  const [revising, setRevising] = useState(false);
 
   return (
     <>
+      <ReviseGoalSheet
+        exercise={exercise}
+        visible={revising}
+        onClose={() => setRevising(false)}
+        onSaved={() => {
+          onSaved?.();
+          onClose();
+        }}
+      />
       <View style={styles.detailSection}>
         <View style={styles.detailTopRow}>
           <RoleBadge role={role} />
-          <TouchableOpacity
-            onPress={() => {
-              onEdit?.(`I want to revise the goal for ${exercise.exercise_name}. `);
-              onClose();
-            }}
-          >
+          <TouchableOpacity onPress={() => setRevising(true)}>
             <Text style={styles.revise}>Revise goal</Text>
           </TouchableOpacity>
         </View>
@@ -586,12 +623,20 @@ function GoalHistoryTab({
                 );
               })}
             </ScrollView>
-            <InteractiveHistoryChart
-              sessions={sessions}
-              setFilter={setFilter}
-              selectedIndex={activeIndex}
-              onSelectIndex={(index) => setSelectedKey(sessions[index]?.key ?? null)}
+            <ScrubbableLineChart
+              points={chartPoints}
+              height={120}
+              flat={role === "maintaining"}
+              onScrub={(point) => {
+                if (point?.session) {
+                  setScrubSessions([point.session]);
+                  setSelectedKey(point.session.key);
+                } else {
+                  setScrubSessions([]);
+                }
+              }}
             />
+            <WorkoutDetailCallout sessions={scrubSessions} />
           </View>
         </>
       ) : (
@@ -668,144 +713,6 @@ function RoadmapTab({ exercise, role }: { exercise: ProjectedExercise; role: Rol
       </View>
     </>
   );
-}
-
-function InteractiveHistoryChart({
-  sessions,
-  setFilter,
-  selectedIndex,
-  onSelectIndex,
-}: {
-  sessions: SessionRecord[];
-  setFilter: SetFilter;
-  selectedIndex: number;
-  onSelectIndex: (index: number) => void;
-}) {
-  const width = Math.min(Dimensions.get("window").width - 68, 520);
-  const height = 120;
-
-  const points = useMemo(() => {
-    return sessions
-      .map((session, index) => {
-        let value = 0;
-        if (setFilter === "all") {
-          value = session.e1rm;
-        } else {
-          const set = session.sets[setFilter - 1];
-          value = set ? calcE1rm(set.weight, set.reps) : 0;
-        }
-        return { date: session.date, value, index };
-      })
-      .filter((point) => point.value > 0);
-  }, [sessions, setFilter]);
-
-  if (points.length < 2) {
-    return (
-      <Text style={styles.mutedSmall}>
-        {points.length === 1 ? "One session logged — chart starts at two." : "No sets to chart for this filter."}
-      </Text>
-    );
-  }
-
-  const values = points.map((p) => p.value);
-  const min = Math.min(...values) * 0.96;
-  const max = Math.max(...values) * 1.04;
-  const span = max - min || 1;
-  const coords = points.map((point, i) => ({
-    x: 8 + (i / (points.length - 1)) * (width - 16),
-    y: 10 + (1 - (point.value - min) / span) * 66,
-    sessionIndex: point.index,
-  }));
-
-  return (
-    <View style={styles.historyChart}>
-      <Svg width={width} height={height}>
-        {[10, 43, 76].map((y) => (
-          <Line key={y} x1="8" x2={width - 8} y1={y} y2={y} stroke="#252529" strokeDasharray="3 5" />
-        ))}
-        <Polyline
-          points={coords.map((p) => `${p.x},${p.y}`).join(" ")}
-          fill="none"
-          stroke={colors.ai}
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {coords.map((p, i) => {
-          const selected = p.sessionIndex === selectedIndex;
-          return (
-            <Circle
-              key={i}
-              cx={p.x}
-              cy={p.y}
-              r={selected ? 8 : 5}
-              fill={selected ? colors.accentPrimary : i === coords.length - 1 ? "#fff" : colors.ai}
-              stroke={selected ? "#fff" : "transparent"}
-              strokeWidth={2}
-              onPress={() => onSelectIndex(p.sessionIndex)}
-            />
-          );
-        })}
-        <SvgText x="8" y="100" fill={colors.textMuted} fontSize="9">
-          {shortDate(points[0].date)}
-        </SvgText>
-        <SvgText x={width - 46} y="100" fill={colors.textMuted} fontSize="9">
-          {shortDate(points[points.length - 1].date)}
-        </SvgText>
-      </Svg>
-      <Text style={styles.chartCaption}>
-        Tap a point to inspect that session · estimated 1RM
-      </Text>
-    </View>
-  );
-}
-
-function getSessionRecords(exercise: ProjectedExercise): SessionRecord[] {
-  const primary = exercise.recent_sessions || [];
-  const fallback = exercise.history_context?.recent_sessions || [];
-  const merged = primary.length ? primary : fallback;
-  const seen = new Set<string>();
-
-  const raw = merged
-    .filter((session) => session.date && !String(session.date).startsWith("week-"))
-    .filter((session) => {
-      const key = String(session.date);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-  const chronological = [...raw].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-
-  return chronological.map((session, index) => {
-    const sets = (session.sets || [])
-      .filter((set) => set.completed !== false && (set.reps || 0) > 0)
-      .map((set, setIndex) => ({
-        setNumber: setIndex + 1,
-        weight: set.weight || 0,
-        reps: set.reps || 0,
-      }));
-
-    const topSet = sets.reduce(
-      (best, set) => (calcE1rm(set.weight, set.reps) > calcE1rm(best.weight, best.reps) ? set : best),
-      sets[0] || { setNumber: 1, weight: 0, reps: 0 }
-    );
-
-    const e1rm = sets.length ? Math.max(...sets.map((set) => calcE1rm(set.weight, set.reps))) : 0;
-
-    return {
-      key: `${session.date}-${index}`,
-      date: String(session.date),
-      sets,
-      topSet: { weight: topSet.weight, reps: topSet.reps },
-      e1rm: Math.round(e1rm),
-    };
-  });
-}
-
-function calcE1rm(weight: number, reps: number) {
-  if (!weight && !reps) return 0;
-  return (weight || 0) * (1 + (reps || 0) / 30);
 }
 
 function CombinedExerciseDetail({
@@ -946,30 +853,89 @@ function SupportPrescriptionTable({ exercise }: { exercise: ProjectedExercise })
   );
 }
 
+/**
+ * Week-by-week prescriptions: one row per week, one column per workout.
+ *
+ * A lift trained twice a week gets a different prescription each time — heavy
+ * on one day, volume on the other — and every set matters, not just the top
+ * one. Collapsing a week to a single "80 lb x 6" hid both, which is why the
+ * table could not answer "what do I actually do on Friday".
+ */
 function ProgressionTable({ exercise, flat }: { exercise: ProjectedExercise; flat: boolean }) {
-  const rows = useMemo(() => {
-    const source = [exercise.current, ...exercise.realistic].filter(Boolean) as WeekPoint[];
-    return source.map((point, index) => ({
-      key: `${point.week}-${index}`,
-      label: index === 0
-        ? (exercise.seeded_from_history ? "Last logged" : "Starting estimate")
-        : `Week ${point.week || index}`,
-      target: formatTarget(point),
-      e1rm: point.e1rm ? `${Math.round(point.e1rm)} e1RM` : "—",
-    }));
-  }, [exercise, flat]);
+  const { weeks, sessionCount } = useMemo(() => {
+    const schedule = exercise.schedule || [];
+    const byWeek = new Map<number, Map<number, WeekPoint>>();
+    let maxSession = 1;
+    for (const point of schedule) {
+      const session = point.session || 1;
+      maxSession = Math.max(maxSession, session);
+      if (!byWeek.has(point.week)) byWeek.set(point.week, new Map());
+      byWeek.get(point.week)!.set(session, point);
+    }
+    return {
+      weeks: [...byWeek.entries()].sort((a, b) => a[0] - b[0]),
+      sessionCount: maxSession,
+    };
+  }, [exercise]);
 
-  if (!rows.length) {
-    return <Text style={styles.mutedSmall}>No progression data yet</Text>;
-  }
+  // Older payloads have no schedule; fall back to the weekly curve so the
+  // table still renders something rather than disappearing.
+  if (!weeks.length) return <LegacyProgressionTable exercise={exercise} />;
+
+  const describe = (point?: WeekPoint) => {
+    if (!point) return "—";
+    if (point.sets?.length) {
+      return point.sets.map((set) => `${set.weight}x${set.reps}`).join(", ");
+    }
+    return formatTarget(point);
+  };
 
   return (
     <View style={styles.progressionTable}>
-      {rows.map((row) => (
-        <View key={row.key} style={styles.progressionRow}>
-          <Text style={styles.progressionWeek}>{row.label}</Text>
-          <Text style={styles.progressionTarget}>{row.target}</Text>
-          <Text style={styles.progressionE1rm}>{row.e1rm}</Text>
+      {sessionCount > 1 ? (
+        <View style={styles.progressionRow}>
+          <Text style={[styles.progressionWeek, styles.progressionHeader]} />
+          {Array.from({ length: sessionCount }, (_, i) => (
+            <Text key={i} style={[styles.progressionCell, styles.progressionHeader]}>
+              Workout {i + 1}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+      {weeks.map(([week, sessions]) => (
+        <View key={week} style={styles.progressionRow}>
+          <Text style={styles.progressionWeek}>Week {week}</Text>
+          {Array.from({ length: sessionCount }, (_, i) => (
+            <Text key={i} style={styles.progressionCell} numberOfLines={2}>
+              {describe(sessions.get(i + 1))}
+            </Text>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function LegacyProgressionTable({ exercise }: { exercise: ProjectedExercise }) {
+  const source = [exercise.current, ...exercise.realistic].filter(Boolean) as WeekPoint[];
+  if (!source.length) {
+    return <Text style={styles.mutedSmall}>No progression data yet</Text>;
+  }
+  return (
+    <View style={styles.progressionTable}>
+      {source.map((point, index) => (
+        <View key={`${point.week}-${index}`} style={styles.progressionRow}>
+          <Text style={styles.progressionWeek}>
+            {index === 0
+              ? exercise.seeded_from_history
+                ? "Last logged"
+                : "Starting estimate"
+              : `Week ${point.week || index}`}
+          </Text>
+          <Text style={styles.progressionTarget}>{formatTarget(point)}</Text>
+          <Text style={styles.progressionE1rm}>
+            {point.e1rm ? `${Math.round(point.e1rm)} e1RM` : "—"}
+          </Text>
         </View>
       ))}
     </View>
@@ -1041,35 +1007,19 @@ function Trajectory({ exercise, flat }: { exercise: ProjectedExercise; flat: boo
   const plotTop = 12;
   const plotHeight = 78;
   const accent = flat ? colors.ai : colors.accentPrimary;
+  const [scrubSessions, setScrubSessions] = useState<LoggedSession[]>([]);
+  const historyPoints = useMemo(() => buildExerciseChartPoints(exercise), [exercise]);
 
   const chart = useMemo(() => {
     const forward = [exercise.current, ...exercise.realistic].filter(Boolean) as WeekPoint[];
-    const ceiling = [exercise.current, ...(exercise.best_case || [])].filter(
-      Boolean
-    ) as WeekPoint[];
+    const ceiling = [exercise.current, ...(exercise.best_case || [])].filter(Boolean) as WeekPoint[];
+    const past = historyPoints;
+    const pastValues = past.map((p) => p.value).filter((v): v is number => v != null);
 
-    const past = (
-      exercise.history_context?.recent_sessions?.length
-        ? exercise.history_context.recent_sessions
-        : exercise.recent_sessions || []
-    )
-      .filter((session) => session.date && !String(session.date).startsWith("week-"))
-      .map((session) => ({
-        date: String(session.date),
-        e1rm: Math.max(
-          0,
-          ...(session.sets || []).map((set) => (set.weight || 0) * (1 + (set.reps || 0) / 30))
-        ),
-      }))
-      .filter((point) => point.e1rm > 0)
-      // The API returns newest first; a timeline reads oldest to newest.
-      .reverse();
-
-    if (!forward.length && !past.length) return null;
+    if (!forward.length && !pastValues.length) return null;
 
     const forwardValues = forward.map((p) => (flat && forward.length ? forward[0].e1rm : p.e1rm));
     const ceilingValues = flat ? [] : ceiling.map((p) => p.e1rm);
-    const pastValues = past.map((p) => p.e1rm);
     const all = [...forwardValues, ...ceilingValues, ...pastValues];
     if (!all.length) return null;
 
@@ -1078,20 +1028,39 @@ function Trajectory({ exercise, flat }: { exercise: ProjectedExercise; flat: boo
     const span = max - min || 1;
     const y = (value: number) => plotTop + (1 - (value - min) / span) * plotHeight;
 
-    // Today sits proportionally: a long history earns more of the width, but
-    // never so much that the roadmap is squeezed out of view.
-    const historySteps = Math.max(past.length - 1, 0);
+    const plottedPast = past.filter((p) => p.value != null);
+    const historySteps = Math.max(plottedPast.length - 1, 0);
     const forwardSteps = Math.max(forward.length - 1, 1);
     const rawShare = historySteps / (historySteps + forwardSteps || 1);
-    const share = past.length < 2 ? 0 : Math.min(0.5, Math.max(0.2, rawShare));
+    const share = plottedPast.length < 2 ? 0 : Math.min(0.5, Math.max(0.2, rawShare));
     const left = 8;
     const right = width - 8;
     const todayX = left + share * (right - left);
 
-    const pastPoints = past.map((point, i) => ({
-      x: historySteps ? left + (i / historySteps) * (todayX - left) : todayX,
-      y: y(point.e1rm),
-    }));
+    let plottedIndex = -1;
+    const pastCoords = past.flatMap((point) => {
+      if (point.value == null) return [];
+      plottedIndex += 1;
+      return [{
+        x: historySteps ? left + (plottedIndex / historySteps) * (todayX - left) : todayX,
+        y: y(point.value),
+        point,
+      }];
+    });
+
+    const segments: Array<{ x: number; y: number }[]> = [];
+    let current: Array<{ x: number; y: number }> = [];
+    for (const point of past) {
+      if (point.value == null || point.trend === "gap") {
+        if (current.length) segments.push(current);
+        current = [];
+        continue;
+      }
+      const coord = pastCoords.find((c) => c.point.key === point.key);
+      if (coord) current.push({ x: coord.x, y: coord.y });
+    }
+    if (current.length) segments.push(current);
+
     const project = (points: WeekPoint[], values: number[]) =>
       points.map((_, i) => ({
         x: todayX + (i / forwardSteps) * (right - todayX),
@@ -1099,102 +1068,138 @@ function Trajectory({ exercise, flat }: { exercise: ProjectedExercise; flat: boo
       }));
 
     return {
-      past: pastPoints,
+      pastSegments: segments,
+      pastCoords,
       forward: project(forward, forwardValues),
       ceiling: flat || ceiling.length < 2 ? [] : project(ceiling, ceilingValues),
       todayX,
-      firstDate: past.length ? past[0].date : null,
-      sessionCount: past.length,
+      firstDate: plottedPast.length ? plottedPast[0].date : null,
+      sessionCount: plottedPast.length,
+      left,
+      right,
     };
-  }, [exercise, flat, width]);
+  }, [exercise, flat, width, historyPoints]);
+
+  const scrubAt = useCallback(
+    (x: number) => {
+      if (!chart?.pastCoords.length) return;
+      const inHistory = x <= chart.todayX;
+      if (!inHistory) {
+        setScrubSessions([]);
+        return;
+      }
+      let best = chart.pastCoords[0];
+      let bestDist = Infinity;
+      for (const coord of chart.pastCoords) {
+        const dist = Math.abs(coord.x - x);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = coord;
+        }
+      }
+      setScrubSessions(best.point.session ? [best.point.session] : []);
+    },
+    [chart]
+  );
+
+  const scrubAtRef = useRef(scrubAt);
+  scrubAtRef.current = scrubAt;
+
+  const pan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => scrubAtRef.current(e.nativeEvent.locationX),
+      onPanResponderMove: (e) => scrubAtRef.current(e.nativeEvent.locationX),
+      onPanResponderRelease: () => setScrubSessions([]),
+      onPanResponderTerminate: () => setScrubSessions([]),
+    })
+  ).current;
 
   if (!chart) {
     return <Text style={styles.mutedSmall}>No data for this exercise yet.</Text>;
   }
 
-  const line = (points: { x: number; y: number }[]) =>
-    points.map((p) => `${p.x},${p.y}`).join(" ");
+  const line = (points: { x: number; y: number }[]) => points.map((p) => `${p.x},${p.y}`).join(" ");
 
   return (
     <View>
-      <Svg width={width} height={height}>
-        {[15, 52, 89].map((y) => (
-          <Line key={y} x1="8" x2={width - 8} y1={y} y2={y} stroke="#252529" strokeDasharray="3 5" />
-        ))}
+      <View {...pan.panHandlers}>
+        <Svg width={width} height={height}>
+          {[15, 52, 89].map((y) => (
+            <Line key={y} x1="8" x2={width - 8} y1={y} y2={y} stroke="#252529" strokeDasharray="3 5" />
+          ))}
 
-        {/* The boundary between what happened and what is predicted */}
-        <Line
-          x1={chart.todayX}
-          x2={chart.todayX}
-          y1={plotTop - 4}
-          y2={plotTop + plotHeight + 6}
-          stroke={colors.borderHover}
-          strokeWidth="1"
-        />
+          <Line
+            x1={chart.todayX}
+            x2={chart.todayX}
+            y1={plotTop - 4}
+            y2={plotTop + plotHeight + 6}
+            stroke={colors.borderHover}
+            strokeWidth="1"
+          />
 
-        {chart.past.length > 1 ? (
+          {chart.pastSegments.map((segment, i) =>
+            segment.length > 1 ? (
+              <Polyline
+                key={`past-${i}`}
+                points={line(segment)}
+                fill="none"
+                stroke={colors.textSecondary}
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            ) : null
+          )}
+          {chart.pastCoords.map((p, i) => (
+            <Circle key={`h-${i}`} cx={p.x} cy={p.y} r={2.5} fill={colors.textSecondary} />
+          ))}
+
+          {chart.ceiling.length ? (
+            <Polyline
+              points={line(chart.ceiling)}
+              fill="none"
+              stroke={accent}
+              strokeOpacity={0.45}
+              strokeWidth="2"
+              strokeDasharray="5 4"
+              strokeLinecap="round"
+            />
+          ) : null}
           <Polyline
-            points={line(chart.past)}
+            points={line(chart.forward)}
             fill="none"
-            stroke={colors.textSecondary}
-            strokeWidth="2.5"
+            stroke={accent}
+            strokeWidth="3"
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-        ) : null}
-        {chart.past.map((p, i) => (
-          <Circle key={`h-${i}`} cx={p.x} cy={p.y} r={2.5} fill={colors.textSecondary} />
-        ))}
+          {chart.forward.map((p, i) => (
+            <Circle key={`f-${i}`} cx={p.x} cy={p.y} r={i === 0 ? 4.5 : 2.5} fill={i === 0 ? "#fff" : accent} />
+          ))}
 
-        {chart.ceiling.length ? (
-          <Polyline
-            points={line(chart.ceiling)}
-            fill="none"
-            stroke={accent}
-            strokeOpacity={0.45}
-            strokeWidth="2"
-            strokeDasharray="5 4"
-            strokeLinecap="round"
-          />
-        ) : null}
-        <Polyline
-          points={line(chart.forward)}
-          fill="none"
-          stroke={accent}
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {chart.forward.map((p, i) => (
-          <Circle key={`f-${i}`} cx={p.x} cy={p.y} r={i === 0 ? 4.5 : 2.5} fill={i === 0 ? "#fff" : accent} />
-        ))}
-
-        {chart.firstDate ? (
-          <SvgText x="8" y={height - 26} fill={colors.textMuted} fontSize="9">
-            {shortDate(chart.firstDate)}
+          {chart.firstDate ? (
+            <SvgText x="8" y={height - 26} fill={colors.textMuted} fontSize="9">
+              {shortDate(chart.firstDate)}
+            </SvgText>
+          ) : null}
+          <SvgText x={chart.todayX} y={height - 26} fill={colors.textSecondary} fontSize="9" textAnchor="middle">
+            TODAY
           </SvgText>
-        ) : null}
-        <SvgText
-          x={chart.todayX}
-          y={height - 26}
-          fill={colors.textSecondary}
-          fontSize="9"
-          textAnchor="middle"
-        >
-          TODAY
-        </SvgText>
-        <SvgText x={width - 34} y={height - 26} fill={colors.textMuted} fontSize="9">
-          12 WK
-        </SvgText>
-      </Svg>
+          <SvgText x={width - 34} y={height - 26} fill={colors.textMuted} fontSize="9">
+            12 WK
+          </SvgText>
+        </Svg>
+      </View>
+
+      <Text style={styles.chartCaption}>Drag the logged side to inspect each session</Text>
 
       <View style={styles.legend}>
         {chart.sessionCount > 1 ? (
           <View style={styles.legendItem}>
             <View style={[styles.legendSolid, { backgroundColor: colors.textSecondary }]} />
-            <Text style={styles.legendText}>
-              Logged — {chart.sessionCount} sessions you actually did
-            </Text>
+            <Text style={styles.legendText}>Logged — {chart.sessionCount} sessions you actually did</Text>
           </View>
         ) : null}
         <View style={styles.legendItem}>
@@ -1208,6 +1213,8 @@ function Trajectory({ exercise, flat }: { exercise: ProjectedExercise; flat: boo
           </View>
         ) : null}
       </View>
+
+      <WorkoutDetailCallout sessions={scrubSessions} />
     </View>
   );
 }
@@ -1363,7 +1370,8 @@ function nextScheduled(day: string, schedule?: Record<string, string>) {
   for (let i = 0; i < 8; i++) {
     const d = new Date(today);
     d.setDate(today.getDate() + i);
-    if (schedule[WEEKDAYS[d.getDay()]] === day) {
+    const key = WEEKDAYS[d.getDay()].toLowerCase();
+    if (schedule[key] === day) {
       return i === 0 ? "Today" : i === 1 ? "Tomorrow" : WEEKDAYS[d.getDay()];
     }
   }
@@ -1624,6 +1632,14 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   progressionWeek: { width: 56, fontSize: 11, fontWeight: "700", color: colors.textSecondary },
+  progressionCell: { flex: 1, fontSize: 12, fontWeight: "700", color: colors.textPrimary, paddingRight: 6 },
+  progressionHeader: {
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    color: colors.textMuted,
+    textTransform: "uppercase",
+  },
   progressionTarget: { flex: 1, fontSize: 13, fontWeight: "700", color: colors.textPrimary },
   progressionE1rm: { fontSize: 11, color: colors.textMuted },
   dualTargets: { flexDirection: "row", gap: 12 },

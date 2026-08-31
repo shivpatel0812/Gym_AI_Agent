@@ -29,6 +29,24 @@ The idea that like for incline lifts and all focus on strength and other focus j
 History strip — a compact visual of recent sessions (step up for building, flat line for maintaining), surfacing stalls inline.
 Accessory lifts skip goal/history entirely — just a target rep range and a "support work" label.
 
+Charts 
+All three charts are draggable — scrub along the exercise chart, the muscle-group chart, or the history strip and pull up the actual logged workout behind that point (date, exercise, sets/reps/weight).
+Exercise chart — what counts as progression: more weight at the same or more reps (e.g. 80s×5 → 85s×5), or more reps at the same weight (e.g. 80s×5 → 80s×7), or e1RM trending up over sessions.
+Exercise chart — what doesn't count: repeating the same weight/reps session to session (that's maintaining, not progressing), fewer reps at the same weight (a stall or regression), or a gap with no logged session (missing data — should show as a gap, not flatline as if nothing changed).
+Muscle-group chart — what counts as progression: total training stimulus/volume for that muscle trending up over a rolling window (few weeks), even if the specific exercise varies week to week (incline one week, cable flies the next).
+Muscle-group chart — what doesn't count: swapping to a different exercise without an actual increase in effort or volume (that's just substitution, not growth), or one unusually heavy/light session skewing the trend — should smooth over a window, not react to a single point.
+
+Example prompt
+
+I want to increase my incline dumbbell press i recently just gott 80s for 4 and couple weeks ago i was doing them for 5 reps not including the lift off and i hit 85s for 1 i just took some time off from incline i couldnt go to the gym (i still did some chest though if u see). So the focus is to increase that dumbbell incline press but in general rest of my workouts I still want to improve overall i just want to get more muscular but not gain too much fat. In addition to this here i havent noted down legs but for legs I do put 2 plates and a 25 for like 4 reps and like 2 plates for like 6-8 reps on a smith machine and can do bulgarian for 8 reps of 70 pound dumbbells on each hand.
+What should show up 
+All the workouts that will happen each day so pull push legs pull push if that is what the user does mon - fri 
+In the results we should for each workout see a progression chart of what the ai recommends 
+Ex:  workout 1 week 1 80s 6, 80s 4 80s 4, workout 2 75s 8 75s 8 70s 1 week 2 80s 7 80s 5 80s 5 workout 2 75s 9 75s 9 70s 10
+This needs to be a chart like view  with each week being a row a separate row and the workout 1 on column 1 and workout 2 column 2
+Make sure all workout categories are full one the issues i am getting gis when i telly he chatbot i want to improve incline bench in the plan that is the only exercise it puts we need it so that all parts of the workout as filled up
+The chat bot should always ask do we want to follow a workout structure you already do so it is able to pull from previous workouts and follow that structure right now when we pull it doesnt get all the workouts i believe 
+
 Pending AI suggestions surface as a distinct, reviewable card (accept/discard) — never silently overwrite the live plan.
 How the plan gets built and edited
 Two different inputs write to the same underlying plan data, but they're not interchangeable:
@@ -37,6 +55,4 @@ Plan Mode (guided, structured conversation) is the editor of record for macro de
 AI coach chat (freeform, in-workout) is for micro patches — adjusting one exercise's next-session target based on how the last session went. It proposes a structured change via a tool call; it never redefines goals or adds/removes exercises. Those proposals are what populate the pending-suggestion card.
 
 The Plan Hub itself is a read view over this shared plan schema — it doesn't generate content, it renders whatever Plan Mode and AI coach patches have written.
-Why this matters
-This turns the AI coach from a source of disposable advice into the thing that keeps one durable plan up to date — and gives the user a single screen that answers "what do I do today, and is it working toward something or just holding steady."
 

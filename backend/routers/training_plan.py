@@ -17,7 +17,11 @@ from auth import get_user_id
 from db import db
 from ai_analysis.plan_builder import PlanBuilder, PLAN_MODES, DEFAULT_PLAN_MODE
 from ai_analysis.plan_diff import diff_plans
-from ai_analysis.plan_edits import apply_edits, EDIT_STATUS_PENDING, EDIT_STATUS_APPLIED, EDIT_STATUS_DISMISSED
+from ai_analysis.plan_scope import resolve_plan_mode
+from ai_analysis.plan_edits import (
+    apply_edits, normalize_edits,
+    EDIT_STATUS_PENDING, EDIT_STATUS_APPLIED, EDIT_STATUS_DISMISSED,
+)
 from ai_analysis.plan_suggestion_store import PlanSuggestionStore
 from ai_analysis.training_history import build_history_context
 from ai_analysis.plan_store import PlanStore, STATUS_ACTIVE, STATUS_PAUSED, STATUS_COMPLETED
@@ -44,7 +48,9 @@ HISTORY_WINDOW_DAYS = 28
 class ProposePlanRequest(BaseModel):
     conversation_id: Optional[str] = None
     split_id: Optional[str] = None
-    plan_mode: Optional[str] = DEFAULT_PLAN_MODE
+    # None means "the user never touched the mode selector", which is the
+    # signal to honour what they told the coach instead of a UI default.
+    plan_mode: Optional[str] = None
     goal_statement: Optional[str] = None
 
 
@@ -52,6 +58,26 @@ class AdjustPlanRequest(BaseModel):
     conversation_id: Optional[str] = None
     adjustment: str
     plan_mode: Optional[str] = None
+
+
+class ExerciseGoalRequest(BaseModel):
+    """
+    A guided per-exercise revision.
+
+    Plan Mode is the editor of record for whether a lift is building or
+    maintaining, and the spec asks for it to be re-enterable per exercise so a
+    user can flip one lift without redoing the program. These fields map
+    straight onto plan fields — no model call, no inference.
+    """
+    day_name: str
+    exercise_id: Optional[str] = None
+    exercise_name: str
+    # building -> priority high, maintaining -> normal, support -> supporting
+    role: Optional[str] = None
+    goal: Optional[str] = None
+    target_rep_range: Optional[List[int]] = None
+    sets: Optional[int] = None
+    notes: Optional[str] = None
 
 
 class SuggestionActionRequest(BaseModel):
@@ -320,11 +346,22 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
     Generate a plan proposal from a coach conversation. Saved as a draft —
     it does not affect recommendations until activated.
     """
-    plan_mode = request.plan_mode if request.plan_mode in PLAN_MODES else DEFAULT_PLAN_MODE
-
     conversation = _conversation_messages(user_id, request.conversation_id)
     if request.goal_statement:
         conversation = conversation + [{"role": "user", "content": request.goal_statement}]
+
+    # Plan Mode asks how much the split may change and users answer plainly.
+    # That answer used to be discarded in favour of the modal's default, so a
+    # user who said "keep the current structure" still got an adapt-mode plan
+    # that moved their exercises around.
+    scope = resolve_plan_mode(
+        requested=request.plan_mode,
+        conversation=conversation,
+        valid_modes=PLAN_MODES,
+        default=DEFAULT_PLAN_MODE,
+    )
+    plan_mode = scope["mode"]
+
     if not conversation:
         raise HTTPException(
             status_code=400,
@@ -361,6 +398,9 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
     # Computed from the stored plans, not narrated by the model, so the review
     # screen can show what this would replace rather than only what it is.
     plan["diff"] = diff_plans(baseline, plan)
+    # Recorded so the review screen can say "following your split, as you asked"
+    # rather than leaving the user to notice the mode was wrong afterwards.
+    plan["plan_mode_source"] = scope["source"]
     if baseline is not None and baseline is not active:
         # Say which draft this supersedes, so the review screen can explain a
         # removed day as "this drops Legs from your last draft".
@@ -676,6 +716,81 @@ async def get_plan_projection(
             "days": days_out,
             "nutrition": nutrition,
         },
+    }
+
+
+ROLE_TO_PRIORITY = {
+    "building": "high",
+    "maintaining": "normal",
+    "support": "supporting",
+}
+
+
+@router.post("/exercise-goal")
+async def set_exercise_goal(
+    request: ExerciseGoalRequest, user_id: str = Depends(get_user_id)
+):
+    """
+    Revise one lift's intent directly, without regenerating the plan.
+
+    The guided counterpart to a coach patch: because the client sends typed
+    fields rather than prose, this applies immediately instead of staging a
+    suggestion. It writes through the same validated path a hand edit uses, and
+    it can only retarget an exercise the plan already contains.
+    """
+    store = PlanStore(db, user_id)
+    plan = store.get_active()
+    if not plan:
+        raise HTTPException(status_code=404, detail="No active plan to edit")
+
+    edits: List[dict] = []
+
+    def add(op: str, value):
+        edits.append({
+            "op": op,
+            "day_name": request.day_name,
+            "exercise_name": request.exercise_name,
+            "value": value,
+            "rationale": "Set from Plan Mode.",
+        })
+
+    if request.role:
+        priority = ROLE_TO_PRIORITY.get(request.role.strip().lower())
+        if not priority:
+            raise HTTPException(
+                status_code=422,
+                detail="role must be building, maintaining or support",
+            )
+        add("set_priority", priority)
+    if request.goal:
+        add("set_goal", request.goal)
+    if request.target_rep_range:
+        add("set_rep_range", request.target_rep_range)
+    if request.sets is not None:
+        add("set_sets", request.sets)
+    if request.notes is not None:
+        add("set_notes", request.notes)
+
+    if not edits:
+        raise HTTPException(status_code=400, detail="Nothing to change")
+
+    normalized, rejected = normalize_edits(plan, edits)
+    if not normalized:
+        raise HTTPException(
+            status_code=422,
+            detail=(rejected[0]["reason"] if rejected else "Those changes could not be applied."),
+        )
+
+    days, applied_ids = apply_edits(plan, normalized)
+    if not applied_ids:
+        raise HTTPException(status_code=422, detail="That exercise is no longer in your plan.")
+
+    updated = _write_days(user_id, plan, days)
+    return {
+        "status": "success",
+        **_plan_response(store.get(plan["id"]) or updated),
+        "applied": [edit["title"] for edit in normalized],
+        "rejected": rejected,
     }
 
 

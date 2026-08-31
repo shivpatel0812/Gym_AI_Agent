@@ -137,6 +137,10 @@ export interface WeekPoint {
   reps: number;
   e1rm: number;
   decision?: string;
+  /** Which workout within the week (1-based). */
+  session?: number;
+  /** Every prescribed set, so "80x6, 80x4, 80x4" can be rendered in full. */
+  sets?: Array<{ set_number?: number; weight: number; reps: number }>;
 }
 
 export interface CardioWeekPoint {
@@ -153,6 +157,8 @@ export interface ProjectedExercise extends PlanExercise {
   current: WeekPoint | null;
   best_case: WeekPoint[];
   realistic: WeekPoint[];
+  /** One entry per workout: week 1 workout 1, week 1 workout 2, week 2… */
+  schedule?: WeekPoint[];
   gain: {
     best_case_e1rm: number;
     realistic_e1rm: number;
@@ -169,6 +175,13 @@ export interface ProjectedExercise extends PlanExercise {
   recent_sessions?: Array<{
     date?: string;
     sets?: Array<{ weight?: number; reps?: number; completed?: boolean }>;
+    /**
+     * The session's heaviest set, computed server-side without regard to the
+     * `completed` flag. Used as a fallback when every set in a session is
+     * unticked, which is common in older logs where people entered weight and
+     * reps but never tapped the checkbox.
+     */
+    top_set?: { weight?: number; reps?: number } | null;
   }>;
   history_context?: {
     lifetime_session_count: number;
@@ -219,7 +232,9 @@ export async function getPlanProjection(weeks = 12): Promise<PlanProjection | nu
 export async function proposePlan(params: {
   conversationId?: string | null;
   splitId?: string | null;
-  planMode: PlanMode;
+  /** null when the user never opened the mode selector — the backend then
+   *  honours what they told the coach in the interview instead. */
+  planMode: PlanMode | null;
   goalStatement?: string;
 }): Promise<PlanEnvelope> {
   const res = await apiClient.post(
@@ -227,7 +242,7 @@ export async function proposePlan(params: {
     {
       conversation_id: params.conversationId ?? null,
       split_id: params.splitId ?? null,
-      plan_mode: params.planMode,
+      plan_mode: params.planMode ?? null,
       goal_statement: params.goalStatement ?? null,
     },
     // Plan generation is a large GPT-4o call
@@ -309,4 +324,35 @@ export async function dismissPlanSuggestions(
   await apiClient.post(`/api/training-plan/suggestions/${setId}/dismiss`, {
     edit_ids: editIds ?? null,
   });
+}
+
+export type ExerciseRole = "building" | "maintaining" | "support";
+
+/**
+ * Guided per-exercise revision — Plan Mode, re-entered for one lift.
+ *
+ * Typed fields rather than prose, so this applies directly instead of staging
+ * a suggestion for review: there is nothing inferred that could be wrong.
+ */
+export async function setExerciseGoal(params: {
+  dayName: string;
+  exerciseId?: string;
+  exerciseName: string;
+  role?: ExerciseRole;
+  goal?: string;
+  targetRepRange?: [number, number];
+  sets?: number;
+  notes?: string;
+}): Promise<PlanEnvelope> {
+  const res = await apiClient.post("/api/training-plan/exercise-goal", {
+    day_name: params.dayName,
+    exercise_id: params.exerciseId ?? null,
+    exercise_name: params.exerciseName,
+    role: params.role ?? null,
+    goal: params.goal ?? null,
+    target_rep_range: params.targetRepRange ?? null,
+    sets: params.sets ?? null,
+    notes: params.notes ?? null,
+  });
+  return { plan: res.data.plan, progress: res.data.progress };
 }

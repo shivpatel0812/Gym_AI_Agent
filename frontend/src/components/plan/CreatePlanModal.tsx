@@ -68,6 +68,10 @@ export default function CreatePlanModal({
   const [step, setStep] = useState<Step>("setup");
   const [modes, setModes] = useState<PlanModeOption[]>(FALLBACK_MODES);
   const [mode, setMode] = useState<PlanMode>("adapt_split");
+  // Whether the user actually opened the selector and chose. Sending the
+  // default as though it were a choice overrode what they told the coach —
+  // "keep my current structure" still produced an adapt-mode plan.
+  const [modeChosen, setModeChosen] = useState(false);
   const [goalText, setGoalText] = useState("");
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [conversationTitle, setConversationTitle] = useState<string | null>(null);
@@ -96,6 +100,7 @@ export default function CreatePlanModal({
         const list = Array.isArray(res.data) ? res.data : [];
         setSplits(list.map((s: any) => ({ id: s.id, name: s.name })));
         setHasSplit(list.length > 0);
+        // Not a user choice — with no split there is nothing to follow.
         if (list.length === 0) setMode("build_for_me");
         else setSplitId(list[list.length - 1].id);
       })
@@ -126,7 +131,7 @@ export default function CreatePlanModal({
       const { plan } = await proposePlan({
         conversationId: selectedConversation,
         splitId: mode === "build_for_me" ? null : splitId,
-        planMode: mode,
+        planMode: modeChosen ? mode : null,
         goalStatement: goalText.trim() || undefined,
       });
       setDraft(plan);
@@ -278,7 +283,10 @@ export default function CreatePlanModal({
                         disabled && styles.modeCardDisabled,
                       ]}
                       disabled={disabled}
-                      onPress={() => setMode(option.id)}
+                      onPress={() => {
+                        setMode(option.id);
+                        setModeChosen(true);
+                      }}
                     >
                       <View style={styles.modeHeader}>
                         <MaterialCommunityIcons

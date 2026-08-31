@@ -92,6 +92,13 @@ class WeekPoint:
     reps: int
     e1rm: float
     decision: Optional[str] = None
+    # Which session within the week this is (1-based). A lift trained twice a
+    # week gets a different prescription each time — heavy then volume — and
+    # collapsing the week to one number threw the second one away.
+    session: int = 1
+    # Every prescribed set, not just the top one. "80x6, 80x4, 80x4" is what
+    # the user is actually asked to do; the top set alone cannot render it.
+    sets: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         payload = {
@@ -99,9 +106,12 @@ class WeekPoint:
             "weight": round(self.weight, 1),
             "reps": self.reps,
             "e1rm": self.e1rm,
+            "session": self.session,
         }
         if self.decision:
             payload["decision"] = self.decision
+        if self.sets:
+            payload["sets"] = self.sets
         return payload
 
 
@@ -144,6 +154,10 @@ class ExerciseProjection:
 
     # Cardio projects duration and pace instead of load. When this is set the
     # lifting curves are empty and clients should read these.
+    # Session-level prescriptions: one entry per workout, so a week with two
+    # sessions renders as two columns rather than one averaged number.
+    schedule: List[WeekPoint] = field(default_factory=list)
+
     is_cardio: bool = False
     cardio_modality: Optional[str] = None
     cardio_current: Optional[CardioWeekPoint] = None
@@ -169,6 +183,7 @@ class ExerciseProjection:
             "current": self.current.to_dict() if self.current else None,
             "best_case": [p.to_dict() for p in self.best_case],
             "realistic": [p.to_dict() for p in self.realistic],
+            "schedule": [p.to_dict() for p in self.schedule],
             "gain": {
                 "best_case_e1rm": round(end_best - start, 1),
                 "realistic_e1rm": round(end_real - start, 1),
@@ -332,7 +347,17 @@ class PlanProjector:
         if simulated:
             latest = simulated[0].get("sets") or []
             if latest:
-                best = max(latest, key=lambda s: (s.get("weight") or 0) * (s.get("reps") or 0))
+                # Judged by estimated 1RM, not weight x reps. Raw volume picks
+                # the lightest set whenever it carries the most reps — for a
+                # session of 80x3, 80x4, 70x6 it chose 70x6 (420) over 80x4
+                # (320), understating the baseline. That both flattened the
+                # projection, by making the plausibility cap bite on week one,
+                # and put a phantom step at TODAY, because the history line
+                # plots max e1RM per session and this did not.
+                best = max(
+                    latest,
+                    key=lambda s: e1rm(s.get("weight") or 0, int(s.get("reps") or 0)),
+                )
                 current = WeekPoint(
                     week=0,
                     weight=float(best.get("weight") or 0),
@@ -341,12 +366,17 @@ class PlanProjector:
                 )
 
         best_case: List[WeekPoint] = []
+        # Every session, not just the last of each week. The weekly curve is
+        # what the chart draws; this is what the week-by-week table needs, with
+        # one column per workout.
+        schedule: List[WeekPoint] = []
         baseline_e1rm = current.e1rm if current else None
         plateaued_at: Optional[int] = None
 
         for week in range(1, weeks + 1):
             point = None
-            for _ in range(sessions_per_week):
+            sessions_recorded = 0
+            for session_index in range(1, sessions_per_week + 1):
                 result = self.engine.compute_recommendation(
                     exercise_id=exercise_id,
                     exercise_name=exercise_name,
@@ -367,6 +397,11 @@ class PlanProjector:
                     reps=top.reps,
                     e1rm=e1rm(top.weight, top.reps),
                     decision=result.decision.value,
+                    session=session_index,
+                    sets=[
+                        {"set_number": s.set_number, "weight": s.weight, "reps": s.reps}
+                        for s in result.sets
+                    ],
                 )
                 if baseline_e1rm is None:
                     baseline_e1rm = candidate.e1rm
@@ -385,6 +420,8 @@ class PlanProjector:
                     break
 
                 point = candidate
+                schedule.append(candidate)
+                sessions_recorded += 1
                 # The simulated user does exactly what was prescribed.
                 simulated.insert(
                     0,
@@ -405,8 +442,43 @@ class PlanProjector:
                 best_case.append(
                     WeekPoint(week=week, weight=held.weight, reps=held.reps, e1rm=held.e1rm)
                 )
+                # A held week is still a week the user trains, so the table
+                # needs its rows. Without this the schedule was empty whenever
+                # the plausibility cap bit on week one — which is the common
+                # case for a lift whose last session was a bad one.
+                for session_index in range(1, sessions_per_week + 1):
+                    schedule.append(
+                        WeekPoint(
+                            week=week,
+                            weight=held.weight,
+                            reps=held.reps,
+                            e1rm=held.e1rm,
+                            decision="maintain",
+                            session=session_index,
+                            sets=list(held.sets) or [
+                                {"set_number": i + 1, "weight": held.weight, "reps": held.reps}
+                                for i in range(num_sets)
+                            ],
+                        )
+                    )
                 continue
             best_case.append(point)
+            # The cap can break the loop part-way through a week, leaving the
+            # second workout unrecorded — the table then showed an empty column
+            # for a session the user still trains. Hold the last prescription
+            # for the rest of the week instead.
+            for session_index in range(sessions_recorded + 1, sessions_per_week + 1):
+                schedule.append(
+                    WeekPoint(
+                        week=week,
+                        weight=point.weight,
+                        reps=point.reps,
+                        e1rm=point.e1rm,
+                        decision="maintain",
+                        session=session_index,
+                        sets=list(point.sets),
+                    )
+                )
 
         if current is None and best_case:
             first = best_case[0]
@@ -420,6 +492,7 @@ class PlanProjector:
             current=current,
             best_case=best_case,
             realistic=self._stretch(best_case, current, adherence),
+            schedule=self._stretch_schedule(schedule, weeks, sessions_per_week, adherence),
             seeded_from_history=seeded,
         )
 
@@ -530,6 +603,47 @@ class PlanProjector:
                     decision=source.decision,
                 )
             )
+        return stretched
+
+    @staticmethod
+    def _stretch_schedule(
+        schedule: List[WeekPoint],
+        weeks: int,
+        sessions_per_week: int,
+        adherence: float,
+    ) -> List[WeekPoint]:
+        """
+        Time-stretch the session list the same way the weekly curve is stretched.
+
+        Grouped by week first so a stretched week keeps all of its sessions
+        together: someone training two-thirds of the time reaches week 6's
+        prescriptions in week 9, and both of that week's workouts move with it.
+        """
+        if not schedule:
+            return []
+        by_week: Dict[int, List[WeekPoint]] = {}
+        for point in schedule:
+            by_week.setdefault(point.week, []).append(point)
+        source_weeks = sorted(by_week)
+        if not source_weeks:
+            return []
+
+        rate = max(0.1, min(1.0, adherence or DEFAULT_ADHERENCE))
+        stretched: List[WeekPoint] = []
+        for index in range(weeks):
+            source = source_weeks[min(int(index * rate), len(source_weeks) - 1)]
+            for point in by_week[source]:
+                stretched.append(
+                    WeekPoint(
+                        week=index + 1,
+                        weight=point.weight,
+                        reps=point.reps,
+                        e1rm=point.e1rm,
+                        decision=point.decision,
+                        session=point.session,
+                        sets=list(point.sets),
+                    )
+                )
         return stretched
 
     @staticmethod
