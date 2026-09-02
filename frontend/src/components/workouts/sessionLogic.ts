@@ -669,6 +669,12 @@ export function muscleGroupsForSplitDay(
   return [];
 }
 
+/** History header for a muscle-group footer (e.g. "Recent shoulders history"). */
+export function muscleGroupHistoryLabel(group: string): string {
+  const label = MUSCLE_GROUP_LABELS[group]?.toLowerCase() || group.toLowerCase();
+  return `Recent ${label} history`;
+}
+
 /** Uppercase history header for the split-aware card footer (e.g. "Recent push history"). */
 export function splitHistoryLabel(splitDay?: string, splitName?: string): string {
   const key = `${splitDay || ""} ${splitName || ""}`.toLowerCase();
@@ -686,19 +692,20 @@ export function splitHistoryLabel(splitDay?: string, splitName?: string): string
   return label ? `Recent ${label.toLowerCase()} history` : "Recent workout history";
 }
 
-export type MuscleGroupSessionHit = {
+export type MuscleGroupLogHit = {
   session: WorkoutSession;
-  exercises: SessionExercise[];
+  exercise: SessionExercise;
 };
 
-export function getRecentMuscleGroupSessions(
+/** Last N individual exercise logs for a muscle group, newest first (not grouped by session). */
+export function getRecentMuscleGroupLogs(
   sessions: WorkoutSession[],
   muscleGroup: string,
   resolveCategory: (exerciseId: string, exerciseName: string) => string | null,
   excludeSessionId?: string | null,
   limit = 5
-): MuscleGroupSessionHit[] {
-  const hits: MuscleGroupSessionHit[] = [];
+): MuscleGroupLogHit[] {
+  const hits: MuscleGroupLogHit[] = [];
   const sorted = [...sessions].sort((a, b) =>
     String(b.date || "").localeCompare(String(a.date || ""))
   );
@@ -708,25 +715,39 @@ export function getRecentMuscleGroupSessions(
       const cat = resolveCategory(ex.exercise_id, ex.exercise_name);
       return exerciseMatchesMuscleGroup(cat, muscleGroup);
     });
-    if (!matched.length) continue;
-    hits.push({ session, exercises: matched });
-    if (hits.length >= limit) break;
+    for (const exercise of matched) {
+      hits.push({ session, exercise });
+      if (hits.length >= limit) return hits;
+    }
   }
   return hits;
 }
 
-export function formatExerciseSessionSnapshot(ex: SessionExercise): string {
-  if (!Array.isArray(ex.sets)) return ex.exercise_name;
-  const working = ex.sets.filter(
+function workingSets(ex: SessionExercise) {
+  if (!Array.isArray(ex.sets)) return [];
+  return ex.sets.filter(
     (set) => set.completed || (Number(set.reps) > 0 && Number(set.weight) > 0)
   );
-  if (!working.length) return ex.exercise_name;
-  const best = [...working].sort(
-    (a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0)
-  )[0];
-  if (best?.weight != null && Number(best.weight) > 0) {
-    return `${best.weight}×${best.reps || 0}`;
-  }
-  if (best?.reps) return `${best.reps} reps`;
+}
+
+/** Compact set summary for history rows, e.g. "3×80, 4×80, 6×70". */
+export function formatExerciseSetsSummary(ex: SessionExercise): string {
+  const sets = workingSets(ex);
+  if (!sets.length) return "—";
+  return sets
+    .map((set) => {
+      const reps = Number(set.reps) || 0;
+      const weight = Number(set.weight) || 0;
+      if (weight > 0) return `${reps}×${weight}`;
+      if (reps > 0) return `${reps} reps`;
+      return null;
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+export function formatExerciseSessionSnapshot(ex: SessionExercise): string {
+  const summary = formatExerciseSetsSummary(ex);
+  if (summary !== "—") return summary;
   return ex.exercise_name;
 }

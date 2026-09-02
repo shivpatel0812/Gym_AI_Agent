@@ -329,6 +329,23 @@ class TestPlausibilityCeiling:
         result = project(projector, [session(50, [8, 8, 8])], weeks=12)
         assert max(p.e1rm for p in result.best_case) > result.current.e1rm
 
+    def test_string_reps_in_history_do_not_crash(self, projector):
+        """Firestore logs often store reps as strings; projection must not 500."""
+        history = [{
+            "date": "2026-08-01",
+            "sets": [{"weight": "80", "reps": "8", "set_number": 1}],
+        }]
+        result = projector.project_exercise(
+            exercise_id="default-chest-bench",
+            exercise_name="Bench Press",
+            day_name="Push",
+            history=history,
+            user_goal="Build Muscle",
+            weeks=4,
+        )
+        assert result.current is not None
+        assert result.current.e1rm > 0
+
     def test_horizon_is_never_truncated_by_a_stall(self, projector):
         """Hitting the ceiling holds the last point, it does not end the chart."""
         result = projector.project_exercise(

@@ -79,10 +79,45 @@ def exceeds_plausible_gain(
 
 
 # Epley, matching _compute_e1rm_history in the progression engine.
-def e1rm(weight: float, reps: int) -> float:
-    if not weight or not reps:
+def _num(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _int_reps(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def e1rm(weight: Any, reps: Any) -> float:
+    w = _num(weight)
+    r = _int_reps(reps)
+    if w <= 0 or r <= 0:
         return 0.0
-    return round(weight * (1 + reps / 30), 1)
+    return round(w * (1 + r / 30), 1)
+
+
+def _normalize_history_sets(history: List[Dict]) -> List[Dict]:
+    """Coerce logged set values so Firestore string fields cannot 500 projection."""
+    normalized: List[Dict] = []
+    for session in history or []:
+        sets = []
+        for workout_set in session.get("sets") or []:
+            sets.append({
+                **workout_set,
+                "weight": _num(workout_set.get("weight")),
+                "reps": _int_reps(workout_set.get("reps")),
+            })
+        normalized.append({**session, "sets": sets})
+    return normalized
 
 
 @dataclass
@@ -322,7 +357,7 @@ class PlanProjector:
         never tell contradictory stories about the same plan.
         """
         sessions_per_week = max(1, sessions_per_week)
-        simulated = list(history or [])
+        simulated = _normalize_history_sets(history)
         seeded = bool(simulated)
 
         # Cardio progresses minutes and pace, not load. Running it through the
@@ -356,13 +391,13 @@ class PlanProjector:
                 # plots max e1RM per session and this did not.
                 best = max(
                     latest,
-                    key=lambda s: e1rm(s.get("weight") or 0, int(s.get("reps") or 0)),
+                    key=lambda s: e1rm(s.get("weight"), s.get("reps")),
                 )
                 current = WeekPoint(
                     week=0,
-                    weight=float(best.get("weight") or 0),
-                    reps=int(best.get("reps") or 0),
-                    e1rm=e1rm(best.get("weight") or 0, best.get("reps") or 0),
+                    weight=_num(best.get("weight")),
+                    reps=_int_reps(best.get("reps")),
+                    e1rm=e1rm(best.get("weight"), best.get("reps")),
                 )
 
         best_case: List[WeekPoint] = []

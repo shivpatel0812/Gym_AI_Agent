@@ -36,12 +36,13 @@ import {
   confidencePct,
   emptySessionForm,
   emptyWorkoutSets,
-  formatExerciseSessionSnapshot,
   formatLastPerformance,
   formatShortDate,
   formatDateOrdinal,
   getBestSetLabel,
-  getRecentMuscleGroupSessions,
+  formatExerciseSetsSummary,
+  getRecentMuscleGroupLogs,
+  muscleGroupHistoryLabel,
   groupSessionsByWeek,
   hasCardioLog,
   hydrateAiRecommendations,
@@ -57,7 +58,6 @@ import {
   migrateSessionCardioToExercises,
   MUSCLE_GROUP_LABELS,
   muscleGroupsForSplitDay,
-  splitHistoryLabel,
   recCopiesLastWorkout,
   recHasWeightedSets,
   resolveExerciseCategory,
@@ -176,6 +176,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     cardIdx: number;
     group: string;
   } | null>(null);
+  const [collapsedHistoryCards, setCollapsedHistoryCards] = useState<Set<number>>(new Set());
   const [isAutoSaving, setIsAutoSaving] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -199,6 +200,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const fetchedLastRef = useRef<Set<string>>(new Set());
   const formDataRef = useRef(formData);
   const editingSessionIdRef = useRef(editingSessionId);
+  // Which sets were already complete, so a transition fires the suggestion
+  // exactly once rather than on every subsequent render.
+  const completedSetsRef = useRef<Record<string, boolean>>({});
   const autoSaveChainRef = useRef(Promise.resolve(true));
   formDataRef.current = formData;
   editingSessionIdRef.current = editingSessionId;
@@ -227,24 +231,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     (exerciseId: string, exerciseName: string) =>
       resolveExerciseCategory(exerciseId, exerciseName, exercises),
     [exercises]
-  );
-  const recentMuscleGroupSessions = useMemo(() => {
-    if (!activeMuscleFilter) return [];
-    return getRecentMuscleGroupSessions(
-      sessions,
-      activeMuscleFilter.group,
-      resolveCategory,
-      editingSessionId,
-      5
-    );
-  }, [activeMuscleFilter, sessions, resolveCategory, editingSessionId]);
-  const splitHistoryTitle = useMemo(
-    () =>
-      splitHistoryLabel(
-        formData.split_day || activePlanDay?.day_name,
-        formData.split_name || activePlanDay?.plan_name
-      ),
-    [formData.split_day, formData.split_name, activePlanDay]
   );
   const timer = useSessionTimer(
     showForm ? editingSessionId || "draft" : null,
@@ -314,7 +300,12 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         const data = formDataRef.current;
         const payload = buildSessionPayload(data, timerPersistRef.current());
         const canSave = payload.exercises.length > 0 || hasCardioLog(data);
-        if (!canSave) return false;
+        if (!canSave) {
+          // Nothing valid to write. Distinct from a failed request, and not an
+          // error while the user is still filling the form in — but it must not
+          // read as a successful save either.
+          return false;
+        }
         setIsAutoSaving(true);
         try {
           const sessionId = editingSessionIdRef.current;
@@ -663,76 +654,107 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     </>
   );
 
-  const renderMuscleHistory = (cardIdx: number) => {
-    if (activeMuscleFilter?.cardIdx !== cardIdx) return null;
-    const groupLabel =
-      MUSCLE_GROUP_LABELS[activeMuscleFilter.group]?.toLowerCase() || "muscle";
-    if (!recentMuscleGroupSessions.length) {
-      return (
-        <Text style={styles.muscleHistoryEmpty}>No recent {groupLabel} work logged yet.</Text>
-      );
-    }
+  const toggleMuscleHistory = (cardIdx: number, expand?: boolean) => {
+    setCollapsedHistoryCards((prev) => {
+      const next = new Set(prev);
+      if (expand === true) next.delete(cardIdx);
+      else if (expand === false) next.add(cardIdx);
+      else if (next.has(cardIdx)) next.delete(cardIdx);
+      else next.add(cardIdx);
+      return next;
+    });
+  };
+
+  const renderMuscleHistory = (cardIdx: number, exerciseGroup: string | null) => {
+    const group =
+      activeMuscleFilter?.cardIdx === cardIdx
+        ? activeMuscleFilter.group
+        : exerciseGroup;
+    if (!group) return null;
+
+    const expanded = !collapsedHistoryCards.has(cardIdx);
+    const recentLogs = getRecentMuscleGroupLogs(
+      sessions,
+      group,
+      resolveCategory,
+      editingSessionId,
+      5
+    );
+    const groupLabel = MUSCLE_GROUP_LABELS[group]?.toLowerCase() || "muscle";
+
     return (
-      <View style={styles.muscleHistory}>
-        {recentMuscleGroupSessions.map(({ session, exercises: groupExercises }) => {
-          const sessionLabel =
-            session.split_day || session.split_name || session.workout_name || "Workout";
-          return (
-            <View
-              key={session.id || `${session.date}-${sessionLabel}`}
-              style={styles.muscleHistorySession}
-            >
-              <Text style={styles.muscleHistoryDate}>
-                {formatShortDate(String(session.date || ""))} · {sessionLabel}
-              </Text>
-              {groupExercises.map((hit) => {
-                const alreadyAdded = formData.exercises.some(
-                  (ex) => ex.exercise_id === hit.exercise_id
-                );
-                return (
-                  <TouchableOpacity
-                    key={`${session.id}-${hit.exercise_id}`}
-                    style={[
-                      styles.muscleHistoryRow,
-                      alreadyAdded && styles.muscleHistoryRowAdded,
-                    ]}
-                    disabled={alreadyAdded}
-                    onPress={() =>
-                      addExerciseFromHistory(hit.exercise_id, hit.exercise_name, cardIdx)
-                    }
-                  >
-                    <Text
-                      style={[
-                        styles.muscleHistoryName,
-                        alreadyAdded && styles.muscleHistoryNameAdded,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {hit.exercise_name}
-                    </Text>
-                    <Text style={styles.muscleHistoryPerf}>
-                      {formatExerciseSessionSnapshot(hit)}
-                    </Text>
-                    {!alreadyAdded ? (
-                      <MaterialCommunityIcons
-                        name="plus-circle-outline"
-                        size={15}
-                        color={colors.accentPrimary}
-                      />
-                    ) : (
-                      <MaterialCommunityIcons
-                        name="check-circle-outline"
-                        size={15}
-                        color={colors.textMuted}
-                      />
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          );
-        })}
-      </View>
+      <>
+        <TouchableOpacity
+          style={styles.recentHistoryHeader}
+          onPress={() => toggleMuscleHistory(cardIdx)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.recentHistoryLabel}>{muscleGroupHistoryLabel(group)}</Text>
+          <MaterialCommunityIcons
+            name={expanded ? "chevron-up" : "chevron-down"}
+            size={16}
+            color={colors.textMuted}
+          />
+        </TouchableOpacity>
+        {expanded ? (
+          !recentLogs.length ? (
+            <Text style={styles.muscleHistoryEmpty}>No recent {groupLabel} work logged yet.</Text>
+          ) : (
+          <View style={styles.muscleHistory}>
+            {recentLogs.map(({ session, exercise: hit }) => {
+              const alreadyAdded = formData.exercises.some(
+                (ex) => ex.exercise_id === hit.exercise_id
+              );
+              const setsSummary = formatExerciseSetsSummary(hit);
+              return (
+                <TouchableOpacity
+                  key={`${session.id}-${hit.exercise_id}-${session.date}`}
+                  style={[
+                    styles.muscleHistoryRow,
+                    alreadyAdded && styles.muscleHistoryRowAdded,
+                  ]}
+                  disabled={alreadyAdded}
+                  onPress={() =>
+                    addExerciseFromHistory(hit.exercise_id, hit.exercise_name, cardIdx)
+                  }
+                >
+                  <View style={styles.muscleHistoryMain}>
+                    <View style={styles.muscleHistoryTopLine}>
+                      <Text style={styles.muscleHistoryDate}>
+                        {formatShortDate(String(session.date || ""))}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.muscleHistoryName,
+                          alreadyAdded && styles.muscleHistoryNameAdded,
+                        ]}
+                        numberOfLines={2}
+                      >
+                        {hit.exercise_name}
+                      </Text>
+                    </View>
+                    <Text style={styles.muscleHistoryPerf}>{setsSummary}</Text>
+                  </View>
+                  {!alreadyAdded ? (
+                    <MaterialCommunityIcons
+                      name="plus-circle-outline"
+                      size={18}
+                      color={colors.accentPrimary}
+                    />
+                  ) : (
+                    <MaterialCommunityIcons
+                      name="check-circle-outline"
+                      size={18}
+                      color={colors.textMuted}
+                    />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          )
+        ) : null}
+      </>
     );
   };
 
@@ -857,8 +879,16 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     try {
       timer.stop();
       const saved = await performAutoSave();
-      if (!saved && !editingSessionIdRef.current) {
-        setSaveError("Could not save workout");
+      if (!saved) {
+        // Previously this only bailed when there was no session id yet, so a
+        // failed final write to an *existing* session fell through, reset the
+        // form and reported success — silently discarding every set added
+        // since the last autosave. A failed save is a failed save.
+        setSaveError(
+          editingSessionIdRef.current
+            ? "Could not save your latest changes — check your connection and try again."
+            : "Could not save workout"
+        );
         return;
       }
       timer.clear();
@@ -978,32 +1008,70 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     }
   };
 
+  /**
+   * Every reps/weight/set edit funnels through here.
+   *
+   * Must be a functional update. Reading `formData` from the render closure
+   * loses writes: the AI-recommendation response updates the same state
+   * functionally and lands between a keystroke and its re-render, so whichever
+   * committed second silently discarded the other. When the typed reps were
+   * the casualty, the set failed `isValidSet`, the exercise was stripped from
+   * the payload, `canSave` went false — and the workout simply never saved,
+   * with no error shown.
+   */
   const patchExercise = (idx: number, patch: Partial<SessionExercise>) => {
-    const next = [...formData.exercises];
-    next[idx] = { ...next[idx], ...patch };
-    setFormData({ ...formData, exercises: next });
-  };
-
-  const removeExercise = (exerciseIdx: number) => {
-    setFormData({
-      ...formData,
-      exercises: formData.exercises.filter((_, i) => i !== exerciseIdx),
+    setFormData((prev) => {
+      if (idx < 0 || idx >= prev.exercises.length) return prev;
+      const next = [...prev.exercises];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...prev, exercises: next };
     });
   };
 
+  /** Same rule: derive from `prev`, never from the closure. */
+  const patchSet = (
+    exerciseIdx: number,
+    setIdx: number,
+    patch: Partial<WorkoutSet>
+  ) => {
+    setFormData((prev) => {
+      const exercise = prev.exercises[exerciseIdx];
+      if (!exercise || !Array.isArray(exercise.sets)) return prev;
+      const sets = [...exercise.sets];
+      if (setIdx < 0 || setIdx >= sets.length) return prev;
+      sets[setIdx] = { ...sets[setIdx], ...patch };
+      const next = [...prev.exercises];
+      next[exerciseIdx] = { ...exercise, sets };
+      return { ...prev, exercises: next };
+    });
+  };
+
+  const removeExercise = (exerciseIdx: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      exercises: prev.exercises.filter((_, i) => i !== exerciseIdx),
+    }));
+  };
+
   const addSet = (idx: number) => {
-    const exercise = formData.exercises[idx];
-    const currentSets = Array.isArray(exercise.sets) ? exercise.sets : [];
-    patchExercise(idx, {
-      sets: [
-        ...currentSets,
-        {
-          set_number: currentSets.length + 1,
-          reps: 0,
-          weight: undefined,
-          completed: false,
-        },
-      ],
+    setFormData((prev) => {
+      const exercise = prev.exercises[idx];
+      if (!exercise) return prev;
+      const currentSets = Array.isArray(exercise.sets) ? exercise.sets : [];
+      const next = [...prev.exercises];
+      next[idx] = {
+        ...exercise,
+        sets: [
+          ...currentSets,
+          {
+            set_number: currentSets.length + 1,
+            reps: 0,
+            weight: undefined,
+            completed: false,
+          },
+        ],
+      };
+      return { ...prev, exercises: next };
     });
   };
 
@@ -1020,20 +1088,57 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     patchExercise(exerciseIdx, { sets: remaining });
   };
 
+  /**
+   * Every keystroke in a reps or weight field lands here.
+   *
+   * The sets array is rebuilt from `prev` inside the updater, never from the
+   * render closure. Reading `formData.exercises[...]` out here meant that two
+   * edits committed in one React batch — or an edit racing the AI
+   * recommendation, which updates the same state functionally — handed
+   * `patchExercise` an array built from state that had already moved on. The
+   * later write reverted the earlier one, and a reverted set fails
+   * `isValidSet`, gets stripped from the payload, and takes the whole save
+   * with it: `canSave` goes false and nothing is written, silently.
+   *
+   * The follow-up suggestion is fired from an effect rather than from inside
+   * the updater, so the updater stays pure and safe to re-invoke.
+   */
   const updateSet = (exerciseIdx: number, setIdx: number, patch: Partial<WorkoutSet>) => {
-    const exercise = formData.exercises[exerciseIdx];
-    const currentSets = Array.isArray(exercise.sets) ? [...exercise.sets] : [];
-    const previous = currentSets[setIdx];
-    const updated: WorkoutSet = { ...previous, ...patch };
-    const wasComplete = Boolean(previous?.completed);
-    updated.completed = isValidSet(updated);
-    currentSets[setIdx] = updated;
-    patchExercise(exerciseIdx, { sets: currentSets });
-
-    if (!wasComplete && updated.completed) {
-      void recommendNextAfterCompletedSet(exerciseIdx, currentSets, setIdx);
-    }
+    setFormData((prev) => {
+      const exercise = prev.exercises[exerciseIdx];
+      if (!exercise || !Array.isArray(exercise.sets)) return prev;
+      const sets = [...exercise.sets];
+      if (setIdx < 0 || setIdx >= sets.length) return prev;
+      const updated: WorkoutSet = { ...sets[setIdx], ...patch };
+      updated.completed = isValidSet(updated);
+      sets[setIdx] = updated;
+      const exercises = [...prev.exercises];
+      exercises[exerciseIdx] = { ...exercise, sets };
+      return { ...prev, exercises };
+    });
   };
+
+  // Fire the next-set suggestion when a set actually transitions to complete,
+  // read from committed state rather than guessed at inside a state updater.
+  useEffect(() => {
+    const seen = completedSetsRef.current;
+    formData.exercises.forEach((exercise, exerciseIdx) => {
+      if (!Array.isArray(exercise.sets)) return;
+      exercise.sets.forEach((set, setIdx) => {
+        const key = `${exercise.exercise_id}:${setIdx}`;
+        const isComplete = Boolean(set.completed);
+        const wasComplete = Boolean(seen[key]);
+        seen[key] = isComplete;
+        if (isComplete && !wasComplete && showForm) {
+          void recommendNextAfterCompletedSet(
+            exerciseIdx,
+            exercise.sets as WorkoutSet[],
+            setIdx
+          );
+        }
+      });
+    });
+  }, [formData.exercises, showForm]);
 
   const recommendNextAfterCompletedSet = async (
     exerciseIdx: number,
@@ -1256,7 +1361,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                       value={formData.date}
                       onChange={(e: any) => {
                         if (e.target.value) {
-                          setFormData({ ...formData, date: e.target.value });
+                          setFormData((prev) => ({ ...prev, date: e.target.value }));
                         }
                       }}
                       aria-label="Workout date"
@@ -1283,7 +1388,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                         const y = date.getFullYear();
                         const m = String(date.getMonth() + 1).padStart(2, "0");
                         const d = String(date.getDate()).padStart(2, "0");
-                        setFormData({ ...formData, date: `${y}-${m}-${d}` });
+                        setFormData((prev) => ({ ...prev, date: `${y}-${m}-${d}` }));
                       }
                     }}
                   />
@@ -1338,7 +1443,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                   <View style={styles.menu}>
                     <TouchableOpacity
                       onPress={() => {
-                        setFormData({ ...formData, split_id: "", split_name: "", split_day: "" });
+                        setFormData((prev) => ({ ...prev, split_id: "", split_name: "", split_day: "" }));
                         setShowSplitDropdown(false);
                       }}
                       style={[styles.menuItem, !formData.split_id && styles.menuItemActive]}
@@ -1350,12 +1455,12 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                         key={split.id}
                         onPress={() => {
                           const onlyDay = split.days?.length === 1 ? split.days[0] : "";
-                          setFormData({
-                            ...formData,
+                          setFormData((prev) => ({
+                            ...prev,
                             split_id: split.id || "",
                             split_name: split.name,
                             split_day: onlyDay,
-                          });
+                          }));
                           setShowSplitDropdown(false);
                         }}
                         style={[
@@ -1374,7 +1479,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                       <TouchableOpacity
                         key={index}
                         onPress={() => {
-                          setFormData({ ...formData, split_day: day });
+                          setFormData((prev) => ({ ...prev, split_day: day }));
                           setShowDayDropdown(false);
                         }}
                         style={[
@@ -1448,7 +1553,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
           {showSessionDetails && (
             <TextInput
               value={formData.notes}
-              onChangeText={(notes) => setFormData({ ...formData, notes })}
+              onChangeText={(notes) => setFormData((prev) => ({ ...prev, notes }))}
               placeholder="How did the workout feel?"
               placeholderTextColor={colors.textMuted}
               style={styles.notes}
@@ -1528,6 +1633,11 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
             const isCollapsed = collapsedExercises[idx] ?? false;
             const completedCount = exerciseSets.filter((set) => set.completed).length;
             const categoryLabel = getExerciseCategory(ex.exercise_id, ex.exercise_name);
+            const exerciseMuscleGroup = resolveCategory(ex.exercise_id, ex.exercise_name);
+            const displayedMuscleGroup =
+              activeMuscleFilter?.cardIdx === idx
+                ? activeMuscleFilter.group
+                : exerciseMuscleGroup;
             const roleLabel = idx === 0 ? "Primary" : "Secondary";
             const lastData = resolveLastExercise(
               lastExerciseData[ex.exercise_id],
@@ -1959,20 +2069,24 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                         <Text style={styles.actionPillDashedText}>+ Set</Text>
                       </TouchableOpacity>
                       {splitMuscleGroups.map((group) => {
-                        const selected =
-                          activeMuscleFilter?.cardIdx === idx &&
-                          activeMuscleFilter.group === group;
+                        const selected = displayedMuscleGroup === group;
+                        const historyExpanded = !collapsedHistoryCards.has(idx);
                         return (
                           <TouchableOpacity
                             key={group}
                             style={[styles.actionPillSolid, selected && styles.actionPillSolidActive]}
-                            onPress={() =>
-                              setActiveMuscleFilter((current) =>
-                                current?.cardIdx === idx && current.group === group
-                                  ? null
-                                  : { cardIdx: idx, group }
-                              )
-                            }
+                            onPress={() => {
+                              if (selected && historyExpanded) {
+                                toggleMuscleHistory(idx, false);
+                                return;
+                              }
+                              toggleMuscleHistory(idx, true);
+                              if (group === exerciseMuscleGroup) {
+                                setActiveMuscleFilter(null);
+                              } else {
+                                setActiveMuscleFilter({ cardIdx: idx, group });
+                              }
+                            }}
                           >
                             <Text
                               style={[
@@ -1992,10 +2106,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                         <MaterialCommunityIcons name="plus" size={16} color={colors.textSecondary} />
                       </TouchableOpacity>
                     </ScrollView>
-                    {splitMuscleGroups.length > 0 ? (
+                    {displayedMuscleGroup ? (
                       <View style={styles.muscleHistoryBlock}>
-                        <Text style={styles.recentHistoryLabel}>{splitHistoryTitle}</Text>
-                        {renderMuscleHistory(idx)}
+                        {renderMuscleHistory(idx, exerciseMuscleGroup)}
                       </View>
                     ) : null}
                   </View>
@@ -2772,16 +2885,23 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  recentHistoryHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    marginTop: 8,
+    marginBottom: 6,
+    alignSelf: "stretch",
+    paddingVertical: 2,
+  },
   recentHistoryLabel: {
     color: colors.textMuted,
     fontSize: 9,
     fontWeight: "800",
     letterSpacing: 0.8,
     textTransform: "uppercase",
-    marginTop: 8,
-    marginBottom: 6,
     textAlign: "center",
-    alignSelf: "stretch",
   },
   muscleHistoryBlock: {
     paddingBottom: 2,
@@ -2802,22 +2922,34 @@ const styles = StyleSheet.create({
     marginTop: 10,
     marginBottom: 8,
   },
-  muscleHistory: { gap: 8 },
-  muscleHistorySession: { gap: 4 },
-  muscleHistoryDate: { color: colors.textMuted, fontSize: 11, fontWeight: "700" },
+  muscleHistory: { gap: 6, alignSelf: "stretch" },
   muscleHistoryRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderRadius: 10,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
   },
   muscleHistoryRowAdded: { opacity: 0.55 },
-  muscleHistoryName: { flex: 1, color: colors.textPrimary, fontSize: 13, fontWeight: "600" },
+  muscleHistoryMain: { flex: 1, gap: 4, minWidth: 0 },
+  muscleHistoryTopLine: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  muscleHistoryDate: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: "700",
+    minWidth: 52,
+  },
+  muscleHistoryName: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "600",
+    lineHeight: 18,
+  },
   muscleHistoryNameAdded: { color: colors.textMuted },
   muscleHistoryPerf: { color: colors.accentPrimary, fontSize: 12, fontWeight: "700" },
   muscleHistoryEmpty: { color: colors.textMuted, fontSize: 11, paddingBottom: 2 },
