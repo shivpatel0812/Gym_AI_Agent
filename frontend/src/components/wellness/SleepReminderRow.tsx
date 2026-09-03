@@ -17,6 +17,7 @@ import {
   formatTime,
   loadSleepReminderSettings,
   saveSleepReminderSettings,
+  sendTestSleepReminder,
   syncSleepReminders,
   type SleepReminderSettings,
 } from "../../notifications";
@@ -92,12 +93,34 @@ export default function SleepReminderRow({ loggedDates }: Props) {
       </View>
 
       {settings.enabled && (
-        <TouchableOpacity style={styles.timeBtn} onPress={() => setShowTime(true)}>
-          <Text style={styles.timeLabel}>Remind me at</Text>
-          <Text style={styles.timeValue}>
-            {formatTime(settings.hour, settings.minute)}
-          </Text>
-        </TouchableOpacity>
+        <>
+          <TouchableOpacity style={styles.timeBtn} onPress={() => setShowTime(true)}>
+            <Text style={styles.timeLabel}>Remind me at</Text>
+            <Text style={styles.timeValue}>
+              {formatTime(settings.hour, settings.minute)}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.testBtn}
+            onPress={async () => {
+              const ok = await sendTestSleepReminder();
+              if (!ok) {
+                Alert.alert(
+                  "Notifications are off",
+                  "Turn on notifications for GymAI in Settings to get sleep reminders.",
+                  [
+                    { text: "Not now", style: "cancel" },
+                    { text: "Open Settings", onPress: () => Linking.openSettings() },
+                  ]
+                );
+                return;
+              }
+              Alert.alert("Test scheduled", "You should see a reminder in about 5 seconds. Leave the app or lock the phone to see it like a real alert.");
+            }}
+          >
+            <Text style={styles.testText}>Send test notification</Text>
+          </TouchableOpacity>
+        </>
       )}
 
       {showTime && (
@@ -157,6 +180,12 @@ const styles = StyleSheet.create({
   },
   timeLabel: { color: colors.textMuted, fontSize: 13 },
   timeValue: { color: colors.ai, fontSize: 14, fontWeight: "700" },
+  testBtn: {
+    marginTop: 8,
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  testText: { color: colors.accentPrimary, fontSize: 13, fontWeight: "700" },
   doneBtn: { alignSelf: "flex-end", paddingVertical: 6, paddingHorizontal: 4 },
   doneText: { color: colors.ai, fontSize: 14, fontWeight: "700" },
 });

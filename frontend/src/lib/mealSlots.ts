@@ -16,7 +16,7 @@ export const HOME_MEALS: {
     label: "Breakfast",
     short: "Bfast",
     slots: ["breakfast"],
-    window: "6:00 AM – 10:00 AM",
+    window: "6:00 AM – 11:00 AM",
     icon: "coffee-outline",
   },
   {
@@ -24,7 +24,7 @@ export const HOME_MEALS: {
     label: "Lunch",
     short: "Lunch",
     slots: ["lunch"],
-    window: "11:00 AM – 4:00 PM",
+    window: "11:00 AM – 3:00 PM",
     icon: "food-fork-drink",
   },
   {
@@ -40,7 +40,7 @@ export const HOME_MEALS: {
     label: "Dinner",
     short: "Dinner",
     slots: ["dinner"],
-    window: "5:00 PM – 9:00 PM",
+    window: "6:00 PM – 10:00 PM",
     icon: "silverware-fork-knife",
   },
   {
@@ -103,11 +103,10 @@ export function foodBelongsToMeal(foodMeal: string | undefined, mealId: HomeMeal
  * Dinner runs through 9 PM (hour 21) so evening uncertain dinners still surface.
  */
 export function currentMealId(hour = new Date().getHours()): HomeMealId {
-  if (hour >= 5 && hour < 10) return "Breakfast";
-  if (hour >= 10 && hour < 11) return "Pre-Workout";
-  if (hour >= 11 && hour < 16) return "Lunch";
-  if (hour >= 16 && hour < 17) return "Pre-Workout";
-  if (hour >= 17 && hour < 22) return "Dinner";
+  if (hour >= 6 && hour < 11) return "Breakfast";
+  if (hour >= 11 && hour < 15) return "Lunch";
+  if (hour >= 15 && hour < 18) return "Pre-Workout";
+  if (hour >= 18 && hour < 22) return "Dinner";
   return "Snacks";
 }
 

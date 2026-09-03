@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   View,
@@ -31,6 +31,14 @@ import { foodQuantity, scaleFoodItem } from "../../lib/foodQuantity";
 import { planItemAppliesToday, todayWeekdayKey } from "../../lib/mealSlots";
 import QuickLogBars from "./QuickLogBars";
 import TodayFoodLog from "./TodayFoodLog";
+import {
+  consumePendingMealLog,
+  subscribeMealLogOpen,
+} from "../../notifications/pendingMealLog";
+import {
+  loadMealReminderSettings,
+  syncMealReminders,
+} from "../../notifications/mealReminder";
 
 type SheetKind = "sleep" | "stress" | "wellness" | "food" | "routine" | null;
 
@@ -296,6 +304,16 @@ export default function Home() {
           : null;
       todayFoodsPendingRef.current = null;
       setPlan(nutritionPlan);
+      void (async () => {
+        try {
+          const mealSettings = await loadMealReminderSettings();
+          if (!mealSettings.enabled) return;
+          const foods = (todayMacro?.food_items || []) as FoodItem[];
+          await syncMealReminders(mealSettings, nutritionPlan, { [date]: foods });
+        } catch {
+          // Non-fatal.
+        }
+      })();
     } catch (error) {
       console.error("Error loading home:", error);
     }
@@ -322,6 +340,19 @@ export default function Home() {
     setLogUncertain(uncertain);
     setSheet("food");
   };
+
+  useEffect(() => {
+    return subscribeMealLogOpen((pending) => {
+      consumePendingMealLog();
+      openFood(pending.mealId);
+      try {
+        (navigation as any).navigate("Home");
+      } catch {
+        // Already on Home or nested differently.
+      }
+    });
+  }, [navigation]);
+
   const openNewRoutine = () => {
     setEditingRoutine(null);
     setRoutineName("");
@@ -500,6 +531,16 @@ export default function Home() {
 
     try {
       await flushTodayMacros();
+      void (async () => {
+        try {
+          const mealSettings = await loadMealReminderSettings();
+          if (!mealSettings.enabled) return;
+          const foods = todayFoodsPendingRef.current || [];
+          await syncMealReminders(mealSettings, plan, { [date]: foods });
+        } catch {
+          // Non-fatal.
+        }
+      })();
     } catch {
       setMacroRows(snapshot);
       const existing = todayEntry(snapshot);
@@ -661,16 +702,10 @@ export default function Home() {
     }
   };
 
-  const planMealsFor = (mealLabel: string): PlanMealPick[] => {
-    const slots =
-      mealLabel === "Pre-Workout"
-        ? ["pre_workout", "shake"]
-        : mealLabel === "Snacks"
-          ? ["snack", "late_night", "other"]
-          : [normalizeMealLabel(mealLabel)];
+  const allPlanMeals = useMemo((): PlanMealPick[] => {
     const weekday = todayWeekdayKey();
     return (plan?.meal_anchors || [])
-      .filter((a) => a.id && slots.includes(normalizeMealLabel(a.slot)))
+      .filter((a) => a.id)
       .map((a) => ({
         id: String(a.id),
         label: a.label || "Plan meal",
@@ -678,12 +713,15 @@ export default function Home() {
         foods: a.foods || [],
         schedule: daysLabel(a.days, a.frequency),
         appliesToday: planItemAppliesToday(a, weekday),
+        slot: normalizeMealLabel(a.slot),
       }))
       .sort((a, b) => {
         if (a.appliesToday !== b.appliesToday) return a.appliesToday ? -1 : 1;
+        const slotCmp = (a.slot || "").localeCompare(b.slot || "");
+        if (slotCmp) return slotCmp;
         return a.label.localeCompare(b.label);
       });
-  };
+  }, [plan]);
 
   const saveRoutine = async () => {
     if (!routineName.trim()) return;
@@ -941,7 +979,7 @@ export default function Home() {
             meal={logMeal}
             compact
             defaultUncertain={logUncertain}
-            planMeals={planMealsFor(logMeal)}
+            planMeals={allPlanMeals}
             onMealChange={setLogMeal}
             onAdd={addFood}
             onAddMany={(foods) => addFoods(foods)}

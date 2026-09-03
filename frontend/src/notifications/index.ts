@@ -36,7 +36,47 @@ export {
   loadSettings as loadSleepReminderSettings,
   saveSettings as saveSleepReminderSettings,
   syncSleepReminders,
+  sendTestSleepReminder,
   formatTime,
   DEFAULT_SETTINGS as DEFAULT_SLEEP_REMINDER,
 } from "./sleepReminder";
 export type { SleepReminderSettings } from "./sleepReminder";
+
+export {
+  MEAL_REMINDER_TYPE,
+  MEAL_FOLLOWUP_TYPE,
+  DEFAULT_MEAL_REMINDER,
+  loadMealReminderSettings,
+  saveMealReminderSettings,
+  syncMealReminders,
+  clearMealReminders,
+  sendTestMealReminder,
+  formatTime as formatMealReminderTime,
+} from "./mealReminder";
+export type { MealReminderSettings, MealReminderSlot } from "./mealReminder";
+
+export {
+  setupMealReminderResponseHandler,
+  setOpenMealLogHandler,
+  handleMealNotificationResponse,
+} from "./mealReminderHandler";
+
+export {
+  WORKOUT_LIVE_TYPE,
+  buildWorkoutLiveSnapshot,
+  syncWorkoutLive,
+  endWorkoutLive,
+} from "./workoutSessionLive";
+export type { WorkoutLiveSnapshot } from "./workoutSessionLive";
+
+export {
+  setupWorkoutLiveResponseHandler,
+  handleWorkoutNotificationResponse,
+} from "./workoutSessionHandler";
+
+export {
+  requestWorkoutLiveAction,
+  consumeWorkoutLiveAction,
+  subscribeWorkoutLiveActions,
+} from "./pendingWorkoutAction";
+export type { WorkoutLiveAction } from "./pendingWorkoutAction";

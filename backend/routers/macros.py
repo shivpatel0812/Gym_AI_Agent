@@ -1,11 +1,14 @@
 from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File, Form
 from typing import Optional, List, Dict
 from datetime import datetime
-import shutil
+from io import BytesIO
 import tempfile
 import os
-from models import MacroEntry, SavedFood, SavedFoodUpdate, FoodEstimateRequest
+from PIL import Image, ImageOps, UnidentifiedImageError
+from models import MacroEntry, SavedFood, SavedFoodUpdate, FoodEstimateRequest, AdjustEstimateRequest
 from nutrition.gpt_food_lookup import estimate_food_from_query
+from nutrition.adjust_estimate import adjust_macro_estimate
+from nutrition.photo_estimate import normalize_cooking_style
 import re
 from auth import get_user_id
 from db import db
@@ -40,6 +43,12 @@ def _saved_food_payload(item: dict, now: str) -> Optional[dict]:
     x3" log would redefine a rice cake as three of them -- and that inflated
     value would then be re-logged and re-remembered, compounding each time.
     """
+    # The photo flow calls /foods with correction metadata immediately after
+    # logging. Skipping it here prevents this generic hook from racing that
+    # request and promoting an untouched AI estimate to a trusted prior.
+    if str(item.get("log_source") or "").strip().lower() == "photo":
+        return None
+
     name = str(item.get("name") or "").strip()
     if not name:
         return None
@@ -133,6 +142,112 @@ def _food_matches_query(food: dict, query: str) -> bool:
         return False
     return all(t in blob for t in tokens)
 
+
+_PHOTO_PRIOR_STOPWORDS = {
+    "and", "ate", "for", "from", "had", "homemade", "little", "made",
+    "meal", "some", "the", "this", "with",
+}
+
+
+def _rank_photo_food_priors(
+    foods: List[dict], title: Optional[str], description: Optional[str]
+) -> List[dict]:
+    """Find a few relevant foods the user previously confirmed.
+
+    These are prompt priors, not ground truth.  Requiring token overlap avoids
+    biasing an unidentified photo toward whichever foods happen to be recent.
+    """
+    title_key = _normalize_food_text(title or "")
+    query_key = _normalize_food_text(" ".join(part for part in (title, description) if part))
+    query_tokens = {
+        token
+        for token in query_key.split(" ")
+        if len(token) > 2 and not token.isdigit() and token not in _PHOTO_PRIOR_STOPWORDS
+    }
+    if not title_key and not query_tokens:
+        return []
+
+    ranked = []
+    for food in foods:
+        if not isinstance(food, dict):
+            continue
+        # Do not let an untouched AI estimate become its own ground truth.
+        # Photo-only foods enter the prompt after two explicit adjustments.
+        if food.get("photo_only") and not food.get("photo_calibrated"):
+            continue
+        name_key = _normalize_food_text(food.get("name") or "")
+        blob = _food_search_blob(food)
+        blob_tokens = set(blob.split(" "))
+        overlap = len(query_tokens & blob_tokens)
+        score = overlap
+        if title_key and name_key == title_key:
+            score += 10
+        elif title_key and title_key in blob:
+            score += 5
+        if score <= 0:
+            continue
+        ranked.append((score, str(food.get("last_used_at") or ""), food))
+
+    ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    return [food for _, _, food in ranked[:3]]
+
+
+def _photo_food_priors(user_id: str, title: Optional[str], description: Optional[str]) -> List[dict]:
+    foods = [(doc.to_dict() or {}) for doc in _foods_ref(user_id).stream()]
+    return _rank_photo_food_priors(foods, title, description)
+
+
+MAX_FOOD_IMAGE_BYTES = 12 * 1024 * 1024
+MAX_FOOD_IMAGE_PIXELS = 40_000_000
+MAX_FOOD_IMAGE_EDGE = 1536
+
+
+async def _save_normalized_food_image(upload: UploadFile) -> str:
+    """Validate, orient, resize, and encode an upload as a real JPEG."""
+    if upload.content_type and not upload.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Uploaded file must be an image")
+
+    payload = await upload.read(MAX_FOOD_IMAGE_BYTES + 1)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty")
+    if len(payload) > MAX_FOOD_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image is too large (max 12MB)")
+
+    temp_path = None
+    try:
+        with Image.open(BytesIO(payload)) as source:
+            source.load()
+            if source.width < 64 or source.height < 64:
+                raise HTTPException(status_code=400, detail="Image is too small to analyze")
+            if source.width * source.height > MAX_FOOD_IMAGE_PIXELS:
+                raise HTTPException(status_code=413, detail="Image dimensions are too large")
+
+            image = ImageOps.exif_transpose(source)
+            if image.mode in ("RGBA", "LA") or "transparency" in image.info:
+                rgba = image.convert("RGBA")
+                background = Image.new("RGB", rgba.size, "white")
+                background.paste(rgba, mask=rgba.getchannel("A"))
+                image = background
+            else:
+                image = image.convert("RGB")
+            image.thumbnail(
+                (MAX_FOOD_IMAGE_EDGE, MAX_FOOD_IMAGE_EDGE),
+                Image.Resampling.LANCZOS,
+            )
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                temp_path = tmp.name
+                image.save(tmp, format="JPEG", quality=90, optimize=True)
+        return temp_path
+    except HTTPException:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise HTTPException(status_code=400, detail="Unsupported or invalid image") from exc
+
 @router.get("")
 async def get_macro_entries(user_id: str = Depends(get_user_id), date_filter: Optional[str] = Query(None)):
     macros_ref = db.collection("users").document(user_id).collection("macros")
@@ -218,27 +333,34 @@ async def delete_macro_entry(macro_id: str, user_id: str = Depends(get_user_id))
 async def analyze_food_image_endpoint(
     file: UploadFile = File(...),
     description: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    cooking_style: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
     user_id: str = Depends(get_user_id)
 ):
     """
     Analyze a meal photo with optional user description.
-    GPT vision estimates the portion shown; YOLO/USDA is the fallback.
+    GPT vision estimates the portion shown and reports uncertainty metadata.
     model: "gpt-4o" (default) or "gpt-5.6-sol"
     """
-    # Save uploaded file temporarily
     temp_file = None
     try:
-        # Create temporary file
-        suffix = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            temp_file = tmp.name
-            shutil.copyfileobj(file.file, tmp)
-        
-        # Use the nutrition analyzer module
-        result = analyze_food_image(temp_file, description, model=model)
+        temp_file = await _save_normalized_food_image(file)
+        try:
+            priors = _photo_food_priors(user_id, title, description)
+        except Exception:
+            priors = []
+        result = analyze_food_image(
+            temp_file,
+            description,
+            model=model,
+            title=title,
+            cooking_style=normalize_cooking_style(cooking_style),
+            prior_foods=priors,
+        )
         return result
-    
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -246,11 +368,10 @@ async def analyze_food_image_endpoint(
         )
     
     finally:
-        # Clean up temporary file
         if temp_file and os.path.exists(temp_file):
             try:
                 os.unlink(temp_file)
-            except:
+            except OSError:
                 pass
 
 
@@ -269,6 +390,8 @@ async def list_saved_foods(user_id: str = Depends(get_user_id)):
 @router.post("/foods")
 async def save_food(food: SavedFood, user_id: str = Depends(get_user_id)):
     payload = food.dict(exclude={"id"})
+    log_source = str(payload.pop("log_source", "") or "").strip().lower()
+    was_adjusted = bool(payload.pop("was_adjusted", False))
     payload["aliases"] = payload.get("aliases") or []
     payload["updated_at"] = datetime.now().isoformat()
     payload["last_used_at"] = datetime.now().isoformat()
@@ -282,14 +405,36 @@ async def save_food(food: SavedFood, user_id: str = Depends(get_user_id)):
             break
 
     if existing:
-        merged_aliases = list({*(existing.to_dict().get("aliases") or []), *payload["aliases"]})
+        previous = existing.to_dict() or {}
+        merged_aliases = list({*(previous.get("aliases") or []), *payload["aliases"]})
         payload["aliases"] = merged_aliases
-        if not existing.to_dict().get("created_at"):
+        if log_source == "photo":
+            observations = int(previous.get("photo_observation_count") or 0) + 1
+            corrections = int(previous.get("photo_correction_count") or 0) + int(was_adjusted)
+            payload.update(
+                {
+                    "photo_only": bool(previous.get("photo_only", False)),
+                    "photo_observation_count": observations,
+                    "photo_correction_count": corrections,
+                    "photo_calibrated": corrections >= 2,
+                }
+            )
+        if not previous.get("created_at"):
             payload["created_at"] = datetime.now().isoformat()
         existing.reference.set(payload, merge=True)
-        return {"id": existing.id, **{**(existing.to_dict() or {}), **payload}}
+        return {"id": existing.id, **{**previous, **payload}}
 
     payload["created_at"] = datetime.now().isoformat()
+    if log_source == "photo":
+        corrections = int(was_adjusted)
+        payload.update(
+            {
+                "photo_only": True,
+                "photo_observation_count": 1,
+                "photo_correction_count": corrections,
+                "photo_calibrated": corrections >= 2,
+            }
+        )
     doc_ref = _foods_ref(user_id).document()
     doc_ref.set(payload)
     return {"id": doc_ref.id, **payload}
@@ -347,3 +492,31 @@ async def estimate_food(payload: FoodEstimateRequest, user_id: str = Depends(get
     doc_ref = _foods_ref(user_id).document()
     doc_ref.set(estimated)
     return {"id": doc_ref.id, **estimated, "from_cache": False}
+
+
+@router.post("/adjust-estimate")
+async def adjust_estimate_endpoint(
+    payload: AdjustEstimateRequest,
+    user_id: str = Depends(get_user_id),
+):
+    """Let the user dispute an AI macro estimate via a mini chat."""
+    message = (payload.message or "").strip()
+    if len(message) < 2:
+        raise HTTPException(status_code=422, detail="Say what looks wrong.")
+    if not payload.current_estimate:
+        raise HTTPException(status_code=422, detail="No estimate to adjust.")
+
+    # Cap conversation to 6 turns (3 user + 3 assistant) to keep tokens sane.
+    history = (payload.conversation_history or [])[-6:]
+
+    result = adjust_macro_estimate(
+        current_estimate=payload.current_estimate,
+        user_message=message,
+        history=history,
+    )
+    if not result:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not process the adjustment. Try rephrasing.",
+        )
+    return result

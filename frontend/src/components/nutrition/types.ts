@@ -21,6 +21,9 @@ export interface FoodItem {
   usual_id?: string;
   /** Nutrition-plan meal anchor this log fulfills. */
   anchor_id?: string;
+  /** Internal hints for correction-aware photo personalization. */
+  log_source?: "photo";
+  was_adjusted?: boolean;
 }
 
 export interface MacroEntry {

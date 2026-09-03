@@ -98,6 +98,25 @@ class WorkoutRecommender:
             }]
         return []
 
+    @staticmethod
+    def _top_set_of(sets: List[Dict]) -> Optional[Dict]:
+        """Heaviest set by e1RM, ignoring the `completed` flag.
+
+        Bodyweight work carries no load, so reps decide the top set there.
+        """
+        performed = [s for s in sets if (s.get("reps") or 0) > 0]
+        if not performed:
+            return None
+        weighted = [s for s in performed if (s.get("weight") or 0) > 0]
+        if weighted:
+            best = max(
+                weighted,
+                key=lambda s: (s.get("weight") or 0) * (1 + (s.get("reps") or 0) / 30),
+            )
+        else:
+            best = max(performed, key=lambda s: s.get("reps") or 0)
+        return {"weight": best.get("weight") or 0, "reps": best.get("reps") or 0}
+
     def _get_exercise_history(
         self,
         exercise_id: str,
@@ -130,9 +149,14 @@ class WorkoutRecommender:
                 )
                 if not sets and not is_cardio_entry:
                     continue
+                performed = sets or self._normalize_exercise_sets(ex)
                 result.append({
                     "date": session.get("date"),
-                    "sets": sets or self._normalize_exercise_sets(ex),
+                    "sets": performed,
+                    # Charts fall back to this when every set in a session is
+                    # unticked, which older logs commonly are. Without it those
+                    # sessions vanish from the history line entirely.
+                    "top_set": self._top_set_of(performed),
                     "time": ex.get("time"),
                     "speed": ex.get("speed"),
                     # Read by the cardio progression to decide whether the last

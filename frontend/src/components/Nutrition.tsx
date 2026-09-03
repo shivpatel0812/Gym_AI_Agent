@@ -18,6 +18,7 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import { colors, spacing } from "../theme";
 import Ring from "./nutrition/Ring";
 import LogFoodForm, { PlanMealPick } from "./nutrition/LogFoodForm";
+import MealReminderRow from "./nutrition/MealReminderRow";
 import TodayGuidanceCard from "./nutrition/plan/TodayGuidanceCard";
 import NutritionPlanTab from "./nutrition/plan/NutritionPlanTab";
 import SavedFoodsTab from "./nutrition/SavedFoodsTab";
@@ -371,12 +372,11 @@ export default function Nutrition() {
   };
 
   const planMealsForLogging = useMemo((): PlanMealPick[] => {
-    if (!loggingMeal || !activePlan?.meal_anchors?.length) return [];
-    const slot = normalizeMealLabel(loggingMeal);
+    if (!activePlan?.meal_anchors?.length) return [];
     const [y, m, d] = selectedDate.split("-").map(Number);
     const weekday = todayWeekdayKey(new Date(y, m - 1, d, 12));
     return (activePlan.meal_anchors || [])
-      .filter((a) => a.id && normalizeMealLabel(a.slot) === slot)
+      .filter((a) => a.id)
       .map((a) => ({
         id: String(a.id),
         label: a.label || "Plan meal",
@@ -384,12 +384,15 @@ export default function Nutrition() {
         foods: a.foods || [],
         schedule: daysLabel(a.days, a.frequency),
         appliesToday: planItemAppliesToday(a, weekday),
+        slot: normalizeMealLabel(a.slot),
       }))
       .sort((a, b) => {
         if (a.appliesToday !== b.appliesToday) return a.appliesToday ? -1 : 1;
+        const slotCmp = (a.slot || "").localeCompare(b.slot || "");
+        if (slotCmp) return slotCmp;
         return a.label.localeCompare(b.label);
       });
-  }, [loggingMeal, activePlan, selectedDate]);
+  }, [activePlan, selectedDate]);
 
   const removeFood = async (row: MealRow) => {
     try {
@@ -620,6 +623,7 @@ export default function Nutrition() {
           )}
 
           <TodayGuidanceCard guidance={guidance} />
+          <MealReminderRow />
 
           {showTargets && (
             <View style={styles.targetsCard}>

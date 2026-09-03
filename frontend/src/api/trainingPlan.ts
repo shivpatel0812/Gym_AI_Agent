@@ -174,7 +174,7 @@ export interface ProjectedExercise extends PlanExercise {
   last_trained?: string | null;
   recent_sessions?: Array<{
     date?: string;
-    sets?: Array<{ weight?: number; reps?: number; completed?: boolean }>;
+    sets?: Array<{ set_number?: number; weight?: number; reps?: number; completed?: boolean }>;
     /**
      * The session's heaviest set, computed server-side without regard to the
      * `completed` flag. Used as a fallback when every set in a session is
@@ -187,7 +187,7 @@ export interface ProjectedExercise extends PlanExercise {
     lifetime_session_count: number;
     recent_sessions?: Array<{
       date?: string;
-      sets?: Array<{ weight?: number; reps?: number; completed?: boolean }>;
+      sets?: Array<{ set_number?: number; weight?: number; reps?: number; completed?: boolean }>;
       top_set?: { weight?: number; reps?: number } | null;
     }>;
     best_weighted_set?: { weight?: number; reps?: number; date?: string } | null;
@@ -202,6 +202,17 @@ export interface ProjectedDay extends Omit<PlanDay, "exercises"> {
   exercises: ProjectedExercise[];
 }
 
+/** One day's logged work for a muscle group, across every exercise. */
+export interface MuscleGroupDay {
+  date: string;
+  stimulus: number;
+  sessions: Array<{
+    exercise_id: string;
+    exercise_name: string;
+    sets: Array<{ set_number?: number; weight: number; reps: number; completed?: boolean }>;
+  }>;
+}
+
 export interface PlanProjection {
   weeks: number;
   plan_id: string;
@@ -210,6 +221,12 @@ export interface PlanProjection {
   weekly_schedule?: Record<string, string>;
   progress: PlanProgress;
   days: ProjectedDay[];
+  /**
+   * Stimulus per muscle group per day, computed server-side from the whole
+   * workout log rather than from the current plan day's exercises — so
+   * swapping incline press for cable flies reads as continuity, not a drop.
+   */
+  muscle_group_history?: Record<string, MuscleGroupDay[]>;
 }
 
 export async function getPlanModes(): Promise<PlanModeOption[]> {

@@ -90,6 +90,10 @@ class FoodItem(BaseModel):
     anchor_id: Optional[str] = None
     # Logged when the user wasn't sure what they'd eat (esp. lunch/dinner).
     uncertain: Optional[bool] = None
+    # Photo logs are remembered through the correction-aware saved-food route,
+    # rather than the generic automatic library hook.
+    log_source: Optional[str] = None
+    was_adjusted: Optional[bool] = None
 
 class SavedFood(BaseModel):
     id: Optional[str] = None
@@ -102,6 +106,10 @@ class SavedFood(BaseModel):
     fats: Optional[float] = 0
     fiber: Optional[float] = 0
     aliases: Optional[List[str]] = None
+    # Request-only hints used to calibrate repeated photo corrections. The
+    # macros remain editable; these flags are removed before storage.
+    log_source: Optional[str] = None
+    was_adjusted: Optional[bool] = None
 
 
 class SavedFoodUpdate(BaseModel):
@@ -119,6 +127,13 @@ class SavedFoodUpdate(BaseModel):
 class FoodEstimateRequest(BaseModel):
     query: str
     name: Optional[str] = None
+
+
+class AdjustEstimateRequest(BaseModel):
+    """User disputes AI macro estimate — chat revises it."""
+    message: str
+    current_estimate: Dict
+    conversation_history: Optional[List[Dict]] = None
 
 
 class MacroEntry(BaseModel):
@@ -427,5 +442,3 @@ class NutritionPlan(BaseModel):
     updated_at: Optional[str] = None
     ended_at: Optional[str] = None
     version: int = 1
-
-

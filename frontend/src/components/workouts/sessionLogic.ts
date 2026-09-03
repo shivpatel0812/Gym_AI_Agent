@@ -640,17 +640,15 @@ export function exerciseMatchesMuscleGroup(
   return category === filter;
 }
 
-/** Muscle groups relevant to the current split day (e.g. Push → chest, shoulders, triceps). */
-export function muscleGroupsForSplitDay(
-  splitDay?: string,
-  splitName?: string
-): string[] {
-  const key = `${splitDay || ""} ${splitName || ""}`.toLowerCase();
-  if (/\bpush\b|push day|chest.*tricep|tricep.*chest/.test(key)) {
-    return ["CHEST", "SHOULDERS", "TRICEPS"];
-  }
+/** Infer muscle-group pills from a single label (day name, focus line, etc.). */
+function muscleGroupsFromText(text: string): string[] | null {
+  const key = text.toLowerCase().trim();
+  if (!key) return null;
   if (/\bpull\b|pull day|back.*bicep|bicep.*back/.test(key)) {
     return ["BACK", "BICEPS"];
+  }
+  if (/\bpush\b|push day|chest.*tricep|tricep.*chest|shoulder.*tricep/.test(key)) {
+    return ["CHEST", "SHOULDERS", "TRICEPS"];
   }
   if (/\bleg\b|lower|glute|quad|hamstring/.test(key)) {
     return ["LEGS", "GLUTES", "CALVES"];
@@ -666,6 +664,40 @@ export function muscleGroupsForSplitDay(
   if (/\bshoulder\b/.test(key)) return ["SHOULDERS"];
   if (/\barm\b|bicep|tricep/.test(key)) return ["BICEPS", "TRICEPS"];
   if (/\bcore\b|\babs\b/.test(key)) return ["CORE / ABS"];
+  return null;
+}
+
+/** Parse plan focus lines like "Back / Biceps" into pill groups. */
+function muscleGroupsFromFocus(focus: string): string[] | null {
+  const key = focus.toLowerCase();
+  const groups: string[] = [];
+  if (/\bback\b/.test(key)) groups.push("BACK");
+  if (/\bbicep/.test(key)) groups.push("BICEPS");
+  if (/\bchest\b/.test(key)) groups.push("CHEST");
+  if (/\bshoulder/.test(key)) groups.push("SHOULDERS");
+  if (/\btricep/.test(key)) groups.push("TRICEPS");
+  if (/\bleg|quad|hamstring/.test(key)) groups.push("LEGS");
+  if (/\bglute/.test(key)) groups.push("GLUTES");
+  if (/\bcalf|calves/.test(key)) groups.push("CALVES");
+  if (/\bcore\b|\babs\b/.test(key)) groups.push("CORE / ABS");
+  return groups.length ? [...new Set(groups)] : null;
+}
+
+/** Muscle groups relevant to the current split day (e.g. Push → chest, shoulders, triceps). */
+export function muscleGroupsForSplitDay(
+  splitDay?: string,
+  splitName?: string,
+  focus?: string
+): string[] {
+  // Day name and focus beat the plan title. A Pull session must not inherit
+  // "Push" from a plan named "Push Pull Legs".
+  for (const source of [splitDay, focus, splitName]) {
+    if (!source?.trim()) continue;
+    const fromText = muscleGroupsFromText(source);
+    if (fromText) return fromText;
+    const fromFocus = muscleGroupsFromFocus(source);
+    if (fromFocus) return fromFocus;
+  }
   return [];
 }
 

@@ -121,6 +121,7 @@ export default function TodayFoodLog({
   onBumpFood?: (tag: string, delta: number, base: FoodItem) => Promise<void> | void;
 }) {
   const [anchorMenuMeal, setAnchorMenuMeal] = useState<HomeMealId | null>(null);
+  const [qtyPickerId, setQtyPickerId] = useState<string | null>(null);
   const now = currentMealId();
   const targets = plan?.targets || {};
   const calTarget = Math.max(Number(targets.calories) || 2200, 1);
@@ -281,29 +282,6 @@ export default function TodayFoodLog({
     await onLogFoods(items);
   };
 
-  const logMealAgain = async (mealId: HomeMealId, loggedFoods: FoodItem[]) => {
-    if (loggedFoods.length === 1) {
-      const row = loggedFoods[0];
-      const tag = row.usual_id || row.anchor_id;
-      const qty = foodQuantity(row);
-      if (tag && onBumpFood) {
-        const unit: FoodItem = {
-          ...row,
-          calories: Math.round((Number(row.calories) || 0) / qty),
-          protein: (Number(row.protein) || 0) / qty,
-          carbs: row.carbs != null ? (Number(row.carbs) || 0) / qty : undefined,
-          fats: row.fats != null ? (Number(row.fats) || 0) / qty : undefined,
-          fiber: row.fiber != null ? (Number(row.fiber) || 0) / qty : undefined,
-          quantity: 1,
-        };
-        await onBumpFood(tag, 1, unit);
-        return;
-      }
-    }
-    const repeat = onRepeatFoods ?? onLogFoods;
-    await repeat(loggedFoods.map((f) => ({ ...f, meal: mealId })));
-  };
-
   /** The per-unit food a go-to tile logs. */
   const goToBase = (item: GoToItem): FoodItem => ({
     name: item.name,
@@ -331,6 +309,33 @@ export default function TodayFoodLog({
       return;
     }
     void onLogFoods([goToBase(item)]);
+  };
+
+  const logGoToQty = (item: GoToItem, qty: number) => {
+    const current = goToCount(item, todayFoods);
+    const delta = qty - current;
+    if (delta === 0) {
+      setQtyPickerId(null);
+      return;
+    }
+    if (delta > 0 && item.id && onBumpFood) {
+      void onBumpFood(item.id, delta, goToBase(item));
+    } else if (delta > 0) {
+      const foods = Array.from({ length: delta }, () => goToBase(item));
+      void onLogFoods(foods);
+    } else if (item.id) {
+      const doRemove = async () => {
+        await onRemoveTag(item.id!);
+        if (qty > 0 && onBumpFood && item.id) {
+          void onBumpFood(item.id, qty, goToBase(item));
+        } else if (qty > 0) {
+          const foods = Array.from({ length: qty }, () => goToBase(item));
+          void onLogFoods(foods);
+        }
+      };
+      void doRemove();
+    }
+    setQtyPickerId(null);
   };
 
   const clearGoTo = (item: GoToItem) => {
@@ -385,7 +390,6 @@ export default function TodayFoodLog({
           const preview = logged
             ? loggedFoods[0].name + (loggedFoods.length > 1 ? ` +${loggedFoods.length - 1}` : "")
             : primary?.label || (showUncertain ? "Open / TBD" : "Not logged");
-          const busy = Boolean(primary?.id && loggingId === primary.id);
           const menuOpen = anchorMenuMeal === meal.id;
           const hasAltAnchors = anchors.length > 1;
 
@@ -514,36 +518,18 @@ export default function TodayFoodLog({
                   !logged && showUncertain && { backgroundColor: bp.uncertain },
                   !logged && kind === "potential" && { backgroundColor: bp.potential },
                 ]}
-                onPress={() => {
-                  if (primary) void logAnchorAdd(primary, meal.id);
-                  else if (logged) void logMealAgain(meal.id, loggedFoods);
-                  else onLogMeal(meal.id, showUncertain);
-                }}
-                disabled={busy}
+                onPress={() => onLogMeal(meal.id, showUncertain && !logged)}
               >
-                {busy ? (
-                  <ActivityIndicator
-                    size="small"
-                    color={
-                      logged
-                        ? colors.onAccent
-                        : showUncertain || kind === "potential"
-                          ? "#fff"
-                          : colors.onAccent
-                    }
-                  />
-                ) : (
-                  <Text
-                    style={[
-                      styles.mealBtnText,
-                      logged && styles.mealBtnOnText,
-                      !logged &&
-                        (showUncertain || kind === "potential") && { color: "#fff" },
-                    ]}
-                  >
-                    Log
-                  </Text>
-                )}
+                <Text
+                  style={[
+                    styles.mealBtnText,
+                    logged && styles.mealBtnOnText,
+                    !logged &&
+                      (showUncertain || kind === "potential") && { color: "#fff" },
+                  ]}
+                >
+                  {logged ? "Add" : "Log"}
+                </Text>
               </TouchableOpacity>
             </View>
           );
@@ -703,10 +689,7 @@ export default function TodayFoodLog({
                         eaten && styles.anchorLogBtnOn,
                         eaten && { borderColor: accent },
                       ]}
-                      onPress={() => {
-                        if (current) logAnchor(current, now);
-                        else onLogMeal(now, displayKind === "uncertain");
-                      }}
+                      onPress={() => onLogMeal(now, displayKind === "uncertain")}
                       disabled={busy}
                     >
                       {busy ? (
@@ -743,17 +726,19 @@ export default function TodayFoodLog({
                     const count = goToCount(item, todayFoods);
                     const on = count > 0;
                     const icon = SLOT_ICONS[normalizeMealLabel(item.slot) || "other"] || "food";
+                    const tileId = item.id || `${item.name}-${i}`;
+                    const showQty = qtyPickerId === tileId;
                     return (
                       <TouchableOpacity
-                        key={item.id || `${item.name}-${i}`}
-                        style={[styles.goTile, on && styles.goTileOn]}
+                        key={tileId}
+                        style={[styles.goTile, on && styles.goTileOn, showQty && styles.goTileSelected]}
                         onPress={() => logGoTo(item)}
-                        onLongPress={() => clearGoTo(item)}
-                        delayLongPress={350}
+                        onLongPress={() => setQtyPickerId(showQty ? null : tileId)}
+                        delayLongPress={300}
                         accessibilityLabel={
                           on
-                            ? `${item.name}, ${count} logged. Tap to add another, hold to clear.`
-                            : `${item.name}. Tap to log.`
+                            ? `${item.name}, ${count} logged. Tap +1, hold for quantity.`
+                            : `${item.name}. Tap to log, hold for quantity.`
                         }
                       >
                         <View style={[styles.goIcon, on && styles.goIconOn]}>
@@ -766,7 +751,7 @@ export default function TodayFoodLog({
                         <Text style={[styles.goName, on && styles.goNameOn]} numberOfLines={2}>
                           {item.name}
                         </Text>
-                        {count > 1 ? (
+                        {count > 0 ? (
                           <View style={styles.goCountBadge}>
                             <Text style={styles.goCountText}>×{count}</Text>
                           </View>
@@ -778,6 +763,44 @@ export default function TodayFoodLog({
               ) : (
                 <Text style={styles.prevEmpty}>No go-tos yet.</Text>
               )}
+              {(() => {
+                const activeItem = qtyPickerId
+                  ? goTos.find((g, j) => (g.id || `${g.name}-${j}`) === qtyPickerId)
+                  : null;
+                if (!activeItem) return null;
+                const cnt = goToCount(activeItem, todayFoods);
+                return (
+                  <View style={styles.qtyBar}>
+                    <Text style={styles.qtyBarLabel} numberOfLines={1}>
+                      {activeItem.name}
+                    </Text>
+                    <View style={styles.qtyRow}>
+                      <TouchableOpacity
+                        style={styles.qtyStepBtn}
+                        onPress={() => cnt > 0 && logGoToQty(activeItem, cnt - 1)}
+                        disabled={cnt <= 0}
+                      >
+                        <MaterialCommunityIcons name="minus" size={14} color={cnt > 0 ? "#fff" : "#3A4554"} />
+                      </TouchableOpacity>
+                      <View style={styles.qtyValueBox}>
+                        <Text style={styles.qtyValueText}>{cnt}</Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.qtyStepBtn}
+                        onPress={() => logGoToQty(activeItem, cnt + 1)}
+                      >
+                        <MaterialCommunityIcons name="plus" size={14} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.qtyDoneBtn}
+                      onPress={() => setQtyPickerId(null)}
+                    >
+                      <Text style={styles.qtyDoneText}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })()}
             </View>
           </View>
         );
@@ -1008,4 +1031,56 @@ const styles = StyleSheet.create({
   goIconOn: { backgroundColor: "#4ADE80", borderColor: "#4ADE80" },
   goName: { color: "#8E8E93", fontSize: 9, fontWeight: "700", textAlign: "center", lineHeight: 11 },
   goNameOn: { color: "#DCFCE7" },
+  goTileSelected: {
+    borderWidth: 1,
+    borderColor: colors.accentPrimary,
+    borderRadius: 8,
+  },
+  qtyBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  qtyBarLabel: {
+    flex: 1,
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
+    minWidth: 0,
+  },
+  qtyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  qtyStepBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#1E2A38",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  qtyValueBox: {
+    minWidth: 28,
+    alignItems: "center",
+  },
+  qtyValueText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  qtyDoneBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: colors.accentPrimary,
+  },
+  qtyDoneText: { color: colors.onAccent, fontSize: 11, fontWeight: "800" },
 });

@@ -76,7 +76,10 @@ def _exercise_matches(candidate: Dict, exercise_id: Optional[str], name: str) ->
 
 
 def _exercise_history_context(
-    sessions: List[Dict], exercise_id: Optional[str], exercise_name: str
+    sessions: List[Dict],
+    exercise_id: Optional[str],
+    exercise_name: str,
+    recent_limit: int = MAX_CONTEXT_SESSIONS_PER_EXERCISE,
 ) -> Dict[str, Any]:
     """Compact lifetime evidence attached to an exercise in an exact-day result."""
     history = []
@@ -87,12 +90,16 @@ def _exercise_history_context(
             sets = exercise.get("sets", []) or []
             normalized_sets = [
                 {
+                    # Carried through so a client that hides unticked sets can
+                    # still label the remaining ones by the number the user
+                    # actually logged, rather than renumbering from 1.
+                    "set_number": workout_set.get("set_number") or index + 1,
                     "weight": workout_set.get("weight"),
                     "reps": workout_set.get("reps"),
                     "rpe": workout_set.get("rpe"),
                     "completed": workout_set.get("completed"),
                 }
-                for workout_set in sets
+                for index, workout_set in enumerate(sets)
             ]
             history.append({
                 "date": session.get("date"),
@@ -101,8 +108,14 @@ def _exercise_history_context(
             })
 
     history.sort(key=lambda item: item.get("date") or "", reverse=True)
+    # `set_number` exists for rendering a session's rows in order; the
+    # best-set records are single sets pulled out of context, where an
+    # ordinal means nothing and would only widen the LLM payload.
     all_sets = [
-        {**workout_set, "date": entry.get("date")}
+        {
+            **{k: v for k, v in workout_set.items() if k != "set_number"},
+            "date": entry.get("date"),
+        }
         for entry in history
         for workout_set in entry.get("sets", [])
         if (workout_set.get("reps") or 0) > 0
@@ -123,7 +136,7 @@ def _exercise_history_context(
     )
     most_recent_weighted = weighted[0] if weighted else None
 
-    recent = history[:MAX_CONTEXT_SESSIONS_PER_EXERCISE]
+    recent = history[:recent_limit]
     recent_top_sets = [entry.get("top_set") for entry in reversed(recent) if entry.get("top_set")]
     trend = "insufficient_history"
     if len(recent_top_sets) >= 2:

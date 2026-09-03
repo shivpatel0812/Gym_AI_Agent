@@ -69,6 +69,14 @@ import {
   splitLabel,
   toStoredRecommendation,
 } from "./sessionLogic";
+import {
+  buildWorkoutLiveSnapshot,
+  syncWorkoutLive,
+  endWorkoutLive,
+  subscribeWorkoutLiveActions,
+  consumeWorkoutLiveAction,
+  type WorkoutLiveAction,
+} from "../../notifications";
 
 interface SessionsSectionProps {
   exercises: Exercise[];
@@ -223,7 +231,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     () =>
       muscleGroupsForSplitDay(
         formData.split_day || activePlanDay?.day_name,
-        formData.split_name || activePlanDay?.plan_name
+        formData.split_name || activePlanDay?.plan_name,
+        activePlanDay?.focus
       ),
     [formData.split_day, formData.split_name, activePlanDay]
   );
@@ -352,6 +361,37 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
       if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
     };
   }, [formData.exercises, formData.date, formData.split_name, formData.split_day, formData.notes, showForm, performAutoSave]);
+
+  // Lock-screen Live Activity / sticky notification while the session timer runs.
+  useEffect(() => {
+    if (!showForm || !timer.firstStartedAt) {
+      void endWorkoutLive();
+      return;
+    }
+    const snapshot = buildWorkoutLiveSnapshot(formData.exercises, aiRecommendations, {
+      dayLabel: formData.split_day || formData.split_name || "GymAI",
+      elapsedSeconds: timer.elapsedSeconds,
+      isRunning: timer.isRunning,
+      lastExerciseData,
+    });
+    void syncWorkoutLive(snapshot);
+  }, [
+    showForm,
+    formData.exercises,
+    formData.split_day,
+    formData.split_name,
+    aiRecommendations,
+    lastExerciseData,
+    timer.elapsedSeconds,
+    timer.isRunning,
+    timer.firstStartedAt,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      void endWorkoutLive();
+    };
+  }, []);
 
   const allExercises: PickerExercise[] = useMemo(() => {
     const defaults = defaultExercises.map((ex) => ({
@@ -665,12 +705,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     });
   };
 
-  const renderMuscleHistory = (cardIdx: number, exerciseGroup: string | null) => {
-    const group =
-      activeMuscleFilter?.cardIdx === cardIdx
-        ? activeMuscleFilter.group
-        : exerciseGroup;
-    if (!group) return null;
+  const renderMuscleHistory = (cardIdx: number) => {
+    if (activeMuscleFilter?.cardIdx !== cardIdx) return null;
+    const group = activeMuscleFilter.group;
 
     const expanded = !collapsedHistoryCards.has(cardIdx);
     const recentLogs = getRecentMuscleGroupLogs(
@@ -1118,6 +1155,62 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     });
   };
 
+  const applyWorkoutLiveAction = useCallback(
+    (action: WorkoutLiveAction) => {
+      if (!showForm) return;
+      if (action.type === "open-session") return;
+
+      const snapshot = buildWorkoutLiveSnapshot(
+        formDataRef.current.exercises,
+        aiRecommendations,
+        {
+          dayLabel: formDataRef.current.split_day || formDataRef.current.split_name,
+          elapsedSeconds: timer.elapsedSeconds,
+          isRunning: timer.isRunning,
+          lastExerciseData,
+        }
+      );
+      if (!snapshot) return;
+
+      const exerciseIdx =
+        action.exerciseIdx >= 0 ? action.exerciseIdx : snapshot.exerciseIdx;
+      const setIdx = action.setIdx >= 0 ? action.setIdx : snapshot.setIdx;
+      const reps =
+        action.reps != null && action.reps > 0
+          ? action.reps
+          : snapshot.reps != null && snapshot.reps > 0
+            ? snapshot.reps
+            : undefined;
+      const weight =
+        action.weight != null && action.weight > 0
+          ? action.weight
+          : snapshot.weight != null && snapshot.weight > 0
+            ? snapshot.weight
+            : undefined;
+
+      if (reps == null && weight == null) return;
+      updateSet(exerciseIdx, setIdx, {
+        ...(reps != null ? { reps } : {}),
+        ...(weight != null ? { weight } : {}),
+      });
+      consumeWorkoutLiveAction();
+    },
+    [
+      showForm,
+      aiRecommendations,
+      lastExerciseData,
+      timer.elapsedSeconds,
+      timer.isRunning,
+    ]
+  );
+
+  useEffect(() => {
+    if (!showForm) return;
+    const pending = consumeWorkoutLiveAction();
+    if (pending) applyWorkoutLiveAction(pending);
+    return subscribeWorkoutLiveActions(applyWorkoutLiveAction);
+  }, [showForm, applyWorkoutLiveAction]);
+
   // Fire the next-set suggestion when a set actually transitions to complete,
   // read from committed state rather than guessed at inside a state updater.
   useEffect(() => {
@@ -1536,6 +1629,13 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                 <Text style={styles.finishText}>{isSaving ? "..." : "Finish"}</Text>
               </TouchableOpacity>
             </View>
+            {timer.firstStartedAt ? (
+              <Text style={styles.liveHint}>
+                {Platform.OS === "ios"
+                  ? "Live on Lock Screen — tap Log set to save the prescribed reps/weight"
+                  : "Ongoing notification — Log set saves the prescribed reps/weight"}
+              </Text>
+            ) : null}
           </View>
           {saveError ? <Text style={styles.error}>{saveError}</Text> : null}
 
@@ -1633,11 +1733,6 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
             const isCollapsed = collapsedExercises[idx] ?? false;
             const completedCount = exerciseSets.filter((set) => set.completed).length;
             const categoryLabel = getExerciseCategory(ex.exercise_id, ex.exercise_name);
-            const exerciseMuscleGroup = resolveCategory(ex.exercise_id, ex.exercise_name);
-            const displayedMuscleGroup =
-              activeMuscleFilter?.cardIdx === idx
-                ? activeMuscleFilter.group
-                : exerciseMuscleGroup;
             const roleLabel = idx === 0 ? "Primary" : "Secondary";
             const lastData = resolveLastExercise(
               lastExerciseData[ex.exercise_id],
@@ -2069,7 +2164,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                         <Text style={styles.actionPillDashedText}>+ Set</Text>
                       </TouchableOpacity>
                       {splitMuscleGroups.map((group) => {
-                        const selected = displayedMuscleGroup === group;
+                        const selected =
+                          activeMuscleFilter?.cardIdx === idx &&
+                          activeMuscleFilter.group === group;
                         const historyExpanded = !collapsedHistoryCards.has(idx);
                         return (
                           <TouchableOpacity
@@ -2078,14 +2175,11 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                             onPress={() => {
                               if (selected && historyExpanded) {
                                 toggleMuscleHistory(idx, false);
+                                setActiveMuscleFilter(null);
                                 return;
                               }
+                              setActiveMuscleFilter({ cardIdx: idx, group });
                               toggleMuscleHistory(idx, true);
-                              if (group === exerciseMuscleGroup) {
-                                setActiveMuscleFilter(null);
-                              } else {
-                                setActiveMuscleFilter({ cardIdx: idx, group });
-                              }
                             }}
                           >
                             <Text
@@ -2106,9 +2200,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                         <MaterialCommunityIcons name="plus" size={16} color={colors.textSecondary} />
                       </TouchableOpacity>
                     </ScrollView>
-                    {displayedMuscleGroup ? (
+                    {activeMuscleFilter?.cardIdx === idx ? (
                       <View style={styles.muscleHistoryBlock}>
-                        {renderMuscleHistory(idx, exerciseMuscleGroup)}
+                        {renderMuscleHistory(idx)}
                       </View>
                     ) : null}
                   </View>
@@ -2496,6 +2590,12 @@ const styles = StyleSheet.create({
     fontVariant: ["tabular-nums"],
     lineHeight: 24,
     minWidth: 72,
+  },
+  liveHint: {
+    color: colors.textMuted,
+    fontSize: 11,
+    marginTop: 6,
+    lineHeight: 14,
   },
   saveBadgeText: { color: colors.textSecondary, fontSize: 10 },
   timerControls: { flexDirection: "row", alignItems: "center", gap: 4, flex: 1 },

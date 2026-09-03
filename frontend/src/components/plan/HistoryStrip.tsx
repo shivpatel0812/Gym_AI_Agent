@@ -3,7 +3,8 @@ import { View, Text, StyleSheet } from "react-native";
 import type { ProjectedExercise } from "../../api/trainingPlan";
 import { colors } from "../../theme";
 import {
-  buildExerciseChartPoints,
+  buildExerciseChart,
+  sessionsForPoint,
   trendLabel,
   type ChartPoint,
   type LoggedSession,
@@ -18,36 +19,45 @@ export default function HistoryStrip({
   exercise: ProjectedExercise;
   flat?: boolean;
 }) {
-  const points = useMemo(() => buildExerciseChartPoints(exercise), [exercise]);
+  const chart = useMemo(() => buildExerciseChart(exercise), [exercise]);
   const [scrubSessions, setScrubSessions] = useState<LoggedSession[]>([]);
-  const latestTrend = points.filter((p) => p.trend && p.trend !== "gap").at(-1)?.trend;
 
-  const onScrub = (point: ChartPoint | null) => {
-    setScrubSessions(point?.session ? [point.session] : []);
-  };
+  const plotted = chart.points.filter((point) => point.value != null);
+  // "Moving up" needs something to move up from, so a lone baseline point is
+  // not a trend. Only a comparison against a previous session is reported.
+  const comparable = plotted.filter(
+    (point) => point.trend && point.trend !== "gap" && point.trend !== "baseline"
+  );
+  const latestTrend = comparable.at(-1)?.trend;
+  const count = chart.sessions.length;
+
+  const summary = !count
+    ? "Log a session to start your history line"
+    : `${count} session${count === 1 ? "" : "s"}${
+        latestTrend ? ` · ${trendLabel(latestTrend)}` : " · first session logged"
+      }`;
+
+  const onScrub = (point: ChartPoint | null) => setScrubSessions(sessionsForPoint(point));
 
   return (
     <View style={styles.wrap}>
       <View style={styles.copy}>
         <Text style={styles.label}>Recent sessions</Text>
         <Text style={styles.meta} numberOfLines={1}>
-          {points.filter((p) => p.value != null).length
-            ? `${points.filter((p) => p.value != null).length} sessions · ${trendLabel(latestTrend)}`
-            : "Log a session to start your history line"}
+          {summary}
         </Text>
       </View>
       <View style={styles.chart}>
         <ScrubbableLineChart
-          points={points}
+          points={chart.points}
           height={56}
           flat={flat}
           showAxis={false}
+          unit={chart.metric === "reps" ? "reps" : "e1RM"}
           onScrub={onScrub}
         />
       </View>
-      {scrubSessions.length ? (
-        <WorkoutDetailCallout sessions={scrubSessions} />
-      ) : null}
+      {scrubSessions.length ? <WorkoutDetailCallout sessions={scrubSessions} /> : null}
     </View>
   );
 }

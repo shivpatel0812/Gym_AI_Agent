@@ -97,24 +97,6 @@ function clamp(value: number, low: number, high: number, fallback: number): numb
 
 // --- permission -----------------------------------------------------------
 
-/**
- * Ask only when the user has just asked for reminders.
- *
- * iOS allows exactly one prompt, ever. Spending it on app launch — before the
- * user has any idea what we would send them — is how apps end up permanently
- * unable to notify anyone.
- */
-export async function ensurePermission(): Promise<boolean> {
-  const existing = await Notifications.getPermissionsAsync();
-  if (existing.granted) return true;
-  if (!existing.canAskAgain) return false;
-
-  const request = await Notifications.requestPermissionsAsync({
-    ios: { allowAlert: true, allowSound: true, allowBadge: false },
-  });
-  return Boolean(request.granted);
-}
-
 /** Android needs a channel before anything will show. Safe to call repeatedly. */
 export async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== "android") return;
@@ -125,6 +107,32 @@ export async function ensureAndroidChannel(): Promise<void> {
     vibrationPattern: [0, 200],
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
   });
+}
+
+/**
+ * Ask only when the user has just asked for reminders.
+ *
+ * iOS allows exactly one prompt, ever. Spending it on app launch — before the
+ * user has any idea what we would send them — is how apps end up permanently
+ * unable to notify anyone.
+ *
+ * On Android 13+, create the channel first — the OS often only surfaces the
+ * POST_NOTIFICATIONS prompt after a channel exists.
+ */
+export async function ensurePermission(): Promise<boolean> {
+  await ensureAndroidChannel();
+
+  const existing = await Notifications.getPermissionsAsync();
+  if (existing.granted) return true;
+  if (existing.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL) {
+    return true;
+  }
+  if (!existing.canAskAgain) return false;
+
+  const request = await Notifications.requestPermissionsAsync({
+    ios: { allowAlert: true, allowSound: true, allowBadge: false },
+  });
+  return Boolean(request.granted);
 }
 
 // --- scheduling -----------------------------------------------------------
@@ -199,6 +207,31 @@ export async function syncSleepReminders(
   );
 
   return dates.length;
+}
+
+/**
+ * Fire one notification in a few seconds so the user can confirm permission
+ * and delivery without waiting until tomorrow morning.
+ */
+export async function sendTestSleepReminder(): Promise<boolean> {
+  const granted = await ensurePermission();
+  if (!granted) return false;
+  await ensureAndroidChannel();
+
+  const when = new Date(Date.now() + 5_000);
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: "How did you sleep?",
+      body: "Test reminder — if you see this, sleep notifications are working.",
+      data: { type: REMINDER_TYPE, date: dateKey(when), test: true },
+      ...(Platform.OS === "android" ? { channelId: ANDROID_CHANNEL_ID } : {}),
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: when,
+    },
+  });
+  return true;
 }
 
 /** Turn every reminder off, e.g. on logout. */

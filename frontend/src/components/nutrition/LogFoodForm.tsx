@@ -17,7 +17,6 @@ import { colors } from "../../theme";
 import { FoodItem, MEALS } from "./types";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
-  AI_MODEL_OPTIONS,
   AI_MODEL_STORAGE_KEY,
   AiModelId,
   DEFAULT_AI_MODEL,
@@ -30,6 +29,17 @@ import {
   RecentMealPick,
 } from "../../lib/recentMeals";
 import type { MealAnchorFood } from "../../api/nutritionPlan";
+import {
+  adjustPhotoEstimate,
+  COOKING_STYLE_STORAGE_KEY,
+  CookingStyle,
+  MacroValues,
+  PhotoEstimate,
+  PortionChoice,
+  normalizeCookingStyle,
+  toPhotoEstimate,
+} from "./photoEstimate";
+import MacroAdjustChat from "./MacroAdjustChat";
 
 export type PlanMealPick = {
   id: string;
@@ -40,6 +50,8 @@ export type PlanMealPick = {
   schedule?: string;
   /** Whether this anchor applies on the day being logged. */
   appliesToday?: boolean;
+  /** Plan slot (breakfast, lunch, …) — shown when listing all plan meals. */
+  slot?: string;
 };
 
 interface LogFoodFormProps {
@@ -101,6 +113,33 @@ const field = {
 
 const PLAN_MEALS_COLLAPSED = 2;
 
+type PhotoMacroDraft = Record<keyof MacroValues, string>;
+
+const emptyPhotoMacroDraft = (): PhotoMacroDraft => ({
+  calories: "",
+  protein: "",
+  carbs: "",
+  fats: "",
+  fiber: "",
+});
+
+const photoMacroDraftFrom = (estimate: PhotoEstimate): PhotoMacroDraft => ({
+  calories: String(estimate.calories),
+  protein: String(estimate.protein),
+  carbs: String(estimate.carbs),
+  fats: String(estimate.fats),
+  fiber: String(estimate.fiber),
+});
+
+const parsedPhotoMacroDraft = (draft: PhotoMacroDraft): Partial<MacroValues> => {
+  const parsed: Partial<MacroValues> = {};
+  (Object.keys(draft) as (keyof MacroValues)[]).forEach((key) => {
+    const value = Number(draft[key]);
+    if (Number.isFinite(value) && value >= 0) parsed[key] = value;
+  });
+  return parsed;
+};
+
 export default function LogFoodForm({
   meal,
   onAdd,
@@ -126,10 +165,21 @@ export default function LogFoodForm({
   const [customAmount, setCustomAmount] = useState("");
   const [photoTitle, setPhotoTitle] = useState("");
   const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photoFileName, setPhotoFileName] = useState("meal.jpg");
+  const [photoMimeType, setPhotoMimeType] = useState("image/jpeg");
   const [photoNote, setPhotoNote] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
-  const [fromPhoto, setFromPhoto] = useState(false);
+  const [photoResult, setPhotoResult] = useState<PhotoEstimate | null>(null);
+  const [photoAdjustOpen, setPhotoAdjustOpen] = useState(false);
+  const [photoAdvancedOpen, setPhotoAdvancedOpen] = useState(false);
+  const [photoPortion, setPhotoPortion] = useState<PortionChoice>("estimated");
+  const [cookingStyle, setCookingStyle] = useState<CookingStyle>("normal");
+  const [photoMacroDraft, setPhotoMacroDraft] = useState<PhotoMacroDraft>(
+    emptyPhotoMacroDraft
+  );
+  const [photoMacroEdited, setPhotoMacroEdited] = useState(false);
+  const [showAdjustChat, setShowAdjustChat] = useState(false);
   const [aiModel, setAiModel] = useState<AiModelId>(DEFAULT_AI_MODEL);
   const [savedFoods, setSavedFoods] = useState<FoodDbItem[]>([]);
   const [estimating, setEstimating] = useState(false);
@@ -159,7 +209,7 @@ export default function LogFoodForm({
   };
 
   const mealSlot = normalizeMealLabel(activeMeal);
-  const showUncertain = !compact && (mealSlot === "lunch" || mealSlot === "dinner");
+  const showUncertain = mealSlot === "lunch" || mealSlot === "dinner";
 
   useEffect(() => {
     AsyncStorage.getItem(AI_MODEL_STORAGE_KEY)
@@ -167,11 +217,15 @@ export default function LogFoodForm({
         if (raw) setAiModel(normalizeAiModel(raw));
       })
       .catch(() => {});
+    AsyncStorage.getItem(COOKING_STYLE_STORAGE_KEY)
+      .then((raw) => setCookingStyle(normalizeCookingStyle(raw)))
+      .catch(() => {});
   }, []);
 
-  const selectAiModel = (model: AiModelId) => {
-    setAiModel(model);
-    AsyncStorage.setItem(AI_MODEL_STORAGE_KEY, model).catch(() => {});
+  const selectCookingStyle = (style: CookingStyle) => {
+    setCookingStyle(style);
+    setPhotoMacroEdited(false);
+    AsyncStorage.setItem(COOKING_STYLE_STORAGE_KEY, style).catch(() => {});
   };
 
   useEffect(() => {
@@ -251,7 +305,35 @@ export default function LogFoodForm({
     };
   }, [selected, scale]);
 
-  const rememberFood = async (food: FoodDbItem, extraAliases: string[] = []) => {
+  const photoAdjustedBase = useMemo(
+    () =>
+      photoResult
+        ? adjustPhotoEstimate(photoResult, photoPortion, cookingStyle)
+        : null,
+    [photoResult, photoPortion, cookingStyle]
+  );
+
+  const photoDisplayed = useMemo(() => {
+    if (!photoResult) return null;
+    return adjustPhotoEstimate(
+      photoResult,
+      photoPortion,
+      cookingStyle,
+      photoMacroEdited ? parsedPhotoMacroDraft(photoMacroDraft) : null
+    );
+  }, [photoResult, photoPortion, cookingStyle, photoMacroEdited, photoMacroDraft]);
+
+  useEffect(() => {
+    if (photoAdjustedBase && !photoMacroEdited) {
+      setPhotoMacroDraft(photoMacroDraftFrom(photoAdjustedBase));
+    }
+  }, [photoAdjustedBase, photoMacroEdited]);
+
+  const rememberFood = async (
+    food: FoodDbItem,
+    extraAliases: string[] = [],
+    metadata?: { logSource?: "photo"; wasAdjusted?: boolean }
+  ) => {
     try {
       const res = await apiClient.post("/api/macros/foods", {
         name: food.name,
@@ -263,6 +345,8 @@ export default function LogFoodForm({
         fats: food.fats,
         fiber: food.fiber || 0,
         aliases: [...(food.aliases || []), ...extraAliases].filter(Boolean),
+        log_source: metadata?.logSource,
+        was_adjusted: metadata?.wasAdjusted,
       });
       const saved = toFoodDbItem(res.data);
       setSavedFoods((prev) => {
@@ -461,39 +545,126 @@ export default function LogFoodForm({
       const result = fromCamera
         ? await ImagePicker.launchCameraAsync({
             mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.82,
+            quality: 0.9,
           })
         : await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.82,
+            quality: 0.9,
           });
       if (result.canceled || !result.assets?.[0]?.uri) return;
-      setPhotoUri(result.assets[0].uri);
+      const asset = result.assets[0];
+      setPhotoUri(asset.uri);
+      setPhotoFileName(asset.fileName || "meal.jpg");
+      setPhotoMimeType(asset.mimeType || "image/jpeg");
+      setPhotoResult(null);
     } catch {
       setPhotoError("Could not open that photo. Try another one.");
     }
   };
 
-  const applyEstimateToCustom = (item: {
-    name?: string;
-    amount?: string;
-    serving?: string;
-    calories?: number;
-    protein?: number;
-    carbs?: number;
-    fats?: number;
-    fiber?: number;
+  const acceptPhotoEstimate = (raw: any, title: string) => {
+    const estimate = toPhotoEstimate(raw, title);
+    if (!estimate) return false;
+    const withPreference = {
+      ...estimate,
+      analysis: { ...estimate.analysis, cookingStyle },
+    };
+    setPhotoResult(withPreference);
+    setPhotoPortion("estimated");
+    setPhotoAdjustOpen(false);
+    setPhotoAdvancedOpen(false);
+    setPhotoMacroEdited(false);
+    setPhotoMacroDraft(photoMacroDraftFrom(withPreference));
+    return true;
+  };
+
+  const resetPhotoEstimate = () => {
+    setPhotoResult(null);
+    setPhotoUri(null);
+    setPhotoFileName("meal.jpg");
+    setPhotoMimeType("image/jpeg");
+    setPhotoTitle("");
+    setPhotoNote("");
+    setPhotoError(null);
+    setPhotoPortion("estimated");
+    setPhotoAdjustOpen(false);
+    setPhotoAdvancedOpen(false);
+    setPhotoMacroEdited(false);
+    setPhotoMacroDraft(emptyPhotoMacroDraft());
+    setShowAdjustChat(false);
+  };
+
+  const handleAcceptRevision = (revised: {
+    name: string;
+    amount?: string | null;
+    calories: number;
+    protein: number;
+    carbs: number;
+    fats: number;
+    fiber: number;
   }) => {
-    const title = photoTitle.trim();
-    setCustomName(title || item.name || "Meal");
-    setCustomAmount(item.amount || item.serving || "");
-    setCustomCalories(String(Math.round(Number(item.calories) || 0)));
-    setCustomProtein(String(Number(item.protein) || 0));
-    setCustomCarbs(String(Number(item.carbs) || 0));
-    setCustomFats(String(Number(item.fats) || 0));
-    setCustomFiber(String(Number(item.fiber) || 0));
-    setFromPhoto(true);
-    setMode("custom");
+    if (!photoResult) return;
+    const updated: PhotoEstimate = {
+      ...photoResult,
+      name: revised.name || photoResult.name,
+      amount: revised.amount || photoResult.amount,
+      calories: revised.calories,
+      protein: revised.protein,
+      carbs: revised.carbs,
+      fats: revised.fats,
+      fiber: revised.fiber,
+    };
+    setPhotoResult(updated);
+    setPhotoMacroDraft(photoMacroDraftFrom(updated));
+    setPhotoMacroEdited(false);
+    setPhotoPortion("estimated");
+    setShowAdjustChat(false);
+  };
+
+  const handleAddPhotoEstimate = () => {
+    if (!photoDisplayed) return;
+    const wasAdjusted =
+      photoPortion !== "estimated" ||
+      cookingStyle !== photoResult?.analysis.cookingStyle ||
+      photoMacroEdited;
+    onAdd({
+      name: photoDisplayed.name,
+      calories: photoDisplayed.calories,
+      protein: photoDisplayed.protein,
+      carbs: photoDisplayed.carbs,
+      fats: photoDisplayed.fats,
+      fiber: photoDisplayed.fiber,
+      meal: activeMeal,
+      amount: photoDisplayed.amount,
+      uncertain: showUncertain ? uncertain : undefined,
+      log_source: "photo",
+      was_adjusted: wasAdjusted,
+      ...(tagAnchorId
+        ? { anchor_id: tagAnchorId, usual_id: tagAnchorId }
+        : {}),
+    });
+    void rememberFood(
+      {
+        name: photoDisplayed.name,
+        serving: photoDisplayed.amount || "1 serving",
+        grams: photoDisplayed.estimatedGrams || 100,
+        calories: photoDisplayed.calories,
+        protein: photoDisplayed.protein,
+        carbs: photoDisplayed.carbs,
+        fats: photoDisplayed.fats,
+        fiber: photoDisplayed.fiber,
+      },
+      [photoTitle.trim(), photoNote.trim()].filter(Boolean),
+      {
+        logSource: "photo",
+        wasAdjusted,
+      }
+    );
+  };
+
+  const updatePhotoMacro = (key: keyof MacroValues, value: string) => {
+    setPhotoMacroDraft((previous) => ({ ...previous, [key]: value }));
+    setPhotoMacroEdited(true);
   };
 
   const handleEstimateMacros = async () => {
@@ -507,25 +678,24 @@ export default function LogFoodForm({
         const payload = new FormData();
         payload.append("file", {
           uri: photoUri,
-          name: "meal.jpg",
-          type: "image/jpeg",
+          name: photoFileName,
+          type: photoMimeType,
         } as any);
         if (note) payload.append("description", note);
         if (title) payload.append("title", title);
+        payload.append("cooking_style", cookingStyle);
         payload.append("model", aiModel);
         const response = await apiClient.post("/api/macros/analyze-image", payload, {
           timeout: aiModel === "gpt-5.6-sol" ? 120000 : 60000,
           headers: { "Content-Type": "multipart/form-data" },
         });
-        const item = response.data?.food || response.data?.food_items?.[0];
-        if (!item) {
+        if (!acceptPhotoEstimate(response.data, title)) {
           setPhotoError(
             response.data?.message ||
               "Could not estimate macros. Try a clearer photo or add a description."
           );
           return;
         }
-        applyEstimateToCustom({ ...item, name: title || item.name });
         return;
       }
       const res = await apiClient.post(
@@ -533,12 +703,10 @@ export default function LogFoodForm({
         { query: note, name: title || undefined },
         { timeout: 30000 }
       );
-      const item = toFoodDbItem(res.data);
-      if (!item.name) {
+      if (!acceptPhotoEstimate(res.data, title)) {
         setPhotoError("Could not estimate that food. Add more detail.");
         return;
       }
-      applyEstimateToCustom(item);
     } catch (error: any) {
       setPhotoError(
         error.response?.data?.detail || "Could not estimate macros. Please try again."
@@ -554,6 +722,17 @@ export default function LogFoodForm({
     parseFloat(customCalories) >= 0 &&
     Number.isFinite(parseFloat(customProtein)) &&
     parseFloat(customProtein) >= 0;
+
+  const slotLabel = (slot?: string) => {
+    if (!slot) return "";
+    const id =
+      slot === "pre_workout" || slot === "shake"
+        ? "Pre-Workout"
+        : slot === "snack" || slot === "late_night" || slot === "other"
+          ? "Snacks"
+          : MEALS.find((m) => normalizeMealLabel(m.id) === slot)?.label;
+    return id || slot;
+  };
 
   const tabBtn = (id: "search" | "photo" | "custom", label: string) => (
     <TouchableOpacity
@@ -607,7 +786,10 @@ export default function LogFoodForm({
                 </Text>
               </View>
             ) : (
-              <Text style={[styles.planTitle, { flex: 1 }]}>Tag meal</Text>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.planTitle, { flex: 1 }]}>From your plan</Text>
+                <Text style={styles.planHint}>Import, tag, or search any food below.</Text>
+              </View>
             )}
             {planMeals.length > PLAN_MEALS_COLLAPSED ? (
               <TouchableOpacity
@@ -647,6 +829,7 @@ export default function LogFoodForm({
                       {pick.label}
                     </Text>
                     <Text style={styles.planMeta}>
+                      {pick.slot ? `${slotLabel(pick.slot)} · ` : ""}
                       {kindLabel(pick.kind)}
                       {pick.schedule ? ` · ${pick.schedule}` : ""}
                       {foodCount
@@ -1066,98 +1249,299 @@ export default function LogFoodForm({
 
       {mode === "photo" && (
         <View style={{ gap: 14 }}>
-          <Text style={styles.muted}>
-            Photo is optional. Title is what gets logged. Description is what GPT uses to estimate — skip the photo to save cost.
-          </Text>
-          {!photoUri ? (
-            <View style={{ flexDirection: "row", gap: 12 }}>
-              <TouchableOpacity style={styles.photoBox} onPress={() => pickPhoto(true)}>
-                <MaterialCommunityIcons name="camera" size={22} color="#9CC0E8" />
-                <Text style={styles.photoBoxText}>Take photo</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.photoBox} onPress={() => pickPhoto(false)}>
-                <MaterialCommunityIcons name="image" size={22} color="#E4B896" />
-                <Text style={styles.photoBoxText}>Choose photo</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View>
-              <Image source={{ uri: photoUri }} style={styles.preview} />
-              <TouchableOpacity
-                style={styles.removePhoto}
-                onPress={() => {
-                  setPhotoUri(null);
-                  setPhotoError(null);
-                }}
-              >
-                <MaterialCommunityIcons name="close" size={16} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          )}
-          <Text style={styles.label}>AI model</Text>
-          <View style={styles.modelRow}>
-            {AI_MODEL_OPTIONS.map((opt) => {
-              const active = aiModel === opt.id;
-              return (
-                <TouchableOpacity
-                  key={opt.id}
-                  style={[styles.modelChip, active && styles.modelChipOn]}
-                  onPress={() => selectAiModel(opt.id)}
-                >
-                  <Text style={[styles.modelChipText, active && styles.modelChipTextOn]}>
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-          <Text style={styles.label}>Food title</Text>
-          <TextInput
-            value={photoTitle}
-            onChangeText={setPhotoTitle}
-            placeholder="e.g. Frankie"
-            placeholderTextColor="#55647A"
-            style={field}
-          />
-          <Text style={styles.label}>Description</Text>
-          <TextInput
-            value={photoNote}
-            onChangeText={setPhotoNote}
-            placeholder="e.g. Indian vegetarian frankie, I had 3, with chutney"
-            placeholderTextColor="#55647A"
-            multiline
-            style={[field, { height: 84, paddingTop: 12, textAlignVertical: "top" }]}
-          />
-          {photoError ? <Text style={styles.error}>{photoError}</Text> : null}
-          <TouchableOpacity
-            style={[
-              styles.primaryBtn,
-              ((!photoUri && photoNote.trim().length < 2) || analyzing) && { opacity: 0.4 },
-            ]}
-            disabled={(!photoUri && photoNote.trim().length < 2) || analyzing}
-            onPress={handleEstimateMacros}
-          >
-            {analyzing ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <ActivityIndicator color="#fff" />
-                <Text style={styles.primaryBtnText}>Estimating macros...</Text>
+          {photoResult && photoDisplayed ? (
+            <>
+              <View style={styles.photoResultCard}>
+                <View style={styles.photoResultHead}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.photoResultName}>{photoDisplayed.name}</Text>
+                    <Text style={styles.photoResultAmount}>
+                      {photoDisplayed.amount || "Estimated portion"}
+                    </Text>
+                  </View>
+                  <Text style={styles.photoEstimatedLabel}>Estimated</Text>
+                </View>
+
+                <View style={styles.photoMacroGrid}>
+                  {(
+                    [
+                      ["Calories", photoDisplayed.calories, "kcal", "#9CC0E8"],
+                      ["Protein", photoDisplayed.protein, "g", "#E4B896"],
+                      ["Carbs", photoDisplayed.carbs, "g", "#F5C542"],
+                      ["Fat", photoDisplayed.fats, "g", "#C4B5FD"],
+                    ] as const
+                  ).map(([label, value, unit, color]) => (
+                    <View key={label} style={styles.photoMacroCell}>
+                      <Text style={[styles.photoMacroValue, { color }]}>{value}</Text>
+                      <Text style={styles.photoMacroUnit}>{unit}</Text>
+                      <Text style={styles.mutedXs}>{label}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                {photoResult.analysis.confidence.shouldNudge ? (
+                  <View style={styles.photoNudge}>
+                    <MaterialCommunityIcons name="help-circle-outline" size={18} color="#F5C542" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.photoNudgeTitle}>Does this look right?</Text>
+                      <Text style={styles.photoNudgeText}>
+                        {photoResult.analysis.confidence.reasons[0] ||
+                          "Portion or cooking oil may be uncertain."}
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
+
+                <View style={styles.photoActionRow}>
+                  <TouchableOpacity
+                    style={styles.photoFixBtn}
+                    onPress={() => setShowAdjustChat((open) => !open)}
+                  >
+                    <MaterialCommunityIcons name="chat-processing-outline" size={15} color="#5EEAD4" />
+                    <Text style={styles.photoFixText}>
+                      {showAdjustChat ? "Hide chat" : "Fix Results"}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.photoAdjustToggle}
+                    onPress={() => setPhotoAdjustOpen((open) => !open)}
+                  >
+                    <MaterialCommunityIcons name="pencil-outline" size={16} color="#9CC0E8" />
+                    <Text style={styles.photoAdjustText}>Adjust</Text>
+                    <MaterialCommunityIcons
+                      name={photoAdjustOpen ? "chevron-up" : "chevron-down"}
+                      size={18}
+                      color="#7C8CA0"
+                    />
+                  </TouchableOpacity>
+                </View>
+
+                {showAdjustChat && photoResult ? (
+                  <MacroAdjustChat
+                    estimate={photoResult}
+                    onAcceptRevision={handleAcceptRevision}
+                    onClose={() => setShowAdjustChat(false)}
+                  />
+                ) : null}
+
+                {photoAdjustOpen ? (
+                  <View style={styles.photoAdjustPanel}>
+                    <Text style={styles.label}>Portion</Text>
+                    <View style={styles.photoChoiceRow}>
+                      {(
+                        [
+                          ["smaller", "Smaller"],
+                          ["estimated", "As estimated"],
+                          ["larger", "Larger"],
+                        ] as const
+                      ).map(([value, label]) => {
+                        const active = photoPortion === value;
+                        return (
+                          <TouchableOpacity
+                            key={value}
+                            style={[styles.photoChoice, active && styles.photoChoiceOn]}
+                            onPress={() => {
+                              setPhotoPortion(value);
+                              setPhotoMacroEdited(false);
+                            }}
+                          >
+                            <Text
+                              style={[
+                                styles.photoChoiceText,
+                                active && styles.photoChoiceTextOn,
+                              ]}
+                            >
+                              {label}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    {photoResult.estimatedGrams ? (
+                      <Text style={styles.photoAdjustHint}>
+                        Best estimate {Math.round(photoResult.estimatedGrams)}g
+                        {photoResult.analysis.portionLowGrams &&
+                        photoResult.analysis.portionHighGrams
+                          ? ` · likely ${Math.round(
+                              photoResult.analysis.portionLowGrams
+                            )}–${Math.round(photoResult.analysis.portionHighGrams)}g`
+                          : ""}
+                      </Text>
+                    ) : null}
+
+                    <Text style={styles.label}>Your usual cooking oil</Text>
+                    <View style={styles.photoChoiceRow}>
+                      {(
+                        [
+                          ["light", "Light"],
+                          ["normal", "Normal"],
+                          ["generous", "Generous"],
+                        ] as const
+                      ).map(([value, label]) => {
+                        const active = cookingStyle === value;
+                        return (
+                          <TouchableOpacity
+                            key={value}
+                            style={[styles.photoChoice, active && styles.photoChoiceOn]}
+                            onPress={() => selectCookingStyle(value)}
+                          >
+                            <Text
+                              style={[
+                                styles.photoChoiceText,
+                                active && styles.photoChoiceTextOn,
+                              ]}
+                            >
+                              {label}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    <Text style={styles.photoAdjustHint}>Remembered for future food photos.</Text>
+
+                    {photoResult.analysis.assumptions.length ||
+                    photoResult.analysis.uncertainties.length ? (
+                      <Text style={styles.photoAssumption}>
+                        {[...photoResult.analysis.assumptions, ...photoResult.analysis.uncertainties]
+                          .slice(0, 2)
+                          .join(" · ")}
+                      </Text>
+                    ) : null}
+
+                    <TouchableOpacity
+                      style={styles.photoAdvancedToggle}
+                      onPress={() => {
+                        if (!photoAdvancedOpen && photoDisplayed && !photoMacroEdited) {
+                          setPhotoMacroDraft(photoMacroDraftFrom(photoDisplayed));
+                        }
+                        setPhotoAdvancedOpen((open) => !open);
+                      }}
+                    >
+                      <Text style={styles.photoAdvancedText}>Edit macros</Text>
+                      <MaterialCommunityIcons
+                        name={photoAdvancedOpen ? "chevron-up" : "chevron-down"}
+                        size={17}
+                        color="#7C8CA0"
+                      />
+                    </TouchableOpacity>
+
+                    {photoAdvancedOpen ? (
+                      <View style={styles.photoAdvancedGrid}>
+                        {(
+                          [
+                            ["Calories", "calories"],
+                            ["Protein (g)", "protein"],
+                            ["Carbs (g)", "carbs"],
+                            ["Fat (g)", "fats"],
+                            ["Fiber (g)", "fiber"],
+                          ] as const
+                        ).map(([label, key]) => (
+                          <View key={key} style={styles.photoAdvancedField}>
+                            <Text style={styles.label}>{label}</Text>
+                            <TextInput
+                              keyboardType="decimal-pad"
+                              value={photoMacroDraft[key]}
+                              onChangeText={(value) => updatePhotoMacro(key, value)}
+                              placeholder="0"
+                              placeholderTextColor="#55647A"
+                              style={field}
+                            />
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
-            ) : (
-              <Text style={styles.primaryBtnText}>
-                {photoUri ? "Estimate from photo" : "Estimate from description"}
+
+              <TouchableOpacity
+                style={styles.primaryBtn}
+                onPress={handleAddPhotoEstimate}
+              >
+                <Text style={styles.primaryBtnText}>Add to {activeMeal}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={resetPhotoEstimate} style={styles.photoStartOver}>
+                <Text style={styles.photoStartOverText}>Scan another</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text style={styles.muted}>
+                Take a photo and get a ready-to-log estimate. A title or short description helps with mixed meals.
               </Text>
-            )}
-          </TouchableOpacity>
+              <Text style={styles.photoTip}>
+                Tip: include the whole plate in good light. Your usual plate or a utensil can help with portion size.
+              </Text>
+              {!photoUri ? (
+                <View style={{ flexDirection: "row", gap: 12 }}>
+                  <TouchableOpacity style={styles.photoBox} onPress={() => pickPhoto(true)}>
+                    <MaterialCommunityIcons name="camera" size={22} color="#9CC0E8" />
+                    <Text style={styles.photoBoxText}>Take photo</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.photoBox} onPress={() => pickPhoto(false)}>
+                    <MaterialCommunityIcons name="image" size={22} color="#E4B896" />
+                    <Text style={styles.photoBoxText}>Choose photo</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View>
+                  <Image source={{ uri: photoUri }} style={styles.preview} />
+                  <TouchableOpacity
+                    style={styles.removePhoto}
+                    onPress={() => {
+                      setPhotoUri(null);
+                      setPhotoResult(null);
+                      setPhotoError(null);
+                    }}
+                  >
+                    <MaterialCommunityIcons name="close" size={16} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              )}
+              <Text style={styles.label}>Food title (optional)</Text>
+              <TextInput
+                value={photoTitle}
+                onChangeText={setPhotoTitle}
+                placeholder="e.g. Chickpea frankie"
+                placeholderTextColor="#55647A"
+                style={field}
+              />
+              <Text style={styles.label}>Description (optional)</Text>
+              <TextInput
+                value={photoNote}
+                onChangeText={setPhotoNote}
+                placeholder="e.g. I had 3, homemade, with chutney"
+                placeholderTextColor="#55647A"
+                multiline
+                style={[field, { height: 84, paddingTop: 12, textAlignVertical: "top" }]}
+              />
+              {photoError ? <Text style={styles.error}>{photoError}</Text> : null}
+              <TouchableOpacity
+                style={[
+                  styles.primaryBtn,
+                  ((!photoUri && photoNote.trim().length < 2) || analyzing) && { opacity: 0.4 },
+                ]}
+                disabled={(!photoUri && photoNote.trim().length < 2) || analyzing}
+                onPress={handleEstimateMacros}
+              >
+                {analyzing ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <ActivityIndicator color="#fff" />
+                    <Text style={styles.primaryBtnText}>Estimating macros...</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.primaryBtnText}>
+                    {photoUri ? "Estimate from photo" : "Estimate from description"}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       )}
 
       {mode === "custom" && (
         <View style={{ gap: 12 }}>
-          {fromPhoto ? (
-            <Text style={{ color: "#E4B896", fontSize: 12 }}>
-              Filled from your estimate — edit anything that looks off, then add.
-            </Text>
-          ) : null}
           <Text style={styles.label}>Food name</Text>
           <TextInput
             value={customName}
@@ -1389,6 +1773,127 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   photoBoxText: { color: "#7C8CA0", fontSize: 14, fontWeight: "600" },
+  photoTip: {
+    color: "#66768A",
+    fontSize: 12,
+    lineHeight: 17,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(156,192,232,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(156,192,232,0.14)",
+  },
+  photoResultCard: {
+    gap: 14,
+    borderRadius: 14,
+    padding: 14,
+    backgroundColor: "#0C1017",
+    borderWidth: 1,
+    borderColor: "rgba(156,192,232,0.26)",
+  },
+  photoResultHead: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  photoResultName: { color: "#fff", fontSize: 17, fontWeight: "800" },
+  photoResultAmount: { color: "#7C8CA0", fontSize: 12, marginTop: 3 },
+  photoEstimatedLabel: {
+    color: "#7C8CA0",
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    paddingTop: 3,
+  },
+  photoMacroGrid: { flexDirection: "row", gap: 7 },
+  photoMacroCell: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 3,
+    borderRadius: 10,
+    backgroundColor: "#05080F",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  photoMacroValue: { fontSize: 17, fontWeight: "800" },
+  photoMacroUnit: { color: "#55647A", fontSize: 9, fontWeight: "700", marginTop: -1 },
+  photoNudge: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 9,
+    padding: 11,
+    borderRadius: 10,
+    backgroundColor: "rgba(245,197,66,0.07)",
+    borderWidth: 1,
+    borderColor: "rgba(245,197,66,0.24)",
+  },
+  photoNudgeTitle: { color: "#F5C542", fontSize: 12, fontWeight: "800" },
+  photoNudgeText: { color: "#8B8061", fontSize: 11, lineHeight: 15, marginTop: 2 },
+  photoActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  photoFixBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 3,
+  },
+  photoFixText: { color: "#5EEAD4", fontSize: 13, fontWeight: "700" },
+  photoAdjustToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 3,
+  },
+  photoAdjustText: { color: "#9CC0E8", fontSize: 13, fontWeight: "700" },
+  photoAdjustPanel: {
+    gap: 9,
+    paddingTop: 13,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  photoChoiceRow: { flexDirection: "row", gap: 7 },
+  photoChoice: {
+    flex: 1,
+    alignItems: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 9,
+    borderRadius: 9,
+    backgroundColor: "#05080F",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  photoChoiceOn: {
+    backgroundColor: "rgba(156,192,232,0.14)",
+    borderColor: "#9CC0E8",
+  },
+  photoChoiceText: { color: "#7C8CA0", fontSize: 12, fontWeight: "700" },
+  photoChoiceTextOn: { color: "#9CC0E8" },
+  photoAdjustHint: { color: "#66768A", fontSize: 11, lineHeight: 15 },
+  photoAssumption: {
+    color: "#8B8061",
+    fontSize: 11,
+    lineHeight: 16,
+    paddingTop: 2,
+  },
+  photoAdvancedToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 7,
+    marginTop: 2,
+  },
+  photoAdvancedText: { color: "#7C8CA0", fontSize: 12, fontWeight: "700" },
+  photoAdvancedGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  photoAdvancedField: { width: "47%" },
+  photoStartOver: { alignItems: "center", paddingVertical: 4 },
+  photoStartOverText: { color: "#7C8CA0", fontSize: 12, fontWeight: "700" },
   qtyRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   qtyStep: {
     width: 38,

@@ -8,7 +8,7 @@ ordinary conversation never silently changes training behaviour.
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 from pydantic import BaseModel
 import os
@@ -37,12 +37,97 @@ from ai_analysis.plan_projection import (
     measure_adherence,
 )
 from ai_analysis.coach_tools import _exercise_history_context
+from ai_analysis.workout_recommender.exercise_metadata import resolve_exercise_metadata
 from nutrition.plan_store import NutritionPlanStore
 from nutrition.pacing import build_paced_trajectory
 
 router = APIRouter(prefix="/api/training-plan", tags=["training-plan"])
 
 HISTORY_WINDOW_DAYS = 28
+
+# How many logged sessions the roadmap charts may draw. The engine reads a
+# narrower window; this is display only, so it is bounded by what a line chart
+# can legibly hold rather than by an LLM token budget.
+CHART_HISTORY_SESSIONS = 30
+
+
+
+# The engine speaks lowercase canonical muscle groups; the app's charts are
+# keyed by the catalog's category labels. One map, declared once.
+_MUSCLE_GROUP_TO_CATEGORY = {
+    "chest": "CHEST",
+    "back": "BACK",
+    "shoulders": "SHOULDERS",
+    "biceps": "BICEPS",
+    "triceps": "TRICEPS",
+    "legs": "LEGS",
+    "glutes": "GLUTES",
+    "calves": "CALVES",
+    "core": "CORE / ABS",
+}
+
+# How far back the muscle-group stimulus trend reads.
+MUSCLE_HISTORY_DAYS = 180
+
+
+def _muscle_group_history(sessions: List[dict]) -> dict:
+    """Logged stimulus per muscle group per day, across the whole log.
+
+    A muscle-group trend that only counted the exercises named in the current
+    plan day answered the wrong question: swapping incline press for cable
+    flies, or training chest on an unscheduled day, read as a drop in chest
+    volume. This walks every logged session instead, so the trend follows the
+    muscle rather than the plan row.
+    """
+    cutoff = (datetime.now() - timedelta(days=MUSCLE_HISTORY_DAYS)).strftime("%Y-%m-%d")
+    buckets: dict = {}
+
+    for session in sessions:
+        date = session.get("date")
+        if not date or str(date) < cutoff:
+            continue
+        for exercise in session.get("exercises", []) or []:
+            name = exercise.get("exercise_name") or exercise.get("name") or ""
+            metadata = resolve_exercise_metadata(
+                exercise.get("exercise_id") or "", name, exercise
+            )
+            category = _MUSCLE_GROUP_TO_CATEGORY.get(metadata.muscle_group)
+            if not category:
+                continue
+
+            sets = [
+                {
+                    "set_number": raw.get("set_number") or i + 1,
+                    "weight": raw.get("weight") or 0,
+                    "reps": raw.get("reps") or 0,
+                    "completed": raw.get("completed"),
+                }
+                for i, raw in enumerate(exercise.get("sets") or [])
+                if isinstance(raw, dict) and (raw.get("reps") or 0) > 0
+            ]
+            if not sets:
+                continue
+
+            # Bodyweight work carries no load but is still stimulus. Counting
+            # only weight x reps scored a set of pull-ups as zero.
+            stimulus = sum(
+                (s["weight"] or 0) * s["reps"] if (s["weight"] or 0) > 0 else s["reps"]
+                for s in sets
+            )
+            day = buckets.setdefault(category, {}).setdefault(
+                str(date), {"date": str(date), "stimulus": 0.0, "sessions": []}
+            )
+            day["stimulus"] += stimulus
+            day["sessions"].append({
+                "exercise_id": exercise.get("exercise_id") or "",
+                "exercise_name": name or "Exercise",
+                "sets": sets,
+            })
+
+    return {
+        category: sorted(days.values(), key=lambda entry: entry["date"])
+        for category, days in buckets.items()
+    }
 
 
 class ProposePlanRequest(BaseModel):
@@ -635,6 +720,7 @@ async def get_plan_projection(
                 all_workout_sessions,
                 ex_id,
                 exercise.get("exercise_name") or ex_id,
+                recent_limit=CHART_HISTORY_SESSIONS,
             )
             # Recent ID history is preferred. Lifetime context provides the
             # exact-name fallback for legacy/custom ids and older sessions.
@@ -658,11 +744,18 @@ async def get_plan_projection(
                 adherence=adherence.rate,
                 top_lifts=profile.get("top_lifts"),
             )
-            # ID-only history misses when the plan's exercise_id differs from
-            # logged sessions; history_context also matches by exercise name.
-            logged_sessions = projection_history[:6]
+            # The chart's backward axis and the engine's input are different
+            # questions. `projection_history` is what the engine may reason from:
+            # 60 days, weighted sets only. That makes it the wrong source for a
+            # history line — it silently drops every bodyweight session and
+            # truncates to two months against a twelve-week forward axis.
+            # `history_context` matches lifetime sessions by id *or* name and
+            # keeps unloaded sets, so it is what the user actually did.
+            logged_sessions = (history_context.get("recent_sessions") or [])[
+                :CHART_HISTORY_SESSIONS
+            ]
             if not logged_sessions:
-                logged_sessions = (history_context.get("recent_sessions") or [])[:6]
+                logged_sessions = projection_history[:CHART_HISTORY_SESSIONS]
             exercises.append({
                 **projection.to_dict(),
                 "priority": exercise.get("priority"),
@@ -714,6 +807,7 @@ async def get_plan_projection(
             "progress": progress,
             "adherence": adherence.to_dict(),
             "days": days_out,
+            "muscle_group_history": _muscle_group_history(all_workout_sessions),
             "nutrition": nutrition,
         },
     }

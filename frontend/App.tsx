@@ -1,11 +1,32 @@
 import { useState, useEffect } from "react";
-import { NavigationContainer, DarkTheme } from "@react-navigation/native";
+import {
+  NavigationContainer,
+  DarkTheme,
+  createNavigationContainerRef,
+  CommonActions,
+} from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "./src/firebase";
 import { syncTimezone } from "./src/api/timezone";
-import { configureNotifications, clearSleepReminders } from "./src/notifications";
+import {
+  configureNotifications,
+  clearSleepReminders,
+  clearMealReminders,
+  loadSleepReminderSettings,
+  syncSleepReminders,
+  loadMealReminderSettings,
+  syncMealReminders,
+  setupMealReminderResponseHandler,
+  setupWorkoutLiveResponseHandler,
+  subscribeWorkoutLiveActions,
+  endWorkoutLive,
+} from "./src/notifications";
+import { getActiveNutritionPlan } from "./src/api/nutritionPlan";
+import apiClient from "./src/api/client";
+import { toDateKey } from "./src/components/nutrition/types";
+import type { FoodItem, MacroEntry } from "./src/components/nutrition/types";
 import Login from "./src/components/Login";
 import Dashboard from "./src/components/Dashboard";
 import Home from "./src/components/home/Home";
@@ -34,6 +55,18 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import * as SplashScreen from "expo-splash-screen";
 import LinearGradient from "./src/components/shared/LinearGradient";
 import { colors, spacing } from "./src/theme";
+
+const navigationRef = createNavigationContainerRef();
+
+function navigateToWorkouts() {
+  if (!navigationRef.isReady()) return;
+  navigationRef.dispatch(
+    CommonActions.navigate({
+      name: "Main",
+      params: { screen: "Workouts" },
+    })
+  );
+}
 
 SplashScreen.preventAutoHideAsync();
 
@@ -220,6 +253,18 @@ export default function App() {
     // Only sets how an arriving notification behaves. Nothing is scheduled and
     // no permission is requested until the user turns a reminder on.
     configureNotifications();
+    const cleanupMeal = setupMealReminderResponseHandler();
+    const cleanupWorkout = setupWorkoutLiveResponseHandler();
+    const unsubLive = subscribeWorkoutLiveActions((action) => {
+      if (action.type === "open-session" || action.type === "log-set") {
+        navigateToWorkouts();
+      }
+    });
+    return () => {
+      cleanupMeal();
+      cleanupWorkout();
+      unsubLive();
+    };
   }, []);
 
   useEffect(() => {
@@ -228,7 +273,42 @@ export default function App() {
       setLoading(false);
       // Report the device's timezone once per change, so server-side date
       // defaults use this user's calendar day rather than the server's.
-      if (user) syncTimezone();
+      if (user) {
+        syncTimezone();
+        // Keep the 14-day local queue fresh without waiting for Wellness to open.
+        void (async () => {
+          try {
+            const settings = await loadSleepReminderSettings();
+            if (!settings.enabled) return;
+            const res = await apiClient.get("/api/sleep");
+            const logged = Array.isArray(res.data)
+              ? res.data.map((entry: { date?: string }) => entry.date).filter(Boolean)
+              : [];
+            await syncSleepReminders(settings, logged as string[]);
+          } catch {
+            // Offline / cold start — Wellness will re-arm when opened.
+          }
+        })();
+        void (async () => {
+          try {
+            const settings = await loadMealReminderSettings();
+            if (!settings.enabled) return;
+            const [plan, macrosRes] = await Promise.all([
+              getActiveNutritionPlan().catch(() => null),
+              apiClient.get("/api/macros").catch(() => ({ data: [] })),
+            ]);
+            const rows: MacroEntry[] = Array.isArray(macrosRes.data) ? macrosRes.data : [];
+            const today = toDateKey(new Date());
+            const entry = rows.find((e) => String(e.date || "").slice(0, 10) === today);
+            const loggedByDate: Record<string, FoodItem[]> = {
+              [today]: entry?.food_items || [],
+            };
+            await syncMealReminders(settings, plan, loggedByDate);
+          } catch {
+            // Nutrition tab can re-arm when opened.
+          }
+        })();
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -237,6 +317,8 @@ export default function App() {
     // Queued reminders are this user's, and they would otherwise keep firing on
     // a shared device after they had signed out.
     await clearSleepReminders();
+    await clearMealReminders();
+    await endWorkoutLive();
     await signOut(auth);
   };
 
@@ -254,13 +336,13 @@ export default function App() {
   return (
     <>
     <StatusBar barStyle="light-content" backgroundColor={colors.background} />
-    <NavigationContainer theme={navigationTheme}>
+    <NavigationContainer ref={navigationRef} theme={navigationTheme}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!user ? (
           <Stack.Screen name="Login" component={Login} />
         ) : (
           <Stack.Screen name="Main">
-            {() => <MainTabs onLogout={handleLogout} />}
+            {(props) => <MainTabs {...props} onLogout={handleLogout} />}
           </Stack.Screen>
         )}
       </Stack.Navigator>

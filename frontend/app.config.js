@@ -25,6 +25,8 @@ module.exports = {
     owner: "usershiv17274",
     version: VERSION,
     orientation: "portrait",
+    // Deep links from the workout Live Activity / sticky notification actions.
+    scheme: "gymai",
     // Matches the app's actual dark theme — the light value here was why the
     // splash flashed white before the first frame.
     userInterfaceStyle: "dark",
@@ -60,7 +62,15 @@ module.exports = {
         foregroundImage: "./assets/adaptive-icon.png",
         backgroundColor: "#070708",
       },
-      permissions: ["CAMERA", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"],
+      // POST_NOTIFICATIONS is required on Android 13+ or scheduled locals never show.
+      permissions: [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+      ],
     },
     web: {
       favicon: "./assets/favicon.png",
@@ -80,9 +90,32 @@ module.exports = {
             "GymAI uses your camera for meal photos and optional guided progress photos for AI body-scan coaching. Photos used for body scan are analyzed and then deleted.",
         },
       ],
-      // Local sleep reminders use the expo-notifications JS API only. Expo still
-      // auto-injects `aps-environment` when the package is installed — strip it
-      // so Ad Hoc builds don't require Push Notifications on the Apple App ID.
+      // Must be listed for EAS/preview builds — without it Android never gets
+      // notification channels / POST_NOTIFICATIONS wiring and locals silently fail.
+      [
+        "expo-notifications",
+        {
+          color: "#FF6B35",
+          defaultChannel: "sleep-reminders",
+          // Local reminders only; remote/background push stays off.
+          enableBackgroundRemoteNotifications: false,
+        },
+      ],
+      // iOS Live Activity (lock screen / Dynamic Island) while a session runs.
+      // Requires a new native binary — not available in Expo Go.
+      [
+        "expo-widgets",
+        {
+          bundleIdentifier: "com.shivpatel.gymapp.widgets",
+          groupIdentifier: "group.com.shivpatel.gymapp",
+          // Fitness timers benefit from the frequent-update entitlement.
+          frequentUpdates: true,
+          enablePushNotifications: false,
+          widgets: [],
+        },
+      ],
+      // expo-notifications still injects `aps-environment`. Strip it so Ad Hoc
+      // builds don't require the Push Notifications capability on the Apple App ID.
       "./plugins/withLocalNotificationsOnly",
     ],
     extra: {

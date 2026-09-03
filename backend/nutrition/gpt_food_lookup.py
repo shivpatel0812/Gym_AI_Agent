@@ -14,30 +14,14 @@ Rules:
 2. Split the meal into components (wrap/bread, filling, oil, sauce, toppings). Estimate each, then SUM.
    Each component's "calories" field is the TOTAL for that component across all qty, not per-unit.
 3. If the user gives a calorie hint for a PART (e.g. "tortilla was like 150 cal each"), use that for THAT part only. Do NOT treat it as the total for the meal. Add filling, cooking oil, and extras on top.
-4. Pan-fried / "panned" / sauteed foods include cooking oil (typically 40–80 kcal per wrap/serving unless they said no oil).
-5. Prefer a realistic overestimate over an underestimate. Street-style wraps (frankie, kathi roll, burrito) with legumes or meat are often 250–450 kcal EACH; three of them are usually 750–1300+ kcal, never just the wrap calories.
-6. If the description is SPARSE (bare food name, no prep/oil/portion detail — e.g. "2 samosas", "a plate of biryani"), do NOT default to a lean textbook recipe. Assume typical home-cooked or restaurant-style preparation, which usually includes oil/ghee/butter, and bias toward the higher end of the plausible range for that dish.
-7. Calories must be at least 4*protein + 4*carbs + 9*fats (within 15 kcal). If not, raise calories.
-8. calories MUST equal the sum of component calories.
+4. Aim for the most likely central estimate. Do not systematically overestimate or underestimate.
+5. Include cooking oil only when the user states it or the named preparation normally requires it. Do not infer extra oil merely because a dish is homemade.
+6. If the description is sparse, use a typical preparation as a neutral prior and avoid unusually lean or unusually rich assumptions.
+7. Calories must be at least 4*protein + 4*carbs + 9*fats (within 20 kcal). If not, raise calories to maintain basic consistency.
+8. calories MUST equal the sum of component calories when component calories are provided.
 
 Return JSON only with:
 """
-
-# Minimum plausible calories for common foods where sparse descriptions tend to
-# get lowballed by the model (per unit/serving as named in the query, before qty
-# multiplication — applied in finalize_estimated_macros using detected qty).
-CATEGORY_FLOOR_KCAL = {
-    "frankie": 250,
-    "kathi roll": 250,
-    "kati roll": 250,
-    "burrito": 350,
-    "samosa": 150,
-    "biryani": 500,
-    "paratha": 200,
-    "naan": 200,
-    "momo": 40,  # per piece
-    "dumpling": 40,  # per piece
-}
 
 # Sane upper bounds so a hallucinated/malformed response can't silently pass through.
 MAX_CALORIES = 5000
@@ -74,28 +58,8 @@ def _num(value, default=0):
         return default
 
 
-def _apply_category_floor(query: str, calories: float, components_summed: float) -> float:
-    """If the query names a food known to get lowballed and the model's total
-    looks too low for it, raise the floor. Only fires when we have no reason
-    to already trust a higher number (component sum takes precedence upstream)."""
-    q = (query or "").lower()
-    for keyword, per_unit_floor in CATEGORY_FLOOR_KCAL.items():
-        if keyword in q:
-            # crude qty sniff: look for a leading digit near the keyword/query
-            qty = 1
-            for token in q.replace(",", " ").split():
-                if token.isdigit():
-                    qty = max(qty, int(token))
-                    break
-            floor = per_unit_floor * qty
-            if calories < floor and components_summed < floor:
-                return float(floor)
-    return calories
-
-
 def finalize_estimated_macros(parsed: Dict, query: str = "") -> Tuple[int, float, float, float, float]:
-    """Raise calories to match component sums / macros; correct fat (not all
-    macros) when calories imply more than protein+carbs+fat account for."""
+    """Apply arithmetic consistency without inventing an upward calorie bias."""
     protein = round(_num(parsed.get("protein")), 1)
     carbs = round(_num(parsed.get("carbs")), 1)
     fats = round(_num(parsed.get("fats", parsed.get("fat"))), 1)
@@ -111,25 +75,10 @@ def finalize_estimated_macros(parsed: Dict, query: str = "") -> Tuple[int, float
     if summed > calories:
         calories = int(round(summed))
 
-    # Sparse/known-tricky foods: enforce a category-level floor if both the
-    # reported total and the component sum came in under it.
-    floored = _apply_category_floor(query, calories, summed)
-    if floored > calories:
-        calories = int(round(floored))
-
     macro_kcal = 4 * protein + 4 * carbs + 9 * fats
     if macro_kcal > calories + 20:
         # Macros already justify more calories than reported — trust the macros.
         calories = int(round(macro_kcal))
-    elif calories > macro_kcal + 30 and macro_kcal > 40:
-        # Calories are higher than the macros justify. This is almost always a
-        # missed-oil situation (cooking oil counted in the total but not
-        # reflected in the fat field), so route the shortfall into fat rather
-        # than scaling every macro — protein/carbs from the actual food
-        # shouldn't change just because oil existed. Fiber is untouched
-        # entirely since it isn't part of the calorie equation.
-        missing_kcal = calories - macro_kcal
-        fats = round(fats + missing_kcal / 9, 1)
 
     return calories, protein, carbs, fats, fiber
 
