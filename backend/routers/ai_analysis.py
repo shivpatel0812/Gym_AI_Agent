@@ -13,6 +13,7 @@ import os
 
 import ai_access
 import moderation
+import user_time
 from auth import get_user_id
 from db import db
 from ai_analysis import FitnessDataAnalyzer, FitnessAICoach, get_user_profile_for_ai
@@ -66,7 +67,10 @@ def _chat_summary(user_id: str, request: "ChatRequest") -> dict:
             if getattr(request, "mode", None) in ("plan", "nutrition")
             else CHAT_CONTEXT_WINDOW_DAYS
         )
-        summary = analyzer.build_rolling_summary(window_days=window)
+        summary = analyzer.build_rolling_summary(
+            window_days=window,
+            end_date=user_time.now(db, user_id),
+        )
 
     # The shared priority, so this conversation argues for the same thing Home
     # and the plan do. Read from cache — never recomputed to answer a message.

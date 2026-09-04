@@ -30,6 +30,7 @@ import defaultExercises, {
   categoryToMuscleGroup,
   categories,
 } from "@/data/defaultExercises";
+import { localDateKey } from "@/lib/localDate";
 
 export interface SessionSummaryData {
   totalVolume: number;
@@ -441,7 +442,7 @@ function hydrateAiRecommendations(exercises: SessionExercise[]) {
 
 function emptySessionForm(): SessionFormData {
   return {
-    date: new Date().toISOString().split("T")[0],
+    date: localDateKey(),
     split_id: "",
     split_name: "",
     split_day: "",

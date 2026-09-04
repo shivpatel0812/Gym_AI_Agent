@@ -4,6 +4,7 @@ Generates personalized fitness insights using OpenAI API.
 """
 
 import json
+import re
 from datetime import datetime
 from typing import Dict, List, Any, Iterator, Optional
 from openai import OpenAI
@@ -50,10 +51,77 @@ SAFETY BOUNDARIES (these override every other instruction below):
   requests briefly.
 """
 
+FRESH_LOG_RULES = """
+
+FRESH PERSONAL DATA:
+- The summary above is headline averages, not a substitute for the logs.
+- Always make a fresh tool call when the user asks about today, yesterday, a
+  recent/latest/last day, or this week's personal data. Do not answer those
+  questions from averages, an earlier chat turn, or memory.
+- For nutrition, use get_nutrition_log; also use get_today_remaining when they
+  ask what is left or what to eat next. For workouts, use get_recent_sessions,
+  or get_workout_session when the date is specific.
+- If one question covers both nutrition and workouts, use get_recent_activity
+  so neither half is skipped. If a tool returns no data, say so plainly.
+"""
+
 
 
 def _is_design_mode(mode: str) -> bool:
     return mode in ("plan", "nutrition")
+
+
+_FRESH_TIME_RE = re.compile(
+    r"\b(?:today|tonight|yesterday|recent|recently|latest|lately|"
+    r"this\s+(?:week|morning|afternoon|evening)|so\s+far|"
+    r"last\s+(?:day|night|meal|workout|session|few\s+days))\b",
+    re.IGNORECASE,
+)
+_PERSONAL_DATA_RE = re.compile(
+    r"\b(?:my|i|me|ate|eat|eating|food|meal|nutrition|calories?|macros?|"
+    r"protein|carbs?|fat|fiber|workouts?|trained|training|gym|lifts?|"
+    r"exercises?|sets?|reps?|sessions?)\b",
+    re.IGNORECASE,
+)
+_NUTRITION_DATA_RE = re.compile(
+    r"\b(?:ate|eat|eating|food|meal|nutrition|diet|calories?|macros?|"
+    r"protein|carbs?|fat|fiber)\b",
+    re.IGNORECASE,
+)
+_WORKOUT_DATA_RE = re.compile(
+    r"\b(?:workouts?|trained|training|gym|lifts?|exercises?|sets?|reps?|"
+    r"sessions?)\b",
+    re.IGNORECASE,
+)
+_REMAINING_NUTRITION_RE = re.compile(
+    r"\b(?:remaining|left|budget|dinner|next\s+meal|eat\s+next|"
+    r"should\s+i\s+eat)\b",
+    re.IGNORECASE,
+)
+
+
+def asks_about_fresh_personal_data(message: str) -> bool:
+    """Whether the first model round must retrieve current user logs."""
+    text = str(message or "")
+    return bool(_FRESH_TIME_RE.search(text) and _PERSONAL_DATA_RE.search(text))
+
+
+def fresh_log_tool(message: str) -> Optional[str]:
+    """Pick the log reader that must run first, or ``required`` if ambiguous."""
+    if not asks_about_fresh_personal_data(message):
+        return None
+    nutrition = bool(_NUTRITION_DATA_RE.search(message))
+    workout = bool(_WORKOUT_DATA_RE.search(message))
+    if nutrition and not workout:
+        if _REMAINING_NUTRITION_RE.search(message):
+            return "get_today_remaining"
+        return "get_nutrition_log"
+    if workout and not nutrition:
+        return "get_recent_sessions"
+    # Broad questions such as "how did I do today?" and combined nutrition +
+    # training questions still have to use a tool, while leaving the model
+    # free to issue both relevant reads in parallel.
+    return "get_recent_activity"
 
 
 def clean_for_json(obj: Any) -> Any:
@@ -581,7 +649,11 @@ Use tools in this mode. Look up the nutrition plan, recent eating, and the train
         context = self._build_chatbot_context(summary)
         # Appended once here so every mode (coach, plan, nutrition) inherits it
         context += self._build_body_scan_context(toolbox)
-        today = datetime.now()
+        # Relative dates in the question and every tool lookback must share
+        # one calendar. The API server commonly runs in UTC, which is already
+        # tomorrow during a US evening; using its clock here makes "today" in
+        # the prompt disagree with the user's date-stamped logs.
+        today = toolbox.local_now() if toolbox is not None else datetime.now()
         design_mode = _is_design_mode(mode)
 
         if mode == "plan":
@@ -608,10 +680,7 @@ Where a metric reads "not logged", say you don't have that data instead of guess
             if toolbox is not None:
                 system_message += """
 
-The summary above is headline averages only. When the user asks about specific
-workouts, exercises, dates, personal bests, or what to train today, call the
-tools to look up the actual records rather than answering from the averages or
-guessing. If a tool returns no data, say so plainly.
+Use tools for exercises, personal bests, and what to train today.
 
 When the user names a particular workout date, resolve it against today's date
 and call get_workout_session with YYYY-MM-DD. Base the answer on the returned
@@ -631,6 +700,13 @@ photos, not body composition: never quote or estimate a body-fat percentage, and
 if a scan reads low-confidence, say the photos were unclear instead of coaching
 from them."""
 
+        # Every mode can answer questions about fresh logs, so the freshness
+        # contract cannot live only in the ordinary coach branch. In
+        # particular, Nutrition Plan Mode used to be allowed to continue from
+        # its stored plan context without re-reading food logged moments ago.
+        if toolbox is not None:
+            system_message += FRESH_LOG_RULES
+
         history_limit = PLAN_MODE_HISTORY_MESSAGES if design_mode else MAX_HISTORY_MESSAGES
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_message}]
         messages.extend(self._sanitize_history(conversation_history or [], limit=history_limit))
@@ -641,6 +717,7 @@ from them."""
         self, messages: List[Dict], toolbox: Optional[CoachToolbox],
         round_index: int, tool_call_count: int,
         mode: str = "coach",
+        required_fresh_tool: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build the API kwargs for one round, applying the tool budget."""
         from ai_models import completion_kwargs
@@ -661,6 +738,19 @@ from them."""
         kwargs["messages"] = messages
         if use_tools:
             kwargs["tools"] = tools_for_mode(mode)
+            # Prompting alone made these reads probabilistic: the model could
+            # decide a rolling average was close enough and skip food or a
+            # workout logged minutes ago. Requiring a tool on the first round
+            # makes freshness an API invariant for explicitly recent asks.
+            if required_fresh_tool and round_index == 0:
+                kwargs["tool_choice"] = (
+                    "required"
+                    if required_fresh_tool == "required"
+                    else {
+                        "type": "function",
+                        "function": {"name": required_fresh_tool},
+                    }
+                )
         return kwargs
 
     def chat(
@@ -696,6 +786,7 @@ from them."""
             nutrition_context,
         )
         max_rounds = PLAN_MAX_TOOL_ROUNDS if _is_design_mode(mode) else MAX_TOOL_ROUNDS
+        required_fresh_tool = fresh_log_tool(user_message)
 
         try:
             total_tokens = 0
@@ -703,7 +794,8 @@ from them."""
 
             for round_index in range(max_rounds + 1):
                 kwargs = self._request_kwargs(
-                    messages, toolbox, round_index, len(tools_used), mode
+                    messages, toolbox, round_index, len(tools_used), mode,
+                    required_fresh_tool,
                 )
                 response = self.client.chat.completions.create(**kwargs)
                 total_tokens += getattr(response.usage, "total_tokens", 0) or 0
@@ -794,6 +886,7 @@ from them."""
             nutrition_context,
         )
         max_rounds = PLAN_MAX_TOOL_ROUNDS if _is_design_mode(mode) else MAX_TOOL_ROUNDS
+        required_fresh_tool = fresh_log_tool(user_message)
 
         try:
             total_tokens = 0
@@ -801,7 +894,8 @@ from them."""
 
             for round_index in range(max_rounds + 1):
                 kwargs = self._request_kwargs(
-                    messages, toolbox, round_index, len(tools_used), mode
+                    messages, toolbox, round_index, len(tools_used), mode,
+                    required_fresh_tool,
                 )
                 kwargs["stream"] = True
                 # Usage is omitted from streamed responses unless asked for

@@ -14,6 +14,7 @@ import { Exercise, Split, WorkoutSession } from "../types";
 import defaultExercises, { categories, categoryToMuscleGroup } from "../../../data/defaultExercises";
 import { colors, spacing, borderRadius } from "../../../theme";
 import apiClient from "../../../api/client";
+import { localDateKey } from "../../../lib/localDate";
 
 interface SessionFormProps {
   exercises: Exercise[];
@@ -38,7 +39,7 @@ export default function SessionForm({
     exercises: any[];
     notes: string;
   }>({
-    date: initialSession?.date || new Date().toISOString().split("T")[0],
+    date: initialSession?.date || localDateKey(),
     workout_name: (initialSession as any)?.workout_name || initialSession?.split_name || "",
     split_name: initialSession?.split_name || "",
     split_day: (initialSession as any)?.split_day || "",

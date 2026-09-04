@@ -1,10 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  emptySessionForm,
   getBestSetLabel,
   mapRecSets,
   recHasApplicableSets,
   recHasWeightedSets,
 } from "./sessionLogic";
+
+describe("workout date defaults", () => {
+  it("uses the device calendar instead of the UTC date", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 3, 23, 30, 0));
+    try {
+      expect(emptySessionForm().date).toBe("2026-09-03");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("getBestSetLabel", () => {
   it("names the set the estimated 1RM was computed from", () => {

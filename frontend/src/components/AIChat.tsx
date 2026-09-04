@@ -74,6 +74,7 @@ function suggestionArtifact(artifacts?: any[]): NutritionSuggestionArtifact | un
 
 // Shown while the coach is pulling data mid-answer
 const TOOL_LABELS: Record<string, string> = {
+  get_recent_activity: "Reviewing your recent workouts and nutrition...",
   get_recent_sessions: "Checking your recent workouts...",
   get_workout_session: "Opening that workout day...",
   get_exercise_history: "Looking up your lift history...",

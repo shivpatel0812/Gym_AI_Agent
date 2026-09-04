@@ -1,4 +1,5 @@
 import defaultExercises, { categoryToMuscleGroup } from "../../data/defaultExercises";
+import { localDateKey } from "../../lib/localDate";
 import {
   SessionExercise,
   WorkoutSession,
@@ -486,7 +487,7 @@ export function hydrateAiRecommendations(exercises: SessionExercise[]) {
 
 export function emptySessionForm(): SessionFormData {
   return {
-    date: new Date().toISOString().split("T")[0],
+    date: localDateKey(),
     split_id: "",
     split_name: "",
     split_day: "",

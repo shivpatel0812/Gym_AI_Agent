@@ -274,7 +274,7 @@ export default function App() {
       // Report the device's timezone once per change, so server-side date
       // defaults use this user's calendar day rather than the server's.
       if (user) {
-        syncTimezone();
+        syncTimezone(user.uid);
         // Keep the 14-day local queue fresh without waiting for Wellness to open.
         void (async () => {
           try {

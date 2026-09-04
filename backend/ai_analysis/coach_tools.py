@@ -13,6 +13,7 @@ the routers, because routers/ already imports ai_analysis/.
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
+import user_time
 from field_aliases import normalize_records
 from nutrition.meal_math import anchor_kind, anchor_macros
 
@@ -166,6 +167,7 @@ class CoachToolbox:
         # chat stays read-only.
         self.mode = mode
         self.conversation_id = conversation_id
+        self._local_now: Optional[datetime] = None
         # Structured results the client should render as more than chat text
         # (a suggestion card, say). Read by the chat routers after the turn.
         self.artifacts: List[Dict[str, Any]] = []
@@ -175,10 +177,16 @@ class CoachToolbox:
     def _collection(self, name: str):
         return self.db.collection("users").document(self.user_id).collection(name)
 
+    def local_now(self) -> datetime:
+        """One consistent user-local clock for the whole chat turn."""
+        if self._local_now is None:
+            self._local_now = user_time.now(self.db, self.user_id)
+        return self._local_now
+
     def _fetch_range(self, collection: str, days: int) -> List[Dict]:
         """Fetch documents whose `date` falls in the last N days."""
         days = max(1, min(int(days or 7), MAX_DAYS_LOOKBACK))
-        end = datetime.now()
+        end = self.local_now()
         start = end - timedelta(days=days - 1)
         docs = (
             self._collection(collection)
@@ -225,6 +233,18 @@ class CoachToolbox:
             result.append(entry)
 
         return {"days": days, "session_count": len(result), "sessions": result}
+
+    def get_recent_activity(
+        self, days: int = 7, include_foods: bool = True
+    ) -> Dict[str, Any]:
+        """One fresh read for questions spanning both training and nutrition."""
+        return {
+            "as_of": self.local_now().strftime("%Y-%m-%d"),
+            "workouts": self.get_recent_sessions(days=days),
+            "nutrition": self.get_nutrition_log(
+                days=days, include_foods=include_foods
+            ),
+        }
 
     def get_workout_session(self, date: str) -> Dict[str, Any]:
         """Every logged exercise and set for one exact calendar date."""
@@ -349,7 +369,7 @@ class CoachToolbox:
             return {"status": "no_plan", "message": "No active workout plan."}
 
         plan = active[0].to_dict() or {}
-        today = datetime.now()
+        today = self.local_now()
         day_of_week = today.strftime("%A").lower()
         assignment = (plan.get("weekly_schedule") or {}).get(day_of_week)
 
@@ -457,12 +477,11 @@ class CoachToolbox:
 
     def get_today_remaining(self, date: Optional[str] = None) -> Dict[str, Any]:
         """What is actually left of today's budget, plan-aware."""
-        from datetime import datetime as _dt
-
         from nutrition.plan_store import NutritionPlanStore
         from nutrition.today_guidance import build_today_guidance
 
-        day = str(date or _dt.now().strftime("%Y-%m-%d"))[:10]
+        now = self.local_now()
+        day = str(date or now.strftime("%Y-%m-%d"))[:10]
         try:
             plan = NutritionPlanStore(self.db, self.user_id).get_active()
         except Exception as e:
@@ -471,13 +490,13 @@ class CoachToolbox:
             return {"status": "no_plan", "message": "No active nutrition plan."}
 
         try:
-            asked = _dt.strptime(day, "%Y-%m-%d")
+            asked = datetime.strptime(day, "%Y-%m-%d")
         except ValueError:
-            asked = _dt.now()
+            asked = now.replace(tzinfo=None)
             day = asked.strftime("%Y-%m-%d")
         # Reach back far enough to include the day being asked about, not just
         # today, so "what was left on Sunday" still finds Sunday's food.
-        lookback = max(1, min((_dt.now() - asked).days + 1, 30))
+        lookback = max(1, min((now.date() - asked.date()).days + 1, 30))
 
         foods = []
         for row in self._fetch_range("macros", lookback):
@@ -859,6 +878,7 @@ class CoachToolbox:
             return {"error": f"{name} is not available in this conversation."}
 
         handler = {
+            "get_recent_activity": self.get_recent_activity,
             "get_recent_sessions": self.get_recent_sessions,
             "get_workout_session": self.get_workout_session,
             "get_exercise_history": self.get_exercise_history,
@@ -896,6 +916,27 @@ def _days_param(description: str, default: int) -> Dict[str, Any]:
 
 
 TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_recent_activity",
+            "description": (
+                "Get recent workout sessions and day-by-day nutrition logs together. "
+                "Use for questions about how the user's recent day or week went overall, "
+                "or any question that compares/covers both training and nutrition."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": _days_param("How many days back to look", 7),
+                    "include_foods": {
+                        "type": "boolean",
+                        "description": "Include food names (default true).",
+                    },
+                },
+            },
+        },
+    },
     {
         "type": "function",
         "function": {

@@ -26,17 +26,18 @@ export function deviceTimezone(): string | null {
  * a normal launch costs nothing, and a failure never blocks the app. Travel is
  * handled for free — the new zone differs from the stored one and gets sent.
  */
-export async function syncTimezone(): Promise<void> {
+export async function syncTimezone(userId?: string): Promise<void> {
   const timezone = deviceTimezone();
   if (!timezone) return;
+  const storageKey = userId ? `${STORAGE_KEY}.${userId}` : STORAGE_KEY;
   try {
-    if ((await AsyncStorage.getItem(STORAGE_KEY)) === timezone) return;
+    if ((await AsyncStorage.getItem(storageKey)) === timezone) return;
   } catch {
     // Unreadable cache just means we send it again.
   }
   try {
     await apiClient.put("/api/user-profile/timezone", { timezone });
-    await AsyncStorage.setItem(STORAGE_KEY, timezone).catch(() => {});
+    await AsyncStorage.setItem(storageKey, timezone).catch(() => {});
   } catch {
     // Offline or an older backend — the clients still send explicit dates.
   }

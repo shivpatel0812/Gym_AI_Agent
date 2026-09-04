@@ -45,6 +45,7 @@ import { buildDayMap } from "../../../lib/dayMap";
 import { LoggedMealPattern } from "../../../lib/recentMeals";
 import { pendingTargetIds } from "../../../lib/planSuggestionSlots";
 import { AI_MODEL_STORAGE_KEY, normalizeAiModel } from "../../../lib/aiModels";
+import { localDateKey } from "../../../lib/localDate";
 import apiClient from "../../../api/client";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { colors, spacing, borderRadius } from "../../../theme";
@@ -849,7 +850,7 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
     slot: PrimaryMealSlot
   ) => {
     try {
-      const date = new Date().toISOString().slice(0, 10);
+      const date = localDateKey();
       const meal =
         slot === "breakfast"
           ? "Breakfast"
