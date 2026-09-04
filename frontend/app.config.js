@@ -90,6 +90,15 @@ module.exports = {
             "GymAI uses your camera for meal photos and optional guided progress photos for AI body-scan coaching. Photos used for body scan are analyzed and then deleted.",
         },
       ],
+      [
+        "expo-camera",
+        {
+          cameraPermission:
+            "GymAI uses your camera for meal photos and optional guided progress photos for AI body-scan coaching. Photos used for body scan are analyzed and then deleted.",
+          microphonePermission: false,
+          recordAudioAndroid: false,
+        },
+      ],
       // Must be listed for EAS/preview builds — without it Android never gets
       // notification channels / POST_NOTIFICATIONS wiring and locals silently fail.
       [

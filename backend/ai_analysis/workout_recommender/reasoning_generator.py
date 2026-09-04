@@ -269,10 +269,28 @@ class ReasoningGenerator:
             return f"Stay at {weight:g} lbs and even out your sets before adding weight."
 
         if decision == Decision.MAINTAIN:
+            short = ctx.get("reps_short") or 0
+            low = (ctx.get("rep_range") or (None, None))[0]
+            if short and low:
+                return (
+                    f"You are {short} rep{'s' if short > 1 else ''} short of {low}. "
+                    f"Same load, one more rep per set to close the gap."
+                )
             failures = ctx.get("consecutive_failures", 0)
             return (
                 f"Multiple sessions below target ({failures} consecutive). "
                 f"Holding steady to consolidate."
+            )
+
+        if decision == Decision.REDUCE_LOAD:
+            prev = ctx.get("prev_weight", 0)
+            new_weight = ctx.get("weight", 0)
+            low = (ctx.get("rep_range") or (None, None))[0]
+            short = ctx.get("reps_short") or 0
+            return (
+                f"{prev:g} lbs has kept you {short} reps under {low} for several "
+                f"sessions — the load is the limit, not the effort. "
+                f"Drop to {new_weight:g} lbs and own the range."
             )
 
         if decision == Decision.DELOAD:
@@ -304,6 +322,12 @@ class ReasoningGenerator:
             return "Starting with a baseline cardio session."
 
         if decision == Decision.BODYWEIGHT_PROGRESS:
+            if ctx.get("above_band"):
+                high = (ctx.get("rep_range") or (None, None))[1]
+                return (
+                    f"You are past {high} reps on bodyweight alone. Add a rep again, "
+                    f"but external load is what moves this forward now."
+                )
             return "Adding a rep per set for progressive bodyweight overload."
 
         return "Continuing with your current progression."

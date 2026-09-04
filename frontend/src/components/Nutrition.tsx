@@ -8,7 +8,9 @@ import {
   TouchableOpacity,
   Platform,
   StatusBar,
-  KeyboardAvoidingView,
+  Modal,
+  SafeAreaView,
+  Keyboard,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -17,18 +19,18 @@ import apiClient from "../api/client";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { colors, spacing } from "../theme";
 import Ring from "./nutrition/Ring";
+import { DayFitSummary, FitBadge, FitReason } from "./nutrition/FitBadge";
 import LogFoodForm, { PlanMealPick } from "./nutrition/LogFoodForm";
 import MealReminderRow from "./nutrition/MealReminderRow";
-import TodayGuidanceCard from "./nutrition/plan/TodayGuidanceCard";
 import NutritionPlanTab from "./nutrition/plan/NutritionPlanTab";
+import NutritionSuggestionsTab from "./nutrition/plan/NutritionSuggestionsTab";
 import SavedFoodsTab from "./nutrition/SavedFoodsTab";
 import {
   getActiveNutritionPlan,
-  getTodayGuidance,
+  getPendingSuggestions,
   mealAnchorKind,
   daysLabel,
   NutritionPlan,
-  TodayGuidance,
 } from "../api/nutritionPlan";
 import { normalizeMealLabel } from "../lib/recentMeals";
 import { planItemAppliesToday, todayWeekdayKey } from "../lib/mealSlots";
@@ -179,8 +181,8 @@ export default function Nutrition() {
   const askNutritionCoach = (prompt: string) => {
     navigation.navigate("AIHub", { coachMode: "nutrition", prompt });
   };
-  const [hubTab, setHubTab] = useState<"today" | "plan" | "foods">("today");
-  const [guidance, setGuidance] = useState<TodayGuidance | null>(null);
+  const [hubTab, setHubTab] = useState<"today" | "plan" | "updates" | "foods">("today");
+  const [pendingUpdates, setPendingUpdates] = useState(0);
   const [activePlan, setActivePlan] = useState<NutritionPlan | null>(null);
   const [entries, setEntries] = useState<MacroEntry[]>([]);
   const [hydrationEntries, setHydrationEntries] = useState<HydrationEntry[]>([]);
@@ -200,10 +202,22 @@ export default function Nutrition() {
 
   useEffect(() => {
     const tab = route.params?.tab;
-    if (tab === "foods" || tab === "plan" || tab === "today") {
-      setHubTab(tab);
+    if (tab === "foods" || tab === "plan" || tab === "today" || tab === "updates" || tab === "suggestions") {
+      setHubTab(tab === "suggestions" ? "updates" : tab);
     }
   }, [route.params?.tab]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPendingSuggestions()
+      .then((pending) => {
+        if (!cancelled) setPendingUpdates(pending.pending_count || 0);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [hubTab]);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -286,6 +300,31 @@ export default function Nutrition() {
     return rows;
   }, [dayEntries]);
 
+  /**
+   * Day-level goal fit, calorie-weighted across every item.
+   *
+   * Recomputed here rather than read off one entry: a day can hold several
+   * macro entries, and each carries a fit score for its own items only.
+   * Weighting by calories keeps a 600 kcal dinner from counting the same as a
+   * 60 kcal apple.
+   */
+  const dayFit = useMemo(() => {
+    let weighted = 0;
+    let weight = 0;
+    for (const row of dayRows) {
+      const score = row.food.fit?.score;
+      if (score == null) continue;
+      const calories = row.food.calories || 0;
+      weighted += score * calories;
+      weight += calories;
+    }
+    if (weight <= 0) return null;
+    const score = Math.round(weighted / weight);
+    const band =
+      score >= 80 ? "excellent" : score >= 65 ? "good" : score >= 45 ? "fair" : "poor";
+    return { score, band } as const;
+  }, [dayRows]);
+
   const totals = useMemo(() => {
     let calories = 0;
     let protein = 0;
@@ -317,13 +356,6 @@ export default function Nutrition() {
       fiber: Math.round(fiber),
     };
   }, [dayEntries]);
-
-  useEffect(() => {
-    if (hubTab !== "today") return;
-    getTodayGuidance(selectedDate)
-      .then(setGuidance)
-      .catch(() => setGuidance(null));
-  }, [hubTab, selectedDate, totals.calories, totals.protein]);
 
   const hydrationForDay = useMemo(
     () => hydrationEntries.find((h) => h.date === selectedDate),
@@ -365,6 +397,7 @@ export default function Nutrition() {
         });
       }
       fetchAll();
+      Keyboard.dismiss();
       setLoggingMeal(null);
     } catch (error) {
       console.error("Error adding food:", error);
@@ -453,7 +486,11 @@ export default function Nutrition() {
     const firstEmpty = MEALS.find((m) => !(mealGroups[m.id] || []).length)?.id;
     const target = meal || firstEmpty || MEALS[0].id;
     setLoggingMeal(target);
-    setCollapsedMeals((prev) => ({ ...prev, [target]: false }));
+  };
+
+  const closeLogFood = () => {
+    Keyboard.dismiss();
+    setLoggingMeal(null);
   };
 
   const commitWater = (value: number) => {
@@ -519,28 +556,39 @@ export default function Nutrition() {
   ];
 
   const mealsToShow = [
-    ...MEALS.filter(
-      (m) => (mealGroups[m.id] || []).length > 0 || loggingMeal === m.id
-    ),
+    ...MEALS.filter((m) => (mealGroups[m.id] || []).length > 0),
     ...(mealGroups["Other"]?.length
       ? [{ id: "Other", label: "Other", icon: "🍽️" }]
       : []),
   ];
-  const emptyMeals = MEALS.filter(
-    (m) => !(mealGroups[m.id] || []).length && loggingMeal !== m.id
-  );
+  const emptyMeals = MEALS.filter((m) => !(mealGroups[m.id] || []).length);
 
   return (
     <View style={styles.container}>
       <View style={styles.hubHeader}>
         <View style={styles.hubTabs}>
-          {(["today", "plan", "foods"] as const).map((tab) => {
+          {(["today", "plan", "updates", "foods"] as const).map((tab) => {
             const active = hubTab === tab;
+            const label =
+              tab === "today"
+                ? "Today"
+                : tab === "plan"
+                  ? "Plan"
+                  : tab === "updates"
+                    ? "Updates"
+                    : "Foods";
             return (
               <TouchableOpacity key={tab} style={styles.hubTab} onPress={() => setHubTab(tab)}>
-                <Text style={[styles.hubTabText, active && styles.hubTabTextOn]}>
-                  {tab === "today" ? "Today" : tab === "plan" ? "Plan" : "Foods"}
-                </Text>
+                <View style={styles.hubTabLabelRow}>
+                  <Text style={[styles.hubTabText, active && styles.hubTabTextOn]}>{label}</Text>
+                  {tab === "updates" && pendingUpdates > 0 ? (
+                    <View style={styles.hubBadge}>
+                      <Text style={styles.hubBadgeText}>
+                        {pendingUpdates > 9 ? "9+" : pendingUpdates}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
                 {active ? <View style={styles.hubUnderline} /> : null}
               </TouchableOpacity>
             );
@@ -549,18 +597,25 @@ export default function Nutrition() {
       </View>
 
       {hubTab === "plan" ? (
-        <NutritionPlanTab onAskCoach={askNutritionCoach} />
+        <NutritionPlanTab
+          onAskCoach={askNutritionCoach}
+          onOpenSuggestions={() => setHubTab("updates")}
+        />
+      ) : hubTab === "updates" ? (
+        <NutritionSuggestionsTab
+          onAskCoach={askNutritionCoach}
+          onOpenPlan={() => setHubTab("plan")}
+          onPendingCountChange={setPendingUpdates}
+        />
       ) : hubTab === "foods" ? (
         <SavedFoodsTab />
       ) : (
-    <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+          automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
         >
           <View style={styles.header}>
             <View>
@@ -622,7 +677,6 @@ export default function Nutrition() {
             </TouchableOpacity>
           )}
 
-          <TodayGuidanceCard guidance={guidance} />
           <MealReminderRow />
 
           {showTargets && (
@@ -704,6 +758,9 @@ export default function Nutrition() {
                   {targets.calories.toLocaleString()} target
                 </Text>
               </Ring>
+              <View style={{ marginTop: 10 }}>
+                <DayFitSummary score={dayFit?.score} band={dayFit?.band} />
+              </View>
             </View>
 
             <View style={styles.macroGrid}>
@@ -880,12 +937,16 @@ export default function Nutrition() {
                                         <MaterialCommunityIcons name="pencil" size={14} color="#55647A" />
                                       </TouchableOpacity>
                                       <View style={{ flex: 1 }}>
-                                        <Text style={styles.foodName} numberOfLines={1}>
-                                          {row.food.name}
-                                        </Text>
+                                        <View style={styles.foodNameRow}>
+                                          <Text style={styles.foodName} numberOfLines={1}>
+                                            {row.food.name}
+                                          </Text>
+                                          <FitBadge fit={row.food.fit} compact />
+                                        </View>
                                         {row.food.amount ? (
                                           <Text style={styles.mutedXs}>{row.food.amount}</Text>
                                         ) : null}
+                                        <FitReason fit={row.food.fit} />
                                       </View>
                                     </View>
                                   </View>
@@ -923,24 +984,13 @@ export default function Nutrition() {
                     )}
                     {meal.id !== "Other" && (
                       <View style={styles.addWrap}>
-                        {loggingMeal === meal.id ? (
-                          <LogFoodForm
-                            key={meal.id}
-                            meal={meal.id}
-                            onAdd={addFood}
-                            onAddMany={addFoods}
-                            planMeals={planMealsForLogging}
-                            onCancel={() => setLoggingMeal(null)}
-                          />
-                        ) : (
-                          <TouchableOpacity
-                            style={styles.addDashed}
-                            onPress={() => openLogFood(meal.id)}
-                          >
-                            <MaterialCommunityIcons name="plus" size={16} color="#7C8CA0" />
-                            <Text style={{ color: "#7C8CA0", fontWeight: "500" }}>Add food</Text>
-                          </TouchableOpacity>
-                        )}
+                        <TouchableOpacity
+                          style={styles.addDashed}
+                          onPress={() => openLogFood(meal.id)}
+                        >
+                          <MaterialCommunityIcons name="plus" size={16} color="#7C8CA0" />
+                          <Text style={{ color: "#7C8CA0", fontWeight: "500" }}>Add food</Text>
+                        </TouchableOpacity>
                       </View>
                     )}
                   </>
@@ -971,15 +1021,59 @@ export default function Nutrition() {
             </View>
           )}
         </ScrollView>
-      </KeyboardAvoidingView>
       )}
 
-      {hubTab === "today" ? (
-      <TouchableOpacity style={styles.fab} onPress={() => openLogFood()}>
-        <MaterialCommunityIcons name="plus" size={20} color="#fff" />
-        <Text style={styles.fabText}>Log Food</Text>
-      </TouchableOpacity>
+      {hubTab === "today" && !loggingMeal ? (
+        <TouchableOpacity style={styles.fab} onPress={() => openLogFood()}>
+          <MaterialCommunityIcons name="plus" size={20} color="#fff" />
+          <Text style={styles.fabText}>Log Food</Text>
+        </TouchableOpacity>
       ) : null}
+
+      <Modal
+        visible={loggingMeal !== null}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={closeLogFood}
+      >
+        <SafeAreaView style={styles.logModal}>
+          <View style={styles.logModalHeader}>
+            <TouchableOpacity
+              onPress={closeLogFood}
+              style={styles.logModalClose}
+              accessibilityRole="button"
+              accessibilityLabel="Close food logger"
+            >
+              <MaterialCommunityIcons name="close" size={22} color="#fff" />
+            </TouchableOpacity>
+            <View>
+              <Text style={styles.logModalTitle}>Log food</Text>
+              <Text style={styles.logModalSubtitle}>
+                {MEALS.find((meal) => meal.id === loggingMeal)?.label || "Choose a meal"}
+              </Text>
+            </View>
+          </View>
+          <ScrollView
+            style={styles.logModalScroll}
+            contentContainerStyle={styles.logModalContent}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
+          >
+            {loggingMeal ? (
+              <LogFoodForm
+                meal={loggingMeal}
+                onAdd={addFood}
+                onAddMany={addFoods}
+                planMeals={planMealsForLogging}
+                onMealChange={setLoggingMeal}
+                onCancel={closeLogFood}
+                compact
+              />
+            ) : null}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </View>
   );
 }
@@ -998,8 +1092,19 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   hubTab: { paddingVertical: 12, position: "relative" },
+  hubTabLabelRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   hubTabText: { fontSize: 14, fontWeight: "600", color: colors.textSecondary },
   hubTabTextOn: { color: "#fff" },
+  hubBadge: {
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    backgroundColor: colors.ai,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  hubBadgeText: { color: "#070708", fontSize: 10, fontWeight: "800" },
   hubUnderline: {
     position: "absolute",
     bottom: 0,
@@ -1195,7 +1300,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(42,45,53,0.6)",
   },
-  foodName: { color: "#fff", fontSize: 14, fontWeight: "500" },
+  foodNameRow: { flexDirection: "row", alignItems: "center", gap: 6, minWidth: 0 },
+  foodName: { color: "#fff", fontSize: 14, fontWeight: "500", flexShrink: 1 },
   foodKcal: { color: "#fff", fontSize: 13, fontWeight: "600", width: 40, textAlign: "right" },
   foodMacro: { fontSize: 13, fontWeight: "600", width: 36, textAlign: "right" },
   totalRow: {
@@ -1237,6 +1343,39 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderStyle: "dashed",
     borderColor: colors.border,
+  },
+  logModal: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  logModalHeader: {
+    minHeight: 68,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  logModalTitle: { color: "#fff", fontSize: 20, fontWeight: "800" },
+  logModalSubtitle: { color: "#7C8CA0", fontSize: 13, marginTop: 2 },
+  logModalClose: {
+    width: 42,
+    height: 42,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 21,
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  logModalScroll: { flex: 1 },
+  logModalContent: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: 16,
+    paddingBottom: 32,
   },
   editor: {
     padding: 16,

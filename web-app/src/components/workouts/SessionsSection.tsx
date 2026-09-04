@@ -1372,6 +1372,12 @@ export default function SessionsSection({
   };
 
   const getBestSetLabel = (maxData: any) => {
+    // Prefer the set the estimated 1RM came from, so the two stats beside each
+    // other describe the same set.
+    const e1rmSet = maxData?.best_e1rm_set;
+    if (e1rmSet?.weight != null) {
+      return `${e1rmSet.weight} × ${e1rmSet.reps || 0}`;
+    }
     if (!maxData?.max_per_set) return null;
     const entries = Object.entries(maxData.max_per_set) as [string, any][];
     if (!entries.length) return null;
@@ -2613,18 +2619,16 @@ export default function SessionsSection({
                                   {maxData.max_weight} lbs
                                 </p>
                               </div>
-                              {maxData.max_reps != null &&
-                                maxData.max_reps > 0 && (
+              {/* Computed server-side from one real set. max_weight x max_reps
+                  pairs a heavy set's load with a light set's reps and reports a
+                  1RM that never happened. */}
+                              {maxData.best_e1rm != null && (
                                   <div className="flex-1 px-2">
                                     <p className="text-[10px] uppercase tracking-wide text-[#636366] font-semibold">
                                       Est. 1RM
                                     </p>
                                     <p className="text-sm font-bold text-white mt-0.5">
-                                      {Math.round(
-                                        maxData.max_weight *
-                                          (1 + maxData.max_reps / 30)
-                                      )}{" "}
-                                      lbs
+                                      {maxData.best_e1rm} lbs
                                     </p>
                                   </div>
                                 )}

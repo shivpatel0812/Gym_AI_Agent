@@ -629,7 +629,13 @@ export default function Home() {
           nextFoods = current.filter((_, i) => i !== idx);
         } else {
           nextFoods = current.map((f, i) =>
-            i === idx ? { ...scaleFoodItem(base, nextQty), meal: f.meal ?? base.meal } : f
+            i === idx
+              ? {
+                  ...scaleFoodItem(base, nextQty),
+                  // Prefer the meal from this log action so go-tos can be retargeted.
+                  meal: base.meal ?? f.meal,
+                }
+              : f
           );
         }
       }

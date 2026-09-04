@@ -108,5 +108,85 @@ def test_vision_uses_high_detail_and_passes_user_calibration(monkeypatch, tmp_pa
     assert "My veggie bowl" in prompt
     assert "Usual cooking-oil style: light" in prompt
     assert "Do not intentionally bias high or low" in prompt
-    assert "Do not infer oil merely because food is homemade" in prompt
+    assert result["analysis"]["components"]
 
+
+def test_default_prompt_supplies_anchors_instead_of_prohibitions(monkeypatch, tmp_path):
+    """v1 told the model what not to assume and gave it nothing to assume
+    instead, which is how five compartments each land low at once."""
+    client = _Client({"name": "Thali", "calories": 650, "protein": 22, "carbs": 100, "fats": 17})
+    monkeypatch.setattr(gpt_vision, "get_openai_client", lambda: client)
+    image_path = tmp_path / "meal.jpg"
+    image_path.write_bytes(b"test-image")
+
+    result = gpt_vision.gpt_vision_estimate(str(image_path), model="gpt-4o")
+    prompt = client.chat.completions.kwargs["messages"][0]["content"][0]["text"]
+
+    assert result["prompt_variant"] == "v2"
+    # A default anchor plus a wider range, rather than a smaller central guess.
+    assert "dinner plate ~26cm" in prompt
+    assert "Uncertainty belongs in the range" in prompt
+    # Dish-defining fat is recipe knowledge, not a homemade stereotype.
+    assert "carries its tadka" in prompt
+    assert "never reduces it to zero" in prompt
+    # The whole-plate check that keeps per-item shortfalls from compounding.
+    assert "those shortfalls add up" in prompt
+    # v1 forced the total to match the component sum, which hides the
+    # disagreement `assess_macro_coherence` reads as an escalation signal.
+    assert "should match the component calorie sum" not in prompt
+
+
+def test_old_prompt_stays_selectable_for_comparison(monkeypatch, tmp_path):
+    client = _Client({"name": "Thali", "calories": 440, "protein": 16, "carbs": 73, "fats": 10})
+    monkeypatch.setattr(gpt_vision, "get_openai_client", lambda: client)
+    image_path = tmp_path / "meal.jpg"
+    image_path.write_bytes(b"test-image")
+
+    result = gpt_vision.gpt_vision_estimate(str(image_path), model="gpt-4o", prompt_variant="v1")
+    prompt = client.chat.completions.kwargs["messages"][0]["content"][0]["text"]
+
+    assert result["prompt_variant"] == "v1"
+    assert "Do not infer oil merely because food is homemade" in prompt
+    assert "dinner plate ~26cm" not in prompt
+
+
+def test_unknown_variant_falls_back_to_the_default(monkeypatch, tmp_path):
+    client = _Client({"name": "Thali", "calories": 650, "protein": 22, "carbs": 100, "fats": 17})
+    monkeypatch.setattr(gpt_vision, "get_openai_client", lambda: client)
+    image_path = tmp_path / "meal.jpg"
+    image_path.write_bytes(b"test-image")
+
+    result = gpt_vision.gpt_vision_estimate(str(image_path), model="gpt-4o", prompt_variant="v99")
+    assert result["prompt_variant"] == "v2"
+
+
+
+def test_reasoning_model_gets_headroom_for_thinking(monkeypatch, tmp_path):
+    """A truncated JSON response parses as None and silently demotes the
+    estimate to the description-only fallback, so the reasoning pass needs its
+    own budget on top of the payload."""
+    client = _Client({"name": "Thali", "calories": 650, "protein": 22, "carbs": 100, "fats": 17})
+    monkeypatch.setattr(gpt_vision, "get_openai_client", lambda: client)
+    image_path = tmp_path / "meal.jpg"
+    image_path.write_bytes(b"test-image")
+
+    gpt_vision.gpt_vision_estimate(str(image_path), model="gpt-5.6-sol")
+    kwargs = client.chat.completions.kwargs
+
+    assert kwargs["max_completion_tokens"] == 4000
+    assert "max_tokens" not in kwargs
+    # GPT-5 rejects a custom temperature on this endpoint.
+    assert "temperature" not in kwargs
+
+
+def test_non_reasoning_model_keeps_the_tight_budget(monkeypatch, tmp_path):
+    client = _Client({"name": "Thali", "calories": 650, "protein": 22, "carbs": 100, "fats": 17})
+    monkeypatch.setattr(gpt_vision, "get_openai_client", lambda: client)
+    image_path = tmp_path / "meal.jpg"
+    image_path.write_bytes(b"test-image")
+
+    gpt_vision.gpt_vision_estimate(str(image_path), model="gpt-4o")
+    kwargs = client.chat.completions.kwargs
+
+    assert kwargs["max_tokens"] == 1000
+    assert "max_completion_tokens" not in kwargs

@@ -414,11 +414,28 @@ export function recHasWeightedSets(rec: any): boolean {
   return Array.isArray(rec?.sets) && rec.sets.some((s: any) => Number(s.weight) > 0);
 }
 
+/**
+ * Whether a recommendation has anything to apply to the set rows.
+ *
+ * Distinct from `recHasWeightedSets`, which asks whether a *load* was
+ * prescribed and gates the "pick a starting weight" prompt. Requiring a load
+ * to enable "Apply sets" hid the button on every bodyweight exercise, where
+ * reps are the entire prescription.
+ */
+export function recHasApplicableSets(rec: any): boolean {
+  return (
+    Array.isArray(rec?.sets) &&
+    rec.sets.some((s: any) => Number(s.weight) > 0 || Number(s.reps) > 0)
+  );
+}
+
 export function mapRecSets(rec: any): WorkoutSet[] {
   return rec.sets.map((s: any, i: number) => ({
     set_number: s.set_number || i + 1,
     reps: s.reps || 0,
-    weight: s.weight,
+    // Bodyweight prescriptions carry weight 0. Writing that into the row shows
+    // a literal "0" in the load field; leaving it unset keeps the placeholder.
+    weight: Number(s.weight) > 0 ? s.weight : undefined,
     rep_low: s.rep_low,
     rep_high: s.rep_high,
     preferred_reps: s.preferred_reps,
@@ -588,6 +605,13 @@ export function confidencePct(confidence?: string) {
 }
 
 export function getBestSetLabel(maxData: any) {
+  // Prefer the set the estimated 1RM was actually computed from, so the two
+  // stats sitting beside each other describe the same set. The max_per_set
+  // scan below is the fallback for records saved before the API returned it.
+  const e1rmSet = maxData?.best_e1rm_set;
+  if (e1rmSet?.weight != null) {
+    return `${e1rmSet.weight} \u00d7 ${e1rmSet.reps || 0}`;
+  }
   if (!maxData?.max_per_set) return null;
   const entries = Object.entries(maxData.max_per_set) as [string, any][];
   if (!entries.length) return null;

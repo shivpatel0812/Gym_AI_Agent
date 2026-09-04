@@ -60,6 +60,7 @@ import {
   muscleGroupsForSplitDay,
   recCopiesLastWorkout,
   recHasWeightedSets,
+  recHasApplicableSets,
   resolveExerciseCategory,
   resolveLastExercise,
   sessionDurationMinutes,
@@ -121,7 +122,11 @@ function compactRecommendationReasoning(recommendation: any): string {
     case "fill_band":
       return `Keep the same load and bring every set into the target rep range.`;
     case "maintain":
-      return `Hold the current load while you rebuild consistent reps.`;
+      return `Hold the current load and add a rep per set to reach your range.`;
+    case "reduce_load":
+      return weight > 0
+        ? `This load has kept you under your rep range—drop to ${weight} lbs and own it.`
+        : "This load has kept you under your rep range, so back it off.";
     case "deload":
       return weight > 0
         ? `Use ${weight} lbs this session to recover before resuming progression.`
@@ -1914,7 +1919,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                               ) : null}
                             </View>
                           ) : null}
-                          {recHasWeightedSets(aiRec) && (
+                          {recHasApplicableSets(aiRec) && (
                             <TouchableOpacity
                               style={styles.applySets}
                               onPress={() => applyAiSets(ex.exercise_id, idx)}
@@ -1943,12 +1948,15 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                               <Text style={styles.statLabelOrange}>PR</Text>
                               <Text style={styles.statVal}>{maxData.max_weight} lbs</Text>
                             </View>
-                            {maxData.max_reps != null && maxData.max_reps > 0 && (
+                            {/* Computed server-side from one real set. It used
+                                to be max_weight x max_reps, which pairs a heavy
+                                set's load with a light set's reps and reports a
+                                1RM that never happened. No qualifying set, no
+                                figure — a bodyweight lift has no 1RM to show. */}
+                            {maxData.best_e1rm != null && (
                               <View style={styles.stat}>
                                 <Text style={styles.statLabel}>Est. 1RM</Text>
-                                <Text style={styles.statVal}>
-                                  {Math.round(maxData.max_weight * (1 + maxData.max_reps / 30))} lbs
-                                </Text>
+                                <Text style={styles.statVal}>{maxData.best_e1rm} lbs</Text>
                               </View>
                             )}
                             {bestSetLabel && (

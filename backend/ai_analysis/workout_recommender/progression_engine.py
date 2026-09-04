@@ -42,6 +42,12 @@ from .weight_estimator import (
 )
 
 
+# How far under the band's floor a session has to land before the load itself
+# is judged to be the problem rather than the effort. Missing 12-15 with 11
+# reps is a session to repeat; missing it with 8 means the weight was never
+# going to allow the band. Reasoned, not calibrated.
+LOAD_MISMATCH_REPS = 3
+
 # Readiness thresholds for the demotion ladder. Placeholders: nobody knows
 # how much a night of poor sleep should move a top set, so these are a
 # starting point to be validated against real logs, not a finding.
@@ -63,6 +69,7 @@ class Decision(str, Enum):
     INCREASE_REPS = "increase_reps"
     MAINTAIN = "maintain"
     FILL_BAND = "fill_band"
+    REDUCE_LOAD = "reduce_load"
     DELOAD = "deload"
     LIGHT_DAY = "light_day"
     CARDIO_PROGRESS = "cardio_progress"
@@ -452,6 +459,7 @@ class ProgressionEngine:
             Decision.DELOAD,
             Decision.LIGHT_DAY,
             Decision.MAINTAIN,
+            Decision.REDUCE_LOAD,
             Decision.FILL_BAND,
             Decision.NEEDS_STARTING_WEIGHT,
             Decision.FIRST_SESSION,
@@ -816,24 +824,52 @@ class ProgressionEngine:
                 reasoning_context={"reason": "no_set_data"},
             )
 
-        # Add 1 rep per set, capped at rep_range.high
+        # Add 1 rep per set. The band is a target to climb to, never a ceiling
+        # to be pushed back under: the old min(prev + 1, rep_range.high) handed
+        # someone who had just done 11 reps a prescription of 10 — a decrease,
+        # labelled "rep increase" — and under a strength band it answered 11
+        # with 6. Bodyweight work has no load to add, so clamping the one
+        # variable that can progress is a dead end by construction.
         new_sets = []
+        swept_band = True
         for i in range(num_sets):
             if i < len(latest_sets):
-                prev_reps = latest_sets[i].get("reps", rep_range.low)
+                prev_reps = latest_sets[i].get("reps") or rep_range.low
             else:
                 prev_reps = rep_range.low
-            new_reps = min(prev_reps + 1, rep_range.high)
-            new_sets.append(RecommendedSet(set_number=i + 1, reps=new_reps, weight=0))
+            if prev_reps < rep_range.high:
+                swept_band = False
+            new_reps = prev_reps + 1
+            new_sets.append(RecommendedSet(
+                set_number=i + 1,
+                reps=new_reps,
+                weight=0,
+                rep_low=rep_range.low,
+                rep_high=rep_range.high,
+                preferred_reps=new_reps,
+            ))
+
+        # Past the top of the band, reps are no longer the useful variable.
+        # Say so rather than silently prescribing an ever-longer set.
+        guidance = None
+        if swept_band:
+            guidance = (
+                "You are working above the top of this rep range on bodyweight "
+                "alone — add external load (belt, vest or held plate) and rebuild "
+                f"from {rep_range.low} reps."
+            )
 
         return ProgressionResult(
             sets=new_sets,
             decision=Decision.BODYWEIGHT_PROGRESS,
             confidence="high",
+            guidance=guidance,
             reasoning_context={
                 "reason": "bodyweight_rep_increase",
                 "prev_reps": [s.get("reps", 0) for s in latest_sets[:num_sets]],
                 "new_reps": [s.reps for s in new_sets],
+                "rep_range": (rep_range.low, rep_range.high),
+                "above_band": swept_band,
             },
         )
 
@@ -1201,7 +1237,10 @@ class ProgressionEngine:
                 # Pad with last set's data for consistency (not rep_range.low)
                 prev_reps = last_reps
                 prev_weight = last_weight
-            new_reps = min(prev_reps + 1, rep_range.high)
+            # Add a rep, but never hand back fewer than were already done at
+            # this load. A set sitting above the band's top gets held, not
+            # rolled backwards — adding load is the other branch's job.
+            new_reps = max(prev_reps, min(prev_reps + 1, rep_range.high))
             new_sets.append(RecommendedSet(
                 set_number=i + 1,
                 reps=new_reps,
@@ -1268,31 +1307,98 @@ class ProgressionEngine:
         max_weight = max((s.get("weight", 0) for s in latest_sets), default=0)
 
         if consecutive_failures >= threshold:
-            # MAINTAIN: hold weight + reps from the best recent session
+            # Repeated sessions under the band. This used to re-serve the best
+            # recent session verbatim — which is a closed loop: prescribing the
+            # 9/8/8 that just failed a 12-15 band produces another failure and
+            # another hold, forever, with nothing on the card acknowledging the
+            # gap. Two ways out, chosen by how big that gap is.
+            current = typical_reps(latest_sets)
+            deficit = rep_range.low - int(current) if current is not None else 0
+
+            if (
+                deficit >= LOAD_MISMATCH_REPS
+                and increment > 0
+                and max_weight > 0
+            ):
+                # The load, not the effort, is what the band cannot survive.
+                # Roughly 3% of load per rep of deficit, capped so this stays a
+                # correction rather than a deload, then onto the exercise's grid.
+                resolution = self._weight_resolution(metadata)
+                factor = max(0.85, 1.0 - 0.03 * deficit)
+                reduced = self._round_to_increment(max_weight * factor, resolution)
+                # Rounding must not land back on the weight that just failed.
+                if reduced >= max_weight:
+                    reduced = self._round_to_increment(
+                        max_weight - resolution, resolution
+                    )
+                reduced = max(resolution, reduced)
+
+                if reduced < max_weight:
+                    sets = self._straight_sets(
+                        num_sets, rep_range, reduced, aim=rep_range.low
+                    )
+                    return ProgressionResult(
+                        sets=sets,
+                        decision=Decision.REDUCE_LOAD,
+                        confidence="medium",
+                        strategy=ProgressionStrategy.BAND.value,
+                        progression_options=[{
+                            "kind": "target",
+                            "label": "Target",
+                            "weight": reduced,
+                            "reps": rep_range.low,
+                        }],
+                        branch=Branch(
+                            condition=f"If {rep_range.low} reps goes easily",
+                            action=f"Return to {max_weight:g} lbs next session",
+                            kind="fill_band",
+                        ),
+                        reasoning_context={
+                            "reason": "load_above_band",
+                            "consecutive_failures": consecutive_failures,
+                            "threshold": threshold,
+                            "prev_weight": max_weight,
+                            "weight": reduced,
+                            "reps_short": deficit,
+                            "aim": rep_range.low,
+                            "rep_range": (rep_range.low, rep_range.high),
+                        },
+                    )
+
+            # Short of the band, but only just. Hold the load and bridge one rep
+            # at a time toward the floor — carrying the band on the sets so the
+            # card can show what is actually being aimed at.
             best_session = self._find_best_recent_session(recent_sessions[:5])
             best_sets = best_session.get("sets", []) if best_session else latest_sets
-            # Pad with last available set for consistency
             last_best = best_sets[-1] if best_sets else {}
 
             sets = []
             for i in range(num_sets):
-                if i < len(best_sets):
-                    weight = best_sets[i].get("weight", max_weight)
-                    reps = best_sets[i].get("reps", rep_range.low)
-                else:
-                    weight = last_best.get("weight", max_weight)
-                    reps = last_best.get("reps", rep_range.low)
-                sets.append(RecommendedSet(set_number=i + 1, reps=reps, weight=weight))
+                source = best_sets[i] if i < len(best_sets) else last_best
+                weight = source.get("weight", max_weight)
+                prev_reps = source.get("reps") or rep_range.low
+                reps = max(prev_reps, min(prev_reps + 1, rep_range.high))
+                sets.append(RecommendedSet(
+                    set_number=i + 1,
+                    reps=reps,
+                    weight=weight,
+                    rep_low=rep_range.low,
+                    rep_high=rep_range.high,
+                    preferred_reps=reps,
+                ))
 
             return ProgressionResult(
                 sets=sets,
                 decision=Decision.MAINTAIN,
                 confidence="medium",
+                strategy=ProgressionStrategy.BAND.value,
                 reasoning_context={
                     "reason": "maintain_after_failures",
                     "consecutive_failures": consecutive_failures,
                     "threshold": threshold,
                     "weight": max_weight,
+                    "reps_short": max(0, deficit),
+                    "rep_range": (rep_range.low, rep_range.high),
                 },
             )
         else:

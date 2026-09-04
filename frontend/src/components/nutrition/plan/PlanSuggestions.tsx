@@ -74,13 +74,22 @@ function SuggestionRow({
 }) {
   const detail = describe(edit);
   const stale = edit.status === "stale";
+  const [showWhy, setShowWhy] = useState(false);
 
   return (
     <View style={styles.row}>
       <View style={styles.rowBody}>
         <Text style={styles.rowTitle}>{edit.title}</Text>
         {detail ? <Text style={styles.rowDetail}>{detail}</Text> : null}
-        {edit.rationale ? <Text style={styles.rowRationale}>{edit.rationale}</Text> : null}
+        {edit.rationale ? (
+          showWhy ? (
+            <Text style={styles.rowRationale}>{edit.rationale}</Text>
+          ) : (
+            <TouchableOpacity onPress={() => setShowWhy(true)} hitSlop={6}>
+              <Text style={styles.whyLink}>Why?</Text>
+            </TouchableOpacity>
+          )
+        ) : null}
         {stale ? (
           <Text style={styles.rowStale}>
             This no longer matches your plan — dismiss it and ask again.
@@ -228,6 +237,7 @@ const styles = StyleSheet.create({
   rowTitle: { color: colors.textPrimary, fontSize: 13, fontWeight: "700" },
   rowDetail: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
   rowRationale: { color: colors.ai, fontSize: 12, marginTop: 4 },
+  whyLink: { color: colors.textMuted, fontSize: 11, fontWeight: "700", marginTop: 4 },
   rowStale: { color: colors.warning, fontSize: 12, marginTop: 4 },
   rowActions: { flexDirection: "row", alignItems: "center", gap: 4 },
   iconButton: { padding: 6 },

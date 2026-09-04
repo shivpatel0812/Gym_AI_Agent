@@ -129,11 +129,36 @@ class FoodEstimateRequest(BaseModel):
     name: Optional[str] = None
 
 
+class FitPreviewRequest(BaseModel):
+    """Score a not-yet-logged food against the plan."""
+    calories: float
+    protein: float
+    carbs: Optional[float] = None
+    fats: Optional[float] = None
+    fiber: Optional[float] = None
+    meal: Optional[str] = None
+
+
+class AcceptedEstimateRequest(BaseModel):
+    """The macros the user actually logged — the ground-truth label."""
+    calories: float
+    protein: float
+    carbs: Optional[float] = None
+    fats: Optional[float] = None
+    fiber: Optional[float] = None
+    name: Optional[str] = None
+    amount: Optional[str] = None
+
+
 class AdjustEstimateRequest(BaseModel):
     """User disputes AI macro estimate — chat revises it."""
     message: str
     current_estimate: Dict
     conversation_history: Optional[List[Dict]] = None
+    # Links the chat to a stored meal-photo log, which is also where the
+    # revision re-reads the original photo from.
+    photo_log_id: Optional[str] = None
+    model: Optional[str] = None
 
 
 class MacroEntry(BaseModel):

@@ -73,7 +73,7 @@ export default function AIHub() {
             initialMode={coachMode}
             onModeConsumed={() => setCoachMode(null)}
             onOpenNutritionPlan={() =>
-              navigation.navigate("Nutrition", { tab: "plan" })
+              navigation.navigate("Nutrition", { tab: "updates" })
             }
           />
         ) : activeTab === "plan" ? (

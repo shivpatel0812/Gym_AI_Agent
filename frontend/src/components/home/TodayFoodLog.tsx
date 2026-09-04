@@ -122,6 +122,8 @@ export default function TodayFoodLog({
 }) {
   const [anchorMenuMeal, setAnchorMenuMeal] = useState<HomeMealId | null>(null);
   const [qtyPickerId, setQtyPickerId] = useState<string | null>(null);
+  /** Meal the active go-to will log under (defaults to the current time window). */
+  const [goToMeal, setGoToMeal] = useState<HomeMealId>(currentMealId());
   const now = currentMealId();
   const targets = plan?.targets || {};
   const calTarget = Math.max(Number(targets.calories) || 2200, 1);
@@ -282,8 +284,28 @@ export default function TodayFoodLog({
     await onLogFoods(items);
   };
 
+  /**
+   * Prefer an explicit picker meal. Else use the go-to's plan slot when it's a
+   * real meal; "other"/snack/late_night fall through to the current time window
+   * so Quick Add no longer dumps everything into Snacks.
+   */
+  const resolveGoToMeal = (item: GoToItem, override?: HomeMealId): HomeMealId => {
+    if (override) return override;
+    const planned = normalizeMealLabel(item.slot);
+    if (
+      planned === "breakfast" ||
+      planned === "lunch" ||
+      planned === "dinner" ||
+      planned === "pre_workout" ||
+      planned === "shake"
+    ) {
+      return slotToMealId(item.slot);
+    }
+    return now;
+  };
+
   /** The per-unit food a go-to tile logs. */
-  const goToBase = (item: GoToItem): FoodItem => ({
+  const goToBase = (item: GoToItem, mealId?: HomeMealId): FoodItem => ({
     name: item.name,
     amount: item.amount ? String(item.amount) : undefined,
     unit_amount: item.amount ? String(item.amount) : undefined,
@@ -292,50 +314,57 @@ export default function TodayFoodLog({
     carbs: Number(item.carbs) || 0,
     fats: Number(item.fats) || 0,
     fiber: Number(item.fiber) || 0,
-    meal: slotToMealId(item.slot),
+    meal: resolveGoToMeal(item, mealId),
     usual_id: item.id,
     anchor_id: item.id,
   });
 
-  // Tap adds one more; long-press clears the whole item. Foods like rice cakes
-  // and bars are eaten 2-3 at a time, so tapping twice must not mean "undo".
-  const logGoTo = (item: GoToItem) => {
+  // Tap +1 into the resolved meal (plan slot or current window). Long-press
+  // opens quantity + meal picker.
+  const logGoTo = (item: GoToItem, mealId?: HomeMealId) => {
+    const base = goToBase(item, mealId);
     if (item.id && onBumpFood) {
-      void onBumpFood(item.id, 1, goToBase(item));
+      void onBumpFood(item.id, 1, base);
       return;
     }
     if (goToLogged(item, todayFoods) && item.id) {
       void onRemoveTag(item.id);
       return;
     }
-    void onLogFoods([goToBase(item)]);
+    void onLogFoods([base]);
   };
 
-  const logGoToQty = (item: GoToItem, qty: number) => {
+  const logGoToQty = (item: GoToItem, qty: number, mealId: HomeMealId = goToMeal) => {
     const current = goToCount(item, todayFoods);
     const delta = qty - current;
+    const base = goToBase(item, mealId);
     if (delta === 0) {
       setQtyPickerId(null);
       return;
     }
     if (delta > 0 && item.id && onBumpFood) {
-      void onBumpFood(item.id, delta, goToBase(item));
+      void onBumpFood(item.id, delta, base);
     } else if (delta > 0) {
-      const foods = Array.from({ length: delta }, () => goToBase(item));
+      const foods = Array.from({ length: delta }, () => base);
       void onLogFoods(foods);
     } else if (item.id) {
       const doRemove = async () => {
         await onRemoveTag(item.id!);
         if (qty > 0 && onBumpFood && item.id) {
-          void onBumpFood(item.id, qty, goToBase(item));
+          void onBumpFood(item.id, qty, base);
         } else if (qty > 0) {
-          const foods = Array.from({ length: qty }, () => goToBase(item));
+          const foods = Array.from({ length: qty }, () => base);
           void onLogFoods(foods);
         }
       };
       void doRemove();
     }
     setQtyPickerId(null);
+  };
+
+  const openGoToPicker = (item: GoToItem, tileId: string) => {
+    setGoToMeal(resolveGoToMeal(item));
+    setQtyPickerId(tileId);
   };
 
   const clearGoTo = (item: GoToItem) => {
@@ -714,7 +743,10 @@ export default function TodayFoodLog({
 
             <View style={[styles.goCard, !showCurrent && { flex: 1 }]}>
               <Text style={styles.goTitle} numberOfLines={1}>
-                Go-to items <Text style={styles.goAnytime}>(anytime)</Text>
+                Go-to items{" "}
+                <Text style={styles.goAnytime}>
+                  → {HOME_MEALS.find((m) => m.id === now)?.label || now}
+                </Text>
               </Text>
               {goTos.length ? (
                 <ScrollView
@@ -733,12 +765,14 @@ export default function TodayFoodLog({
                         key={tileId}
                         style={[styles.goTile, on && styles.goTileOn, showQty && styles.goTileSelected]}
                         onPress={() => logGoTo(item)}
-                        onLongPress={() => setQtyPickerId(showQty ? null : tileId)}
+                        onLongPress={() =>
+                          showQty ? setQtyPickerId(null) : openGoToPicker(item, tileId)
+                        }
                         delayLongPress={300}
                         accessibilityLabel={
                           on
-                            ? `${item.name}, ${count} logged. Tap +1, hold for quantity.`
-                            : `${item.name}. Tap to log, hold for quantity.`
+                            ? `${item.name}, ${count} logged. Tap +1 to ${now}, hold for quantity and meal.`
+                            : `${item.name}. Tap to log to ${now}, hold for quantity and meal.`
                         }
                       >
                         <View style={[styles.goIcon, on && styles.goIconOn]}>
@@ -770,34 +804,62 @@ export default function TodayFoodLog({
                 if (!activeItem) return null;
                 const cnt = goToCount(activeItem, todayFoods);
                 return (
-                  <View style={styles.qtyBar}>
-                    <Text style={styles.qtyBarLabel} numberOfLines={1}>
-                      {activeItem.name}
-                    </Text>
-                    <View style={styles.qtyRow}>
-                      <TouchableOpacity
-                        style={styles.qtyStepBtn}
-                        onPress={() => cnt > 0 && logGoToQty(activeItem, cnt - 1)}
-                        disabled={cnt <= 0}
-                      >
-                        <MaterialCommunityIcons name="minus" size={14} color={cnt > 0 ? "#fff" : "#3A4554"} />
-                      </TouchableOpacity>
-                      <View style={styles.qtyValueBox}>
-                        <Text style={styles.qtyValueText}>{cnt}</Text>
+                  <View style={styles.qtyBarWrap}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.mealPickRow}
+                    >
+                      {HOME_MEALS.map((meal) => {
+                        const on = goToMeal === meal.id;
+                        return (
+                          <TouchableOpacity
+                            key={meal.id}
+                            style={[styles.mealPickChip, on && styles.mealPickChipOn]}
+                            onPress={() => setGoToMeal(meal.id)}
+                          >
+                            <Text style={[styles.mealPickText, on && styles.mealPickTextOn]}>
+                              {meal.short}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                    <View style={styles.qtyBar}>
+                      <Text style={styles.qtyBarLabel} numberOfLines={1}>
+                        {activeItem.name}
+                      </Text>
+                      <View style={styles.qtyRow}>
+                        <TouchableOpacity
+                          style={styles.qtyStepBtn}
+                          onPress={() => cnt > 0 && logGoToQty(activeItem, cnt - 1, goToMeal)}
+                          disabled={cnt <= 0}
+                        >
+                          <MaterialCommunityIcons name="minus" size={14} color={cnt > 0 ? "#fff" : "#3A4554"} />
+                        </TouchableOpacity>
+                        <View style={styles.qtyValueBox}>
+                          <Text style={styles.qtyValueText}>{cnt}</Text>
+                        </View>
+                        <TouchableOpacity
+                          style={styles.qtyStepBtn}
+                          onPress={() => logGoToQty(activeItem, cnt + 1, goToMeal)}
+                        >
+                          <MaterialCommunityIcons name="plus" size={14} color="#fff" />
+                        </TouchableOpacity>
                       </View>
                       <TouchableOpacity
-                        style={styles.qtyStepBtn}
-                        onPress={() => logGoToQty(activeItem, cnt + 1)}
+                        style={styles.qtyDoneBtn}
+                        onPress={() => {
+                          // Apply meal retarget even if quantity unchanged.
+                          if (cnt > 0 && activeItem.id && onBumpFood) {
+                            void onBumpFood(activeItem.id, 0, goToBase(activeItem, goToMeal));
+                          }
+                          setQtyPickerId(null);
+                        }}
                       >
-                        <MaterialCommunityIcons name="plus" size={14} color="#fff" />
+                        <Text style={styles.qtyDoneText}>Done</Text>
                       </TouchableOpacity>
                     </View>
-                    <TouchableOpacity
-                      style={styles.qtyDoneBtn}
-                      onPress={() => setQtyPickerId(null)}
-                    >
-                      <Text style={styles.qtyDoneText}>Done</Text>
-                    </TouchableOpacity>
                   </View>
                 );
               })()}
@@ -1036,14 +1098,35 @@ const styles = StyleSheet.create({
     borderColor: colors.accentPrimary,
     borderRadius: 8,
   },
-  qtyBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
+  qtyBarWrap: {
     marginTop: 8,
     paddingTop: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
+    gap: 8,
+  },
+  mealPickRow: {
+    gap: 6,
+    paddingRight: 4,
+  },
+  mealPickChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: "#1E2A38",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  mealPickChipOn: {
+    backgroundColor: "rgba(156,192,232,0.18)",
+    borderColor: colors.accentPrimary,
+  },
+  mealPickText: { color: "#7C8CA0", fontSize: 11, fontWeight: "800" },
+  mealPickTextOn: { color: colors.accentPrimary },
+  qtyBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
   qtyBarLabel: {
     flex: 1,

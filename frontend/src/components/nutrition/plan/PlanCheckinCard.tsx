@@ -52,7 +52,8 @@ export default function PlanCheckinCard({
   stagingPacingId,
   onAskCoach,
 }: Props) {
-  const [expanded, setExpanded] = useState(true);
+  // Start collapsed — open when the user wants progress narrative / pacing.
+  const [expanded, setExpanded] = useState(false);
   const [weightDraft, setWeightDraft] = useState("");
 
   const runRefresh = () => {
@@ -139,10 +140,12 @@ export default function PlanCheckinCard({
         />
       </TouchableOpacity>
 
-      <Text style={styles.summary}>{checkin.summary}</Text>
+      <Text style={styles.summary} numberOfLines={expanded ? undefined : 2}>
+        {checkin.summary}
+      </Text>
       {stats.length ? <Text style={styles.stats}>{stats.join("  ·  ")}</Text> : null}
 
-      {progress?.verdict ? (
+      {expanded && progress?.verdict ? (
         <View style={styles.verdictChip}>
           <Text style={styles.verdictLabel}>
             {VERDICT_LABEL[progress.verdict] || progress.verdict}

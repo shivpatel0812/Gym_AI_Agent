@@ -58,29 +58,58 @@ def _num(value, default=0):
         return default
 
 
-def finalize_estimated_macros(parsed: Dict, query: str = "") -> Tuple[int, float, float, float, float]:
-    """Apply arithmetic consistency without inventing an upward calorie bias."""
+def assess_macro_coherence(parsed: Dict) -> Dict:
+    """Compare a model's stated calories against what its own parts imply.
+
+    A model that reports 440 kcal under components summing to 560, or macros
+    justifying 600, is telling you it is out of its depth on this photo. The
+    repair below is still worth applying — but discarding the fact that a
+    repair was needed throws away the best available signal that the estimate
+    deserves a second, stronger pass.
+    """
     protein = round(_num(parsed.get("protein")), 1)
     carbs = round(_num(parsed.get("carbs")), 1)
     fats = round(_num(parsed.get("fats", parsed.get("fat"))), 1)
-    fiber = round(_num(parsed.get("fiber")), 1)
-    calories = int(round(_num(parsed.get("calories"))))
+    reported = int(round(_num(parsed.get("calories"))))
 
-    summed = 0.0
+    component_sum = 0.0
     components = parsed.get("components")
     if isinstance(components, list):
         for part in components:
             if isinstance(part, dict):
-                summed += _num(part.get("calories"))
-    if summed > calories:
-        calories = int(round(summed))
+                component_sum += _num(part.get("calories"))
 
     macro_kcal = 4 * protein + 4 * carbs + 9 * fats
-    if macro_kcal > calories + 20:
-        # Macros already justify more calories than reported — trust the macros.
-        calories = int(round(macro_kcal))
 
-    return calories, protein, carbs, fats, fiber
+    resolved = reported
+    if component_sum > resolved:
+        resolved = int(round(component_sum))
+    if macro_kcal > resolved + 20:
+        # Macros already justify more calories than reported — trust the macros.
+        resolved = int(round(macro_kcal))
+
+    gap = abs(resolved - reported)
+    return {
+        "reported_calories": reported,
+        "component_sum": int(round(component_sum)),
+        "macro_kcal": int(round(macro_kcal)),
+        "calories": resolved,
+        "repaired": resolved != reported,
+        # Share of the final number that the model did not account for.
+        "gap_ratio": round(gap / resolved, 3) if resolved > 0 else 0.0,
+    }
+
+
+def finalize_estimated_macros(parsed: Dict, query: str = "") -> Tuple[int, float, float, float, float]:
+    """Apply arithmetic consistency without inventing an upward calorie bias."""
+    coherence = assess_macro_coherence(parsed)
+    return (
+        coherence["calories"],
+        round(_num(parsed.get("protein")), 1),
+        round(_num(parsed.get("carbs")), 1),
+        round(_num(parsed.get("fats", parsed.get("fat"))), 1),
+        round(_num(parsed.get("fiber")), 1),
+    )
 
 
 def estimate_food_from_query(query: str, name: Optional[str] = None) -> Optional[Dict]:

@@ -23,10 +23,10 @@ from .exercise_order import ExerciseOrder
 from .progression_engine import ProgressionEngine
 from .reasoning_generator import ReasoningGenerator
 from .training_focus import TrainingFocusStore
-from .plan_context import PlanContextResolver, PlanContext
+from .plan_context import PlanContextResolver, PlanContext, normalize_rep_range
 from .readiness_context import ReadinessResolver, ReadinessContext
 from .weight_estimator import days_since_session, infer_top_lifts_from_related_history
-from .exercise_metadata import resolve_exercise_metadata
+from .exercise_metadata import resolve_exercise_metadata, is_bodyweight
 from .personalization import learn_position_factor, apply_position_factor
 
 
@@ -135,10 +135,19 @@ class WorkoutRecommender:
             for ex in session.get("exercises", []):
                 if ex.get("exercise_id") != exercise_id:
                     continue
+                # Bodyweight work carries no load, so requiring weight > 0 here
+                # deleted every pull-up, dip and push-up session before the
+                # engine saw it — the user's whole history read as "no history"
+                # and the prescription fell back to the bottom of the rep band.
+                # Reps alone qualify a set when the exercise has no load to log.
+                bodyweight = is_bodyweight(
+                    exercise_id, str(ex.get("exercise_name") or ""), ex
+                )
                 sets = [
                     s
                     for s in self._normalize_exercise_sets(ex)
-                    if (s.get("reps") or 0) > 0 and (s.get("weight") or 0) > 0
+                    if (s.get("reps") or 0) > 0
+                    and (bodyweight or (s.get("weight") or 0) > 0)
                 ]
                 # Sport cardio records effort, not sets or pace. Requiring
                 # time or speed dropped those sessions before the engine ever
@@ -332,6 +341,15 @@ class WorkoutRecommender:
         if day_intensity is None:
             day_intensity = plan_context.day_intensity
 
+        # The plan's own rep range is the better statement of intent, so the
+        # caller's single figure only fills the gap when there is none. This
+        # value used to be accepted by the router and then dropped on the
+        # floor, which left plans written before `target_rep_range` existed
+        # with no rep target reaching the engine at all.
+        rep_range_override = plan_context.target_rep_range
+        if rep_range_override is None and plan_target_reps:
+            rep_range_override = normalize_rep_range(plan_target_reps)
+
         readiness = self.readiness_resolver.resolve()
 
         top_lifts = profile.get("top_lifts") if profile else None
@@ -357,7 +375,7 @@ class WorkoutRecommender:
             exercise_name=exercise_name,
             user_goal=user_goal,
             focus_goal=plan_context.goal,
-            rep_range_override=plan_context.target_rep_range,
+            rep_range_override=rep_range_override,
             recent_sessions=recent_exercise_data,
             num_sets=num_sets,
             day_intensity=day_intensity,
@@ -425,6 +443,8 @@ class WorkoutRecommender:
                 "progression_type": progression_result.decision.value,
                 "confidence": progression_result.confidence,
             }
+            if progression_result.guidance:
+                recommendation["guidance"] = progression_result.guidance
             if progression_result.strategy:
                 recommendation["strategy"] = progression_result.strategy
             if progression_result.branch:

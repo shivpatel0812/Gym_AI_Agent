@@ -5,11 +5,17 @@ import json
 import mimetypes
 from typing import Dict, List, Optional
 
-from ai_models import completion_kwargs, resolve_model
+from ai_models import completion_kwargs, is_gpt5_family, resolve_model
 
 from .gpt_fallback import get_openai_client
-from .gpt_food_lookup import MAX_CALORIES, _parse_json, finalize_estimated_macros
+from .gpt_food_lookup import (
+    MAX_CALORIES,
+    _parse_json,
+    assess_macro_coherence,
+    finalize_estimated_macros,
+)
 from .photo_estimate import build_photo_analysis, normalize_cooking_style
+from .vision_prompt import resolve_variant, rules_for
 
 
 def gpt_vision_estimate(
@@ -20,6 +26,7 @@ def gpt_vision_estimate(
     title: Optional[str] = None,
     cooking_style: Optional[str] = None,
     prior_foods: Optional[List[Dict]] = None,
+    prompt_variant: Optional[str] = None,
 ) -> Optional[Dict]:
     """Estimate the visible portion and return macros plus uncertainty metadata."""
     client = get_openai_client()
@@ -28,6 +35,13 @@ def gpt_vision_estimate(
         return None
 
     resolved = resolve_model(model)
+    # Reasoning tokens are billed against max_completion_tokens. A reasoning
+    # model thinking about a busy plate can spend the whole 1000-token budget
+    # before emitting a single character of JSON, and a truncated response
+    # parses as None — which silently demotes the estimate to the
+    # description-only fallback. Give the thinking pass its own headroom.
+    budget = 4000 if is_gpt5_family(resolved) else 1000
+    variant = resolve_variant(prompt_variant)
 
     try:
         with open(image_path, "rb") as image_file:
@@ -59,6 +73,7 @@ def gpt_vision_estimate(
             )
         prior_context = json.dumps(safe_priors, separators=(",", ":")) if safe_priors else "[]"
 
+        rules = rules_for(variant)
         prompt = f"""Analyze this food photo for a nutrition log. Return the most likely CENTRAL estimate for the full portion shown or described. Do not intentionally bias high or low.
 
 Food title supplied by the user: {log_title if log_title else "(none)"}
@@ -67,14 +82,7 @@ Usual cooking-oil style: {style} (a weak prior, never proof)
 Relevant foods this user previously confirmed: {prior_context}
 
 Rules:
-- Treat the title and description as strong identity and quantity hints, but flag conflicts with the image.
-- Assess lighting, sharpness, whether the full meal is visible, and view angle before estimating.
-- Look for portion cues already in frame. A known package is strong; a plate, bowl, utensil, or hand is only a weak-to-medium cue unless its size is known. Never assume every dinner plate is the same size.
-- Estimate a best gram amount plus a realistic low/high gram range. A single image without scale should have a wider range.
-- Do not infer oil merely because food is homemade. Glistening can be water, sauce, or glaze. Report visible oil evidence separately and use stated preparation, the user's cooking style, or a neutral typical-recipe assumption as the basis.
-- Include hidden ingredients, sauces, drinks, and cooking fat only when stated, visible, or customary for the identified preparation. Put uncertain choices in assumptions or uncertainties.
-- Break mixed meals into components. Component nutrition and the top-level macros describe the FULL quantity, not per 100g.
-- Calories should be arithmetically compatible with protein, carbs, and fat, and should match the component calorie sum when components are supplied.
+{rules}
 
 Return JSON only in this shape:
 {{
@@ -109,7 +117,7 @@ Return JSON only in this shape:
 Round calories to a whole number. Round protein, carbs, fats, and fiber to 1 decimal. If several items are on the plate, the top-level entry represents the whole plate."""
 
         response = client.chat.completions.create(
-            **completion_kwargs(resolved, max_tokens=1000, temperature=0.1),
+            **completion_kwargs(resolved, max_tokens=budget, temperature=0.1),
             messages=[
                 {
                     "role": "user",
@@ -137,6 +145,7 @@ Round calories to a whole number. Round protein, carbs, fats, and fiber to 1 dec
             return None
 
         name = str(log_title or parsed.get("name") or hint or "Meal").strip()[:120] or "Meal"
+        coherence = assess_macro_coherence(parsed)
         calories, protein, carbs, fats, fiber = finalize_estimated_macros(
             parsed, query=" ".join(part for part in (log_title, hint) if part)
         )
@@ -157,7 +166,11 @@ Round calories to a whole number. Round protein, carbs, fats, and fiber to 1 dec
             "fats": fats,
             "fiber": fiber,
             "model": resolved,
+            "prompt_variant": variant,
             "analysis": analysis,
+            # Whether this pass had to be arithmetically repaired is an
+            # escalation signal, not a detail — see `should_escalate`.
+            "coherence": coherence,
         }
     except Exception as exc:
         print(f"Error calling GPT vision API: {exc}")

@@ -11,6 +11,10 @@ from typing import Any, Dict, Optional
 ALLOWED_MODELS = ("gpt-4o", "gpt-5.6-sol")
 DEFAULT_MODEL = "gpt-4o"
 
+# Where a cheap first pass escalates to when it reports itself out of its
+# depth. Keep this the strongest allowlisted model.
+ESCALATION_MODEL = "gpt-5.6-sol"
+
 _ALIASES = {
     "gpt-4o": "gpt-4o",
     "4o": "gpt-4o",

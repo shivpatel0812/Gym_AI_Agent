@@ -5,10 +5,27 @@ from io import BytesIO
 import tempfile
 import os
 from PIL import Image, ImageOps, UnidentifiedImageError
-from models import MacroEntry, SavedFood, SavedFoodUpdate, FoodEstimateRequest, AdjustEstimateRequest
+from models import (
+    AcceptedEstimateRequest,
+    FitPreviewRequest,
+    AdjustEstimateRequest,
+    FoodEstimateRequest,
+    MacroEntry,
+    SavedFood,
+    SavedFoodUpdate,
+)
 from nutrition.gpt_food_lookup import estimate_food_from_query
 from nutrition.adjust_estimate import adjust_macro_estimate
+from nutrition.fit_score import score_day, score_food
 from nutrition.photo_estimate import normalize_cooking_style
+from nutrition.plan_store import NutritionPlanStore
+from nutrition.slot_targets import resolve_slot_targets
+from nutrition.photo_log_store import (
+    append_adjust_chat,
+    create_photo_log,
+    load_archived_image,
+    record_accepted_estimate,
+)
 import re
 from auth import get_user_id
 from db import db
@@ -248,6 +265,46 @@ async def _save_normalized_food_image(upload: UploadFile) -> str:
             os.unlink(temp_path)
         raise HTTPException(status_code=400, detail="Unsupported or invalid image") from exc
 
+def _fit_context(user_id: str):
+    """The active plan's goal and targets, or None when there is nothing to
+    score against. One read, reused across every entry in the response."""
+    try:
+        plan = NutritionPlanStore(db, user_id).get_active()
+    except Exception as exc:
+        print(f"Warning: could not load plan for fit scoring: {exc}")
+        return None
+    if not plan:
+        return None
+    targets = plan.get("targets") or {}
+    if not targets.get("calories") or not targets.get("protein"):
+        return None
+    return {
+        "goal": plan.get("goal") or "",
+        "daily_calories": targets.get("calories"),
+        "daily_protein": targets.get("protein"),
+        "slot_targets": resolve_slot_targets(plan),
+    }
+
+
+def _with_fit(entry: dict, context) -> dict:
+    """Attach a per-item goal-fit score to one day's entry."""
+    if not context:
+        return entry
+    items = entry.get("food_items") or []
+    if not items:
+        return entry
+    scored = score_day(items, **context)
+    return {
+        **entry,
+        "food_items": [
+            {**item, "fit": fit}
+            for item, fit in zip(items, scored["items"])
+        ],
+        "fit_score": scored["day_score"],
+        "fit_band": scored["day_band"],
+    }
+
+
 @router.get("")
 async def get_macro_entries(user_id: str = Depends(get_user_id), date_filter: Optional[str] = Query(None)):
     macros_ref = db.collection("users").document(user_id).collection("macros")
@@ -256,7 +313,11 @@ async def get_macro_entries(user_id: str = Depends(get_user_id), date_filter: Op
     else:
         macros = list(macros_ref.order_by("date").stream())
         macros.reverse()
-    return [{"id": macro.id, **macro.to_dict()} for macro in macros]
+    context = _fit_context(user_id)
+    return [
+        _with_fit({"id": macro.id, **macro.to_dict()}, context)
+        for macro in macros
+    ]
 
 @router.post("")
 async def create_macro_entry(macro_entry: MacroEntry, user_id: str = Depends(get_user_id)):
@@ -358,6 +419,37 @@ async def analyze_food_image_endpoint(
             cooking_style=normalize_cooking_style(cooking_style),
             prior_foods=priors,
         )
+        # Persist every upload + estimate for testing / review. Never fail the
+        # user-facing estimate if archival write has a problem.
+        try:
+            estimate_payload = result if isinstance(result, dict) else None
+            # Prefer the food item as the stored estimate shape when present.
+            if isinstance(estimate_payload, dict) and estimate_payload.get("food"):
+                estimate_for_log = {
+                    **estimate_payload["food"],
+                    "analysis": estimate_payload.get("analysis"),
+                    "message": estimate_payload.get("message"),
+                }
+            else:
+                estimate_for_log = estimate_payload
+            # Log the model that actually produced the answer, not the one that
+            # was asked for — escalation makes those differ, and reviewing a
+            # bad estimate against the wrong model is worse than useless.
+            log_id = create_photo_log(
+                db,
+                user_id,
+                estimate=estimate_for_log,
+                image_path=temp_file,
+                title=title,
+                description=description,
+                cooking_style=normalize_cooking_style(cooking_style),
+                model=(result.get("model") if isinstance(result, dict) else None) or model,
+                source="photo",
+            )
+            if log_id and isinstance(result, dict):
+                result = {**result, "photo_log_id": log_id}
+        except Exception as exc:
+            print(f"Warning: food photo log failed: {exc}")
         return result
     except HTTPException:
         raise
@@ -373,6 +465,56 @@ async def analyze_food_image_endpoint(
                 os.unlink(temp_file)
             except OSError:
                 pass
+
+
+@router.get("/photo-logs")
+async def list_photo_logs(
+    limit: int = Query(20, ge=1, le=100),
+    user_id: str = Depends(get_user_id),
+):
+    """List recent meal-photo / Fix Results logs (for testing). Omits image bytes."""
+    try:
+        docs = list(
+            db.collection("users")
+            .document(user_id)
+            .collection("food_photo_logs")
+            .order_by("created_at", direction="DESCENDING")
+            .limit(limit)
+            .stream()
+        )
+    except Exception:
+        docs = list(
+            db.collection("users")
+            .document(user_id)
+            .collection("food_photo_logs")
+            .limit(limit)
+            .stream()
+        )
+        docs.sort(
+            key=lambda d: (d.to_dict() or {}).get("created_at") or "",
+            reverse=True,
+        )
+
+    out = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        out.append(
+            {
+                "id": doc.id,
+                "created_at": data.get("created_at"),
+                "updated_at": data.get("updated_at"),
+                "source": data.get("source"),
+                "title": data.get("title"),
+                "description": data.get("description"),
+                "has_image": bool(data.get("has_image")),
+                "image_bytes": data.get("image_bytes"),
+                "chat_turn_count": data.get("chat_turn_count") or 0,
+                "initial_estimate": data.get("initial_estimate"),
+                "revised_estimate": data.get("revised_estimate"),
+                "model": data.get("model"),
+            }
+        )
+    return out
 
 
 def _serialize_food(doc) -> dict:
@@ -494,6 +636,46 @@ async def estimate_food(payload: FoodEstimateRequest, user_id: str = Depends(get
     return {"id": doc_ref.id, **estimated, "from_cache": False}
 
 
+@router.post("/fit-preview")
+async def preview_fit(payload: FitPreviewRequest, user_id: str = Depends(get_user_id)):
+    """Goal fit for a food the user has not committed yet.
+
+    The scan screen needs this to react as the serving count changes, and the
+    scoring must not be reimplemented client-side — two implementations of a
+    score drift, and then the badge on the scan screen disagrees with the badge
+    on the same food in the day's log.
+    """
+    context = _fit_context(user_id)
+    if not context:
+        return {"fit": None}
+    item = payload.dict()
+    slot = str(item.get("meal") or "").strip().lower()
+    return {
+        "fit": score_food(
+            item,
+            goal=context["goal"],
+            daily_calories=context["daily_calories"],
+            daily_protein=context["daily_protein"],
+            slot_target=context["slot_targets"].get(slot),
+        )
+    }
+
+
+@router.post("/photo-logs/{log_id}/accepted")
+async def record_accepted_photo_estimate(
+    log_id: str,
+    payload: AcceptedEstimateRequest,
+    user_id: str = Depends(get_user_id),
+):
+    """Label a photo log with the macros the user actually committed.
+
+    Without this the archive holds only what the model guessed, which cannot
+    score a prompt or model change. See `scripts/replay_photo_estimates.py`.
+    """
+    saved = record_accepted_estimate(db, user_id, log_id, payload.dict())
+    return {"recorded": saved}
+
+
 @router.post("/adjust-estimate")
 async def adjust_estimate_endpoint(
     payload: AdjustEstimateRequest,
@@ -509,14 +691,43 @@ async def adjust_estimate_endpoint(
     # Cap conversation to 6 turns (3 user + 3 assistant) to keep tokens sane.
     history = (payload.conversation_history or [])[-6:]
 
+    # The upload itself is deleted after the first estimate, so re-read the
+    # archived copy. Without it the revision can only nudge a number it has
+    # never seen.
+    try:
+        image_data_url = load_archived_image(db, user_id, payload.photo_log_id)
+    except Exception as exc:
+        print(f"Warning: could not reload photo for adjustment: {exc}")
+        image_data_url = None
+
     result = adjust_macro_estimate(
         current_estimate=payload.current_estimate,
         user_message=message,
         history=history,
+        model=payload.model,
+        image_data_url=image_data_url,
     )
     if not result:
         raise HTTPException(
             status_code=502,
             detail="Could not process the adjustment. Try rephrasing.",
         )
+
+    # Store the Fix Results turn (and create a log if this was text-only).
+    try:
+        log_id = append_adjust_chat(
+            db,
+            user_id,
+            payload.photo_log_id,
+            user_message=message,
+            assistant_reply=result.get("reply") or "",
+            current_estimate=payload.current_estimate,
+            revised_estimate=result.get("revised_estimate"),
+            conversation_history=result.get("conversation_history"),
+        )
+        if log_id:
+            result["photo_log_id"] = log_id
+    except Exception as exc:
+        print(f"Warning: adjust chat log failed: {exc}")
+
     return result

@@ -513,7 +513,7 @@ export default function AIChat({
                     · {title}
                   </Text>
                 ))}
-                <Text style={styles.suggestionCardCta}>Review on Plan →</Text>
+                <Text style={styles.suggestionCardCta}>Review updates →</Text>
               </TouchableOpacity>
             ) : null}
             {/* Guideline 1.2: every AI response must be reportable */}

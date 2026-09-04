@@ -19,7 +19,7 @@ import Card from "../shared/Card";
 import Input from "../shared/Input";
 import { colors, spacing, borderRadius } from "../../theme";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { AI_MODEL_STORAGE_KEY, normalizeAiModel } from "../../lib/aiModels";
+import { AI_MODEL_STORAGE_KEY, normalizePhotoModel } from "../../lib/aiModels";
 
 interface FoodItem {
   name: string;
@@ -289,7 +289,7 @@ export default function MacrosSection() {
 
       try {
         const raw = await AsyncStorage.getItem(AI_MODEL_STORAGE_KEY);
-        formData.append("model", normalizeAiModel(raw));
+        formData.append("model", normalizePhotoModel(raw));
       } catch {
         // default on server
       }

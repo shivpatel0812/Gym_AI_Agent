@@ -21,7 +21,8 @@ interface Props {
  * chooses to act on, which is why each one carries a why and a how.
  */
 export default function PlanReviewCard({ review, loading, onRefresh, onAskCoach }: Props) {
-  const [expanded, setExpanded] = useState(true);
+  // Collapsed by default — this is advisory, not an Accept queue.
+  const [expanded, setExpanded] = useState(false);
 
   if (loading && !review) {
     return (
@@ -62,7 +63,9 @@ export default function PlanReviewCard({ review, loading, onRefresh, onAskCoach 
         />
       </TouchableOpacity>
 
-      <Text style={styles.verdict}>{review.verdict}</Text>
+      <Text style={styles.verdict} numberOfLines={expanded ? undefined : 2}>
+        {review.verdict}
+      </Text>
 
       {expanded ? (
         <>

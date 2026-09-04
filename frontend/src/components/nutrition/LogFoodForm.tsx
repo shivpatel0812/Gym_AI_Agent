@@ -8,6 +8,7 @@ import {
   Image,
   ActivityIndicator,
   ScrollView,
+  Alert,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
@@ -18,9 +19,9 @@ import { FoodItem, MEALS } from "./types";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   AI_MODEL_STORAGE_KEY,
+  DEFAULT_PHOTO_MODEL,
+  normalizePhotoModel,
   AiModelId,
-  DEFAULT_AI_MODEL,
-  normalizeAiModel,
 } from "../../lib/aiModels";
 import {
   displayMealLabel,
@@ -34,12 +35,15 @@ import {
   COOKING_STYLE_STORAGE_KEY,
   CookingStyle,
   MacroValues,
+  PhotoComponent,
   PhotoEstimate,
   PortionChoice,
   normalizeCookingStyle,
   toPhotoEstimate,
 } from "./photoEstimate";
 import MacroAdjustChat from "./MacroAdjustChat";
+import ScanFoodCamera, { type ScanCapture } from "./ScanFoodCamera";
+import PhotoScanResults from "./PhotoScanResults";
 
 export type PlanMealPick = {
   id: string;
@@ -113,6 +117,14 @@ const field = {
 
 const PLAN_MEALS_COLLAPSED = 2;
 
+function planMealMatchesSlot(slot: string | undefined, activeSlot: string) {
+  const candidate = normalizeMealLabel(slot);
+  if (activeSlot === "snack") {
+    return candidate === "snack" || candidate === "late-night" || candidate === "other";
+  }
+  return candidate === activeSlot;
+}
+
 type PhotoMacroDraft = Record<keyof MacroValues, string>;
 
 const emptyPhotoMacroDraft = (): PhotoMacroDraft => ({
@@ -171,6 +183,12 @@ export default function LogFoodForm({
   const [analyzing, setAnalyzing] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [photoResult, setPhotoResult] = useState<PhotoEstimate | null>(null);
+  // Accepting a Fix Results revision REPLACES photoResult, so comparing the
+  // logged macros against it afterwards always matches and the correction
+  // reads as "no change". The backend needs two corrections before a photo
+  // food becomes a calibrated prior, so losing them stalls that forever.
+  const [photoRevised, setPhotoRevised] = useState(false);
+  const [photoLogId, setPhotoLogId] = useState<string | null>(null);
   const [photoAdjustOpen, setPhotoAdjustOpen] = useState(false);
   const [photoAdvancedOpen, setPhotoAdvancedOpen] = useState(false);
   const [photoPortion, setPhotoPortion] = useState<PortionChoice>("estimated");
@@ -180,7 +198,9 @@ export default function LogFoodForm({
   );
   const [photoMacroEdited, setPhotoMacroEdited] = useState(false);
   const [showAdjustChat, setShowAdjustChat] = useState(false);
-  const [aiModel, setAiModel] = useState<AiModelId>(DEFAULT_AI_MODEL);
+  const [scanCameraOpen, setScanCameraOpen] = useState(false);
+  const [scanResultsOpen, setScanResultsOpen] = useState(false);
+  const [aiModel, setAiModel] = useState<AiModelId>(DEFAULT_PHOTO_MODEL);
   const [savedFoods, setSavedFoods] = useState<FoodDbItem[]>([]);
   const [estimating, setEstimating] = useState(false);
   const [estimateError, setEstimateError] = useState<string | null>(null);
@@ -210,12 +230,20 @@ export default function LogFoodForm({
 
   const mealSlot = normalizeMealLabel(activeMeal);
   const showUncertain = mealSlot === "lunch" || mealSlot === "dinner";
+  const collapsedPlanMeals = useMemo(() => {
+    const slotMatches = planMeals.filter((pick) =>
+      planMealMatchesSlot(pick.slot, mealSlot)
+    );
+    return (slotMatches.length ? slotMatches : planMeals).slice(
+      0,
+      PLAN_MEALS_COLLAPSED
+    );
+  }, [mealSlot, planMeals]);
 
   useEffect(() => {
+    // An explicit pick elsewhere still wins; only the unset case changes.
     AsyncStorage.getItem(AI_MODEL_STORAGE_KEY)
-      .then((raw) => {
-        if (raw) setAiModel(normalizeAiModel(raw));
-      })
+      .then((raw) => setAiModel(normalizePhotoModel(raw)))
       .catch(() => {});
     AsyncStorage.getItem(COOKING_STYLE_STORAGE_KEY)
       .then((raw) => setCookingStyle(normalizeCookingStyle(raw)))
@@ -527,39 +555,139 @@ export default function LogFoodForm({
     kind === "potential" ? "Potential" : kind === "uncertain" ? "Uncertain" : "Anchor";
 
   const pickPhoto = async (fromCamera: boolean) => {
+    if (fromCamera) {
+      setPhotoError(null);
+      setScanCameraOpen(true);
+      return;
+    }
     setPhotoError(null);
     try {
-      if (fromCamera) {
-        const perm = await ImagePicker.requestCameraPermissionsAsync();
-        if (!perm.granted) {
-          setPhotoError("Camera permission is needed to take a photo.");
-          return;
-        }
-      } else {
-        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!perm.granted) {
-          setPhotoError("Photo library permission is needed.");
-          return;
-        }
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        setPhotoError("Photo library permission is needed.");
+        return;
       }
-      const result = fromCamera
-        ? await ImagePicker.launchCameraAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.9,
-          })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.9,
-          });
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.9,
+      });
       if (result.canceled || !result.assets?.[0]?.uri) return;
       const asset = result.assets[0];
-      setPhotoUri(asset.uri);
-      setPhotoFileName(asset.fileName || "meal.jpg");
-      setPhotoMimeType(asset.mimeType || "image/jpeg");
-      setPhotoResult(null);
+      await analyzeScanCapture({
+        uri: asset.uri,
+        fileName: asset.fileName || "meal.jpg",
+        mimeType: asset.mimeType || "image/jpeg",
+      });
     } catch {
       setPhotoError("Could not open that photo. Try another one.");
     }
+  };
+
+  const analyzeScanCapture = async (capture: ScanCapture) => {
+    setPhotoUri(capture.uri);
+    setPhotoFileName(capture.fileName);
+    setPhotoMimeType(capture.mimeType);
+    setPhotoResult(null);
+    setPhotoRevised(false);
+    setPhotoLogId(null);
+    setPhotoError(null);
+    setAnalyzing(true);
+    setScanResultsOpen(false);
+    try {
+      const payload = new FormData();
+      payload.append("file", {
+        uri: capture.uri,
+        name: capture.fileName,
+        type: capture.mimeType,
+      } as any);
+      const note = photoNote.trim();
+      const title = photoTitle.trim();
+      if (note) payload.append("description", note);
+      if (title) payload.append("title", title);
+      payload.append("cooking_style", cookingStyle);
+      payload.append("model", aiModel);
+      const response = await apiClient.post("/api/macros/analyze-image", payload, {
+        timeout: 120000,
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      if (!acceptPhotoEstimate(response.data, title)) {
+        const message =
+          response.data?.message ||
+          "Could not estimate macros. Try a clearer photo or add a description.";
+        setPhotoError(message);
+        Alert.alert("Couldn't estimate", message);
+        return;
+      }
+      setScanCameraOpen(false);
+      setScanResultsOpen(true);
+    } catch (error: any) {
+      const message =
+        error.response?.data?.detail || "Could not estimate macros. Please try again.";
+      setPhotoError(message);
+      Alert.alert("Couldn't estimate", String(message));
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const handleScanResultsDone = (
+    displayed: PhotoEstimate,
+    portion: PortionChoice
+  ) => {
+    const wasAdjusted =
+      photoRevised ||
+      portion !== "estimated" ||
+      cookingStyle !== photoResult?.analysis.cookingStyle ||
+      displayed.calories !== photoResult?.calories;
+    onAdd({
+      name: displayed.name,
+      calories: displayed.calories,
+      protein: displayed.protein,
+      carbs: displayed.carbs,
+      fats: displayed.fats,
+      fiber: displayed.fiber,
+      meal: activeMeal,
+      amount: displayed.amount,
+      uncertain: showUncertain ? uncertain : undefined,
+      log_source: "photo",
+      was_adjusted: wasAdjusted,
+      ...(tagAnchorId
+        ? { anchor_id: tagAnchorId, usual_id: tagAnchorId }
+        : {}),
+    });
+    void rememberFood(
+      {
+        name: displayed.name,
+        serving: displayed.amount || "1 serving",
+        grams: displayed.estimatedGrams || 100,
+        calories: displayed.calories,
+        protein: displayed.protein,
+        carbs: displayed.carbs,
+        fats: displayed.fats,
+        fiber: displayed.fiber,
+      },
+      [photoTitle.trim(), photoNote.trim()].filter(Boolean),
+      {
+        logSource: "photo",
+        wasAdjusted,
+      }
+    );
+    if (photoLogId) {
+      void apiClient
+        .post(`/api/macros/photo-logs/${photoLogId}/accepted`, {
+          name: displayed.name,
+          amount: displayed.amount,
+          calories: displayed.calories,
+          protein: displayed.protein,
+          carbs: displayed.carbs,
+          fats: displayed.fats,
+          fiber: displayed.fiber,
+        })
+        .catch(() => {});
+    }
+    setScanResultsOpen(false);
+    setScanCameraOpen(false);
+    resetPhotoEstimate();
   };
 
   const acceptPhotoEstimate = (raw: any, title: string) => {
@@ -570,6 +698,11 @@ export default function LogFoodForm({
       analysis: { ...estimate.analysis, cookingStyle },
     };
     setPhotoResult(withPreference);
+    setPhotoLogId(
+      typeof raw?.photo_log_id === "string" && raw.photo_log_id.trim()
+        ? raw.photo_log_id.trim()
+        : null
+    );
     setPhotoPortion("estimated");
     setPhotoAdjustOpen(false);
     setPhotoAdvancedOpen(false);
@@ -580,6 +713,8 @@ export default function LogFoodForm({
 
   const resetPhotoEstimate = () => {
     setPhotoResult(null);
+    setPhotoRevised(false);
+    setPhotoLogId(null);
     setPhotoUri(null);
     setPhotoFileName("meal.jpg");
     setPhotoMimeType("image/jpeg");
@@ -592,6 +727,8 @@ export default function LogFoodForm({
     setPhotoMacroEdited(false);
     setPhotoMacroDraft(emptyPhotoMacroDraft());
     setShowAdjustChat(false);
+    setScanCameraOpen(false);
+    setScanResultsOpen(false);
   };
 
   const handleAcceptRevision = (revised: {
@@ -602,6 +739,7 @@ export default function LogFoodForm({
     carbs: number;
     fats: number;
     fiber: number;
+    components?: PhotoComponent[];
   }) => {
     if (!photoResult) return;
     const updated: PhotoEstimate = {
@@ -613,8 +751,17 @@ export default function LogFoodForm({
       carbs: revised.carbs,
       fats: revised.fats,
       fiber: revised.fiber,
+      analysis: {
+        ...photoResult.analysis,
+        // The revision re-prices line items, so keeping the old ledger would
+        // leave the breakdown contradicting the total it explains.
+        components: revised.components?.length
+          ? revised.components
+          : photoResult.analysis.components,
+      },
     };
     setPhotoResult(updated);
+    setPhotoRevised(true);
     setPhotoMacroDraft(photoMacroDraftFrom(updated));
     setPhotoMacroEdited(false);
     setPhotoPortion("estimated");
@@ -624,6 +771,7 @@ export default function LogFoodForm({
   const handleAddPhotoEstimate = () => {
     if (!photoDisplayed) return;
     const wasAdjusted =
+      photoRevised ||
       photoPortion !== "estimated" ||
       cookingStyle !== photoResult?.analysis.cookingStyle ||
       photoMacroEdited;
@@ -660,6 +808,23 @@ export default function LogFoodForm({
         wasAdjusted,
       }
     );
+
+    // Label the archived photo with what was actually committed. The stored
+    // estimate is only what the model guessed; this is the number to score a
+    // prompt or model change against. Best-effort — never block the log.
+    if (photoLogId) {
+      void apiClient
+        .post(`/api/macros/photo-logs/${photoLogId}/accepted`, {
+          name: photoDisplayed.name,
+          amount: photoDisplayed.amount,
+          calories: photoDisplayed.calories,
+          protein: photoDisplayed.protein,
+          carbs: photoDisplayed.carbs,
+          fats: photoDisplayed.fats,
+          fiber: photoDisplayed.fiber,
+        })
+        .catch(() => {});
+    }
   };
 
   const updatePhotoMacro = (key: keyof MacroValues, value: string) => {
@@ -686,7 +851,9 @@ export default function LogFoodForm({
         payload.append("cooking_style", cookingStyle);
         payload.append("model", aiModel);
         const response = await apiClient.post("/api/macros/analyze-image", payload, {
-          timeout: aiModel === "gpt-5.6-sol" ? 120000 : 60000,
+          // A cheap first pass can escalate to a second, stronger one server
+          // side, so even the 4o request may take two vision calls.
+          timeout: 120000,
           headers: { "Content-Type": "multipart/form-data" },
         });
         if (!acceptPhotoEstimate(response.data, title)) {
@@ -810,7 +977,7 @@ export default function LogFoodForm({
               </TouchableOpacity>
             ) : null}
           </View>
-          {(planListExpanded ? planMeals : planMeals.slice(0, PLAN_MEALS_COLLAPSED)).map(
+          {(planListExpanded ? planMeals : collapsedPlanMeals).map(
             (pick) => {
             const color = kindColor(pick.kind);
             const tagging = tagAnchorId === pick.id;
@@ -1279,6 +1446,26 @@ export default function LogFoodForm({
                   ))}
                 </View>
 
+                {photoDisplayed.analysis.components.length ? (
+                  <View style={styles.photoLedger}>
+                    <Text style={styles.photoLedgerTitle}>What's counted</Text>
+                    {photoDisplayed.analysis.components.map((component, index) => (
+                      <View key={`${component.name}-${index}`} style={styles.photoLedgerRow}>
+                        <Text style={styles.photoLedgerName} numberOfLines={1}>
+                          {component.name}
+                          {component.amount ? (
+                            <Text style={styles.photoLedgerAmount}>{`  ${component.amount}`}</Text>
+                          ) : null}
+                        </Text>
+                        <Text style={styles.photoLedgerCal}>{component.calories} kcal</Text>
+                      </View>
+                    ))}
+                    <Text style={styles.photoLedgerHint}>
+                      Missing something? Tap Refine with AI and tell it what changed.
+                    </Text>
+                  </View>
+                ) : null}
+
                 {photoResult.analysis.confidence.shouldNudge ? (
                   <View style={styles.photoNudge}>
                     <MaterialCommunityIcons name="help-circle-outline" size={18} color="#F5C542" />
@@ -1295,12 +1482,10 @@ export default function LogFoodForm({
                 <View style={styles.photoActionRow}>
                   <TouchableOpacity
                     style={styles.photoFixBtn}
-                    onPress={() => setShowAdjustChat((open) => !open)}
+                    onPress={() => setShowAdjustChat(true)}
                   >
                     <MaterialCommunityIcons name="chat-processing-outline" size={15} color="#5EEAD4" />
-                    <Text style={styles.photoFixText}>
-                      {showAdjustChat ? "Hide chat" : "Fix Results"}
-                    </Text>
+                    <Text style={styles.photoFixText}>Refine with AI</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.photoAdjustToggle}
@@ -1319,6 +1504,9 @@ export default function LogFoodForm({
                 {showAdjustChat && photoResult ? (
                   <MacroAdjustChat
                     estimate={photoResult}
+                    model={aiModel}
+                    photoLogId={photoLogId}
+                    onPhotoLogId={(id) => setPhotoLogId(id)}
                     onAcceptRevision={handleAcceptRevision}
                     onClose={() => setShowAdjustChat(false)}
                   />
@@ -1467,20 +1655,23 @@ export default function LogFoodForm({
           ) : (
             <>
               <Text style={styles.muted}>
-                Take a photo and get a ready-to-log estimate. A title or short description helps with mixed meals.
+                Point the camera at your plate for a ready-to-log estimate. Fix Results opens a chat on top if anything looks off.
               </Text>
               <Text style={styles.photoTip}>
-                Tip: include the whole plate in good light. Your usual plate or a utensil can help with portion size.
+                Tip: fill the frame with the whole plate in good light.
               </Text>
               {!photoUri ? (
-                <View style={{ flexDirection: "row", gap: 12 }}>
-                  <TouchableOpacity style={styles.photoBox} onPress={() => pickPhoto(true)}>
-                    <MaterialCommunityIcons name="camera" size={22} color="#9CC0E8" />
-                    <Text style={styles.photoBoxText}>Take photo</Text>
+                <View style={{ gap: 12 }}>
+                  <TouchableOpacity
+                    style={styles.scanLaunchBtn}
+                    onPress={() => pickPhoto(true)}
+                  >
+                    <MaterialCommunityIcons name="camera" size={22} color="#070708" />
+                    <Text style={styles.scanLaunchText}>Scan food</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.photoBox} onPress={() => pickPhoto(false)}>
                     <MaterialCommunityIcons name="image" size={22} color="#E4B896" />
-                    <Text style={styles.photoBoxText}>Choose photo</Text>
+                    <Text style={styles.photoBoxText}>Choose from library</Text>
                   </TouchableOpacity>
                 </View>
               ) : (
@@ -1590,6 +1781,50 @@ export default function LogFoodForm({
           </TouchableOpacity>
         </View>
       )}
+
+      <ScanFoodCamera
+        visible={scanCameraOpen}
+        busy={analyzing}
+        busyLabel="Estimating macros…"
+        onClose={() => {
+          if (analyzing) return;
+          setScanCameraOpen(false);
+        }}
+        onCapture={(capture) => {
+          void analyzeScanCapture(capture);
+        }}
+      />
+
+      {photoResult && scanResultsOpen ? (
+        <PhotoScanResults
+          visible={scanResultsOpen}
+          photoUri={photoUri}
+          estimate={photoResult}
+          model={aiModel}
+          photoLogId={photoLogId}
+          mealLabel={displayMealLabel(activeMeal)}
+          mealSlot={mealSlot}
+          onPhotoLogId={(id) => setPhotoLogId(id)}
+          onEstimateChange={(next) => {
+            setPhotoResult(next);
+            setPhotoRevised(true);
+            setPhotoMacroDraft(photoMacroDraftFrom(next));
+            setPhotoMacroEdited(false);
+            setPhotoPortion("estimated");
+          }}
+          onDone={handleScanResultsDone}
+          onClose={() => setScanResultsOpen(false)}
+          onRetake={() => {
+            setScanResultsOpen(false);
+            setPhotoResult(null);
+            setPhotoRevised(false);
+            setPhotoLogId(null);
+            setPhotoUri(null);
+            setPhotoError(null);
+            setScanCameraOpen(true);
+          }}
+        />
+      ) : null}
     </View>
   );
 }
@@ -1773,6 +2008,20 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   photoBoxText: { color: "#7C8CA0", fontSize: 14, fontWeight: "600" },
+  scanLaunchBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    minHeight: 56,
+    borderRadius: 999,
+    backgroundColor: "#9CC0E8",
+  },
+  scanLaunchText: {
+    color: "#070708",
+    fontSize: 16,
+    fontWeight: "800",
+  },
   photoTip: {
     color: "#66768A",
     fontSize: 12,
@@ -1797,6 +2046,31 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     gap: 10,
   },
+  photoLedger: {
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#232A36",
+  },
+  photoLedgerTitle: {
+    color: "#7C8CA0",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    marginBottom: 6,
+  },
+  photoLedgerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingVertical: 3,
+  },
+  photoLedgerName: { color: "#C9D4E2", fontSize: 13, flex: 1, minWidth: 0 },
+  photoLedgerAmount: { color: "#6B7A8C", fontSize: 12 },
+  photoLedgerCal: { color: "#9CC0E8", fontSize: 13, fontWeight: "700" },
+  photoLedgerHint: { color: "#6B7A8C", fontSize: 11, marginTop: 8 },
   photoResultName: { color: "#fff", fontSize: 17, fontWeight: "800" },
   photoResultAmount: { color: "#7C8CA0", fontSize: 12, marginTop: 3 },
   photoEstimatedLabel: {

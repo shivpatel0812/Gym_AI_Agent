@@ -4,6 +4,7 @@ import {
   adjustPhotoEstimate,
   normalizeCookingStyle,
   PhotoEstimate,
+  scalePhotoEstimate,
   toPhotoEstimate,
 } from "./photoEstimate";
 
@@ -25,6 +26,10 @@ const estimate: PhotoEstimate = {
     assumptions: [],
     uncertainties: [],
     matchedSavedFood: false,
+    components: [
+      { name: "Rice", amount: "1 cup", calories: 400, protein: 8, carbs: 70, fats: 8, fiber: 2 },
+      { name: "Chicken", amount: "100g", calories: 200, protein: 17, carbs: 10, fats: 12, fiber: 6 },
+    ],
   },
 };
 
@@ -61,6 +66,25 @@ describe("photo estimate normalization", () => {
     expect(parsed?.analysis.matchedSavedFood).toBe(true);
   });
 
+  it("keeps the per-item breakdown the backend already computed", () => {
+    const parsed = toPhotoEstimate({
+      food: { name: "Thali", calories: 650, protein: 22, carbs: 100, fats: 17 },
+      analysis: {
+        components: [
+          { name: "Chapati", amount: "1 medium", calories: 130, protein: 4, carbs: 26, fats: 1 },
+          { item: "Kadhi", calories: 300, protein: 10, carbs: 40, fats: 11 },
+          { name: "", calories: 50 },
+        ],
+      },
+    });
+
+    expect(parsed?.analysis.components).toHaveLength(2);
+    expect(parsed?.analysis.components[0].name).toBe("Chapati");
+    // The backend emits "item"; the vision prompt and the adjust chat both use
+    // that key, so dropping those rows would silently halve the ledger.
+    expect(parsed?.analysis.components[1].name).toBe("Kadhi");
+  });
+
   it("defaults missing confidence to a low-confidence nudge", () => {
     const parsed = toPhotoEstimate({ name: "Apple", calories: 95, protein: 0.5 });
     expect(parsed?.analysis.confidence.level).toBe("low");
@@ -85,6 +109,25 @@ describe("optional photo adjustments", () => {
     expect(light.carbs).toBe(80);
   });
 
+  it("keeps the ledger summing to the displayed calories", () => {
+    const smaller = adjustPhotoEstimate(estimate, "smaller", "normal");
+    const sum = smaller.analysis.components.reduce((total, c) => total + c.calories, 0);
+    expect(sum).toBe(smaller.calories);
+  });
+
+  it("books a cooking-style change as its own oil line", () => {
+    const light = adjustPhotoEstimate(estimate, "estimated", "light");
+    const oil = light.analysis.components.find((c) => c.name.startsWith("Cooking oil"));
+    expect(oil?.calories).toBe(-45);
+    const sum = light.analysis.components.reduce((total, c) => total + c.calories, 0);
+    expect(sum).toBe(light.calories);
+  });
+
+  it("drops the ledger when a manual macro edit overrides it", () => {
+    const manual = adjustPhotoEstimate(estimate, "estimated", "normal", { calories: 575 });
+    expect(manual.analysis.components).toEqual([]);
+  });
+
   it("lets advanced edits override selected macro fields", () => {
     const manual = adjustPhotoEstimate(estimate, "estimated", "normal", {
       calories: 575,
@@ -99,4 +142,37 @@ describe("optional photo adjustments", () => {
 it("allowlists the persisted cooking preference", () => {
   expect(normalizeCookingStyle("generous")).toBe("generous");
   expect(normalizeCookingStyle("anything else")).toBe("normal");
+});
+
+
+describe("serving multiples", () => {
+  it("scales grams alongside the macros", () => {
+    const tripled = scalePhotoEstimate(estimate, 3);
+
+    expect(tripled.calories).toBe(1800);
+    expect(tripled.protein).toBe(75);
+    // The bug this pins: grams left at 1x while calories tripled makes the
+    // saved food's density wrong by 3x on every future re-log.
+    expect(tripled.estimatedGrams).toBe(1200);
+  });
+
+  it("scales the component ledger with the total", () => {
+    const doubled = scalePhotoEstimate(estimate, 2);
+    const sum = doubled.analysis.components.reduce((t, c) => t + c.calories, 0);
+
+    expect(sum).toBe(doubled.calories);
+  });
+
+  it("labels the multiple in the amount", () => {
+    expect(scalePhotoEstimate(estimate, 2).amount).toBe("2x 1 bowl");
+  });
+
+  it("is a no-op at one serving", () => {
+    expect(scalePhotoEstimate(estimate, 1)).toBe(estimate);
+  });
+
+  it("ignores a nonsense serving count", () => {
+    expect(scalePhotoEstimate(estimate, 0)).toBe(estimate);
+    expect(scalePhotoEstimate(estimate, NaN)).toBe(estimate);
+  });
 });

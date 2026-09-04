@@ -1,3 +1,17 @@
+/**
+ * How well one logged food fits the user's goal — not how "healthy" it is.
+ * Absent when the plan has no calorie/protein target to score against, and
+ * `score` is null for items too small to judge (a smear of ketchup).
+ */
+export interface FoodFit {
+  score: number | null;
+  band: "excellent" | "good" | "fair" | "poor" | "trivial";
+  reason: string;
+  goal?: string;
+  protein_ratio?: number | null;
+  slot_share?: number | null;
+}
+
 export interface FoodItem {
   name: string;
   calories: number;
@@ -24,12 +38,17 @@ export interface FoodItem {
   /** Internal hints for correction-aware photo personalization. */
   log_source?: "photo";
   was_adjusted?: boolean;
+  /** Server-computed goal fit. Read-only; never sent back on a write. */
+  fit?: FoodFit | null;
 }
 
 export interface MacroEntry {
   id?: string;
   date: string;
   food_items?: FoodItem[];
+  /** Calorie-weighted goal fit across the day. */
+  fit_score?: number | null;
+  fit_band?: FoodFit["band"] | null;
   total_calories?: number;
   total_protein?: number;
   total_carbs?: number;

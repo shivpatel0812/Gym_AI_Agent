@@ -54,7 +54,7 @@ def _text_list(value: Any, limit: int = 6) -> List[str]:
     return result
 
 
-def _normalize_components(value: Any) -> List[Dict[str, Any]]:
+def normalize_components(value: Any) -> List[Dict[str, Any]]:
     if not isinstance(value, list):
         return []
     components: List[Dict[str, Any]] = []
@@ -147,7 +147,7 @@ def build_photo_analysis(
     )
     portion = _normalize_portion(parsed)
     references = _normalize_references(parsed.get("scale_references"))
-    components = _normalize_components(parsed.get("components"))
+    components = normalize_components(parsed.get("components"))
 
     fat_raw = parsed.get("cooking_fat") if isinstance(parsed.get("cooking_fat"), dict) else {}
     normalized_style = normalize_cooking_style(cooking_style)
@@ -261,6 +261,57 @@ def build_photo_analysis(
         "uncertainties": _text_list(parsed.get("uncertainties")),
         "matched_saved_food": bool(has_saved_prior),
     }
+
+
+# Escalation thresholds. These target *the model being wrong*, not *the photo
+# being bad* — a sharp, well-lit, fully-visible tray scores 72/"medium" on the
+# confidence scale and can still be 30% low because the first pass shaded five
+# compartments down at once. Legibility is not accuracy, and no amount of
+# reasoning un-blurs a photo, so routing on image quality escalates exactly the
+# wrong set.
+COMPLEX_MEAL_COMPONENTS = 4
+INCOHERENCE_GAP_RATIO = 0.08
+WIDE_SPREAD_RATIO = 0.9
+
+
+def should_escalate(
+    analysis: Dict[str, Any],
+    coherence: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Decide whether a cheap first pass earned a stronger second pass.
+
+    Returns the decision plus its triggers, so an escalation that fires (or
+    fails to) is explainable after the fact rather than a silent cost.
+    """
+    triggers: List[str] = []
+
+    components = analysis.get("components") or []
+    if len(components) >= COMPLEX_MEAL_COMPONENTS:
+        # Multi-compartment mixed meals are where the cheap model degrades:
+        # each component is shaded low independently and the errors compound.
+        triggers.append(f"{len(components)} components on one plate")
+
+    if coherence and coherence.get("repaired"):
+        gap = float(coherence.get("gap_ratio") or 0.0)
+        if gap >= INCOHERENCE_GAP_RATIO:
+            triggers.append(
+                f"stated calories missed its own parts by {round(gap * 100)}%"
+            )
+
+    confidence = analysis.get("confidence") or {}
+    if confidence.get("level") == "low":
+        triggers.append("low confidence in the first pass")
+
+    portion = analysis.get("portion") or {}
+    estimated = float(portion.get("estimated_grams") or 0)
+    if estimated > 0:
+        spread = (
+            float(portion.get("high_grams") or 0) - float(portion.get("low_grams") or 0)
+        ) / estimated
+        if spread >= WIDE_SPREAD_RATIO:
+            triggers.append("the portion range is too wide to log")
+
+    return {"escalate": bool(triggers), "triggers": triggers[:4]}
 
 
 def empty_photo_analysis(reason: str, cooking_style: Optional[str] = None) -> Dict[str, Any]:

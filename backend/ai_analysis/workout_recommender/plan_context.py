@@ -83,7 +83,12 @@ class PlanContext:
 
 def normalize_rep_range(value: Any) -> Optional[Tuple[int, int]]:
     """
-    Accept [low, high], (low, high), or "4-6" and return a sane (low, high).
+    Accept [low, high], (low, high), "4-6", or a bare count, and return a sane
+    (low, high).
+
+    A bare count becomes (n, n). Plans written before `target_rep_range`
+    existed carry a single `reps` figure, and "3 sets of 10" is a point target,
+    not a band — widening it here would invent intent the plan never stated.
 
     Returns None for anything unusable rather than guessing, so a malformed
     plan falls through to the goal config's range.
@@ -95,6 +100,10 @@ def normalize_rep_range(value: Any) -> Optional[Tuple[int, int]]:
     elif isinstance(value, str) and "-" in value:
         parts = value.split("-", 1)
         low, high = parts[0].strip(), parts[1].strip()
+    elif isinstance(value, bool):
+        return None
+    elif isinstance(value, int) or (isinstance(value, str) and value.strip().isdigit()):
+        low = high = value
     else:
         return None
 

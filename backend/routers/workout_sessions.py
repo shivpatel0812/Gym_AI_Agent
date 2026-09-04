@@ -521,6 +521,13 @@ async def get_max_exercise_session(
     max_time = None
     max_speed = None
     max_session = None
+    # The best estimated 1RM, and the single set it came from. max_weight and
+    # max_reps are independent maxima over every set ever logged, so pairing
+    # them — as the card used to — multiplies a heavy set's load by a light
+    # set's reps and reports a 1RM the user has never been near. An e1RM only
+    # means anything computed within one set.
+    best_e1rm = None
+    best_e1rm_set = None
     
     # Track max per set number: {set_number: {weight, reps, volume, session}}
     max_per_set: dict = {}
@@ -554,7 +561,16 @@ async def get_max_exercise_session(
                         if max_weight is None or weight > max_weight:
                             max_weight = weight
                             max_session = session_info
-                        
+
+                        # Epley, over one real set. Reps above 30 make the
+                        # formula meaningless, so they are left out rather
+                        # than extrapolated.
+                        if weight > 0 and 0 < reps <= 30:
+                            e1rm = weight * (1 + reps / 30)
+                            if best_e1rm is None or e1rm > best_e1rm:
+                                best_e1rm = e1rm
+                                best_e1rm_set = {"weight": weight, "reps": reps}
+
                         volume = weight * reps
                         if max_volume is None or volume > max_volume:
                             max_volume = volume
@@ -603,6 +619,8 @@ async def get_max_exercise_session(
         "max_weight": max_weight,
         "max_reps": max_reps,
         "max_volume": max_volume,
+        "best_e1rm": round(best_e1rm) if best_e1rm is not None else None,
+        "best_e1rm_set": best_e1rm_set,
         "max_time": max_time,
         "max_speed": max_speed,
         "best_session": max_session,  # Session where the max was achieved
