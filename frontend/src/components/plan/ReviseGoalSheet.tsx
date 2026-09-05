@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -82,6 +83,10 @@ export default function ReviseGoalSheet({
   const [role, setRole] = useState<ExerciseRole | null>(null);
   const [goal, setGoal] = useState<string | null>(null);
   const [range, setRange] = useState<[number, number] | null>(null);
+  const [destWeight, setDestWeight] = useState("");
+  const [destReps, setDestReps] = useState("");
+  const [destWeeks, setDestWeeks] = useState("");
+  const [clearDest, setClearDest] = useState(false);
   const [saving, setSaving] = useState(false);
 
   if (!exercise) return null;
@@ -89,12 +94,22 @@ export default function ReviseGoalSheet({
   const activeRole = role ?? currentRole(exercise);
   const activeGoal = goal ?? exercise.goal ?? null;
   const activeRange = range ?? exercise.target_rep_range ?? null;
-  const dirty = role !== null || goal !== null || range !== null;
+  const hasDestInput = Boolean(destWeight.trim() && destReps.trim());
+  const dirty =
+    role !== null ||
+    goal !== null ||
+    range !== null ||
+    hasDestInput ||
+    clearDest;
 
   const reset = () => {
     setRole(null);
     setGoal(null);
     setRange(null);
+    setDestWeight("");
+    setDestReps("");
+    setDestWeeks("");
+    setClearDest(false);
   };
 
   const close = () => {
@@ -112,6 +127,11 @@ export default function ReviseGoalSheet({
         role: role ?? undefined,
         goal: goal ?? undefined,
         targetRepRange: range ?? undefined,
+        clearDestination: clearDest || undefined,
+        targetWeight: hasDestInput ? Number(destWeight) : undefined,
+        targetReps: hasDestInput ? Number(destReps) : undefined,
+        targetWeeks:
+          hasDestInput && destWeeks.trim() ? Number(destWeeks) : undefined,
       });
       reset();
       onSaved();
@@ -207,6 +227,72 @@ export default function ReviseGoalSheet({
               })}
             </View>
 
+            {activeRole === "building" ? (
+              <>
+                <Text style={styles.question}>Destination (optional)</Text>
+                <Text style={styles.optionBlurb}>
+                  Finish line for the roadmap — e.g. 85 lb × 8 in 10 weeks. Leave blank to keep
+                  open-ended projection.
+                </Text>
+                {(exercise.target_weight && exercise.target_reps) || exercise.destination ? (
+                  <Text style={styles.currentDest}>
+                    Current:{" "}
+                    {exercise.destination?.weight || exercise.target_weight} lb ×{" "}
+                    {exercise.destination?.reps || exercise.target_reps}
+                    {(exercise.destination?.weeks || exercise.target_weeks)
+                      ? ` in ${exercise.destination?.weeks || exercise.target_weeks} weeks`
+                      : ""}
+                  </Text>
+                ) : null}
+                <View style={styles.destRow}>
+                  <TextInput
+                    style={styles.destInput}
+                    placeholder="Weight"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="decimal-pad"
+                    value={destWeight}
+                    onChangeText={(t) => {
+                      setClearDest(false);
+                      setDestWeight(t);
+                    }}
+                  />
+                  <Text style={styles.destTimes}>×</Text>
+                  <TextInput
+                    style={styles.destInput}
+                    placeholder="Reps"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="number-pad"
+                    value={destReps}
+                    onChangeText={(t) => {
+                      setClearDest(false);
+                      setDestReps(t);
+                    }}
+                  />
+                  <TextInput
+                    style={styles.destInput}
+                    placeholder="Weeks"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="number-pad"
+                    value={destWeeks}
+                    onChangeText={(t) => {
+                      setClearDest(false);
+                      setDestWeeks(t);
+                    }}
+                  />
+                </View>
+                {(exercise.target_weight || exercise.destination) && !hasDestInput ? (
+                  <TouchableOpacity
+                    style={[styles.chip, clearDest && styles.chipSelected]}
+                    onPress={() => setClearDest((v) => !v)}
+                  >
+                    <Text style={[styles.chipText, clearDest && styles.chipTextSelected]}>
+                      Clear destination
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </>
+            ) : null}
+
             <Text style={styles.footnote}>
               This changes only {exercise.exercise_name} on {exercise.day_name}. The rest of
               your plan is untouched.
@@ -280,6 +366,20 @@ const styles = StyleSheet.create({
   chipSelected: { borderColor: colors.accentPrimary, backgroundColor: "rgba(156,192,232,.12)" },
   chipText: { fontSize: 12, fontWeight: "700", color: colors.textSecondary },
   chipTextSelected: { color: colors.accentPrimary },
+  destRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
+  destInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  destTimes: { color: colors.textMuted, fontWeight: "800" },
+  currentDest: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
   footnote: { fontSize: 11, lineHeight: 16, color: colors.textMuted, marginTop: 12 },
   actions: {
     flexDirection: "row",

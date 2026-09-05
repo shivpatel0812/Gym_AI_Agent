@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
 import Svg, { Circle, Line, Polyline, Text as SvgText } from "react-native-svg";
 import Ring from "../nutrition/Ring";
 import ReviseGoalSheet from "./ReviseGoalSheet";
@@ -46,6 +47,11 @@ import {
   type LoggedSession,
   type ProgressionMetric,
 } from "./chartUtils";
+import {
+  groupDaysByFamily,
+  variantCaption,
+  type DayFamily,
+} from "./dayFamilies";
 
 type Role = "building" | "maintaining" | "support";
 type DetailTab = "history" | "roadmap";
@@ -131,6 +137,19 @@ export default function PlanHub({
     [pending, loadPending, loadProjection]
   );
 
+  // Push A / Push B stay separate plan days (heavy vs volume), but the hub
+  // pages by family so the user sees Push · Pull · Legs — not five tabs.
+  const families = useMemo(
+    () => groupDaysByFamily(projection?.days || []),
+    [projection?.days]
+  );
+
+  useEffect(() => {
+    if (dayIndex >= families.length && families.length > 0) {
+      setDayIndex(0);
+    }
+  }, [dayIndex, families.length]);
+
   if (loading) return <ActivityIndicator style={styles.loader} color={colors.accentPrimary} />;
 
   if (loadError) {
@@ -148,13 +167,13 @@ export default function PlanHub({
     );
   }
 
-  if (!projection?.days.length) {
+  if (!families.length) {
     return <Text style={styles.muted}>The roadmap will appear after your plan has enough exercise data.</Text>;
   }
 
-  const days = projection.days;
-  const day = days[dayIndex] || days[0];
-  const move = (delta: number) => setDayIndex((dayIndex + delta + days.length) % days.length);
+  const family = families[dayIndex] || families[0];
+  const move = (delta: number) =>
+    setDayIndex((dayIndex + delta + families.length) % families.length);
 
   return (
     <View>
@@ -193,14 +212,14 @@ export default function PlanHub({
           <MaterialCommunityIcons name="chevron-left" size={24} color={colors.textSecondary} />
         </TouchableOpacity>
         <View style={styles.tabs}>
-          {days.map((item, i) => (
+          {families.map((item, i) => (
             <TouchableOpacity
-              key={item.day_name}
+              key={item.key}
               onPress={() => setDayIndex(i)}
               style={[styles.tab, i === dayIndex && styles.tabActive]}
             >
               <Text numberOfLines={1} style={[styles.tabText, i === dayIndex && styles.tabTextActive]}>
-                {shortDay(item.day_name)}
+                {item.label}
               </Text>
             </TouchableOpacity>
           ))}
@@ -210,37 +229,57 @@ export default function PlanHub({
         </TouchableOpacity>
       </View>
 
-      <DaySummary
-        day={day}
-        schedule={projection.weekly_schedule}
-        muscleHistory={projection.muscle_group_history}
+      <FamilySummary
+        family={family}
+        schedule={projection?.weekly_schedule}
+        muscleHistory={projection?.muscle_group_history}
       />
 
       <View style={styles.cards}>
-        {groupExercises(day.exercises).map((group) =>
-          group.length > 1 ? (
-            <CombinedExerciseSummary
-              key={group[0].exercise_id}
-              exercises={group}
-              onPress={() =>
-                setDetail({
-                  kind: "combined",
-                  exercises: group,
-                  label: (group.find((item) => item.priority === "high") || group[0]).exercise_name.replace(
-                    /^weighted\s+/i,
-                    ""
-                  ),
-                })
-              }
-            />
-          ) : (
-            <ExerciseSummary
-              key={group[0].exercise_id}
-              exercise={group[0]}
-              onPress={() => setDetail({ kind: "single", exercise: group[0] })}
-            />
-          )
-        )}
+        {family.days.map((variant) => {
+          const caption = variantCaption(variant.day_name, family.key);
+          const showVariant = family.days.length > 1;
+          return (
+            <View key={variant.day_name} style={styles.variantBlock}>
+              {showVariant ? (
+                <View style={styles.variantHead}>
+                  <Text style={styles.variantTitle}>
+                    {caption ? `Session ${caption}` : variant.day_name}
+                  </Text>
+                  {variant.day_goal || variant.focus ? (
+                    <Text style={styles.variantFocus}>
+                      {variant.day_goal || variant.focus}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+              {groupExercises(variant.exercises).map((group) =>
+                group.length > 1 ? (
+                  <CombinedExerciseSummary
+                    key={`${variant.day_name}-${group[0].exercise_id}`}
+                    exercises={group}
+                    onPress={() =>
+                      setDetail({
+                        kind: "combined",
+                        exercises: group,
+                        label: (group.find((item) => item.priority === "high") || group[0]).exercise_name.replace(
+                          /^weighted\s+/i,
+                          ""
+                        ),
+                      })
+                    }
+                  />
+                ) : (
+                  <ExerciseSummary
+                    key={`${variant.day_name}-${group[0].exercise_id}`}
+                    exercise={group[0]}
+                    onPress={() => setDetail({ kind: "single", exercise: group[0] })}
+                  />
+                )
+              )}
+            </View>
+          );
+        })}
       </View>
 
       {pending ? null : (
@@ -263,17 +302,18 @@ export default function PlanHub({
   );
 }
 
-function DaySummary({
-  day,
+function FamilySummary({
+  family,
   schedule,
   muscleHistory,
 }: {
-  day: ProjectedDay;
+  family: DayFamily<ProjectedDay>;
   schedule?: Record<string, string>;
   muscleHistory?: Record<string, MuscleGroupDay[]>;
 }) {
-  const dates = day.exercises.map((e) => e.last_trained).filter(Boolean).sort() as string[];
-  const counts = day.exercises.reduce(
+  const exercises = family.days.flatMap((day) => day.exercises);
+  const dates = exercises.map((e) => e.last_trained).filter(Boolean).sort() as string[];
+  const counts = exercises.reduce(
     (a, e) => {
       const role = roleFor(e);
       if (role === "building") a.building++;
@@ -282,19 +322,33 @@ function DaySummary({
     },
     { building: 0, maintaining: 0 }
   );
+  const focusBits = family.days
+    .map((day) => day.day_goal || day.focus)
+    .filter(Boolean);
+  const focusLine =
+    family.days.length > 1
+      ? `${family.days.length} sessions · ${[...new Set(focusBits)].join(" · ") || "variants on this page"}`
+      : focusBits[0] || family.label;
+
   return (
     <View style={styles.summary}>
       <View style={styles.daySummaryHead}>
-        <Text style={styles.dayName}>{day.day_name}</Text>
-        <Text style={styles.dayFocus}>{day.day_goal || day.focus}</Text>
+        <Text style={styles.dayName}>{family.label}</Text>
+        <Text style={styles.dayFocus}>{focusLine}</Text>
       </View>
       <View style={styles.metrics}>
         <Metric label="LAST TRAINED" value={dates.length ? formatDate(dates[dates.length - 1]) : "No session"} />
-        <Metric label="NEXT EXPECTED" value={nextScheduled(day.day_name, schedule)} />
+        <Metric
+          label="NEXT EXPECTED"
+          value={nextScheduledAny(
+            family.days.map((day) => day.day_name),
+            schedule
+          )}
+        />
         <Metric label="BUILDING" value={`${counts.building} lifts`} accent />
         <Metric label="MAINTAINING" value={`${counts.maintaining} lifts`} />
       </View>
-      <MuscleGroupCharts exercises={day.exercises} history={muscleHistory} />
+      <MuscleGroupCharts exercises={exercises} history={muscleHistory} />
     </View>
   );
 }
@@ -364,7 +418,7 @@ function ExerciseSummary({
 }) {
   if (exercise.is_cardio) return <CardioSummary exercise={exercise} />;
   const role = roleFor(exercise);
-  const target = peak(exercise.realistic);
+  const target = destinationAsWeekPoint(exercise) || peak(exercise.realistic);
   const sessions = lastSessions(exercise, 2);
   const goalLine = summaryGoalLine(exercise, role, target);
 
@@ -394,7 +448,10 @@ function ExerciseSummary({
           )}
         </View>
       </TouchableOpacity>
-      {role !== "support" ? <HistoryStrip exercise={exercise} flat={role === "maintaining"} /> : null}
+      <HistoryStrip
+        exercise={exercise}
+        flat={role === "maintaining" || role === "support"}
+      />
     </View>
   );
 }
@@ -411,30 +468,33 @@ function CombinedExerciseSummary({
   const sessions = lastSessions(exercise, 2);
 
   return (
-    <TouchableOpacity style={styles.summaryCard} onPress={onPress} activeOpacity={0.85}>
-      <View style={styles.summaryHead}>
-        <View style={styles.cardTitleWrap}>
-          <View style={styles.nameRow}>
-            <Text style={styles.exerciseName}>{displayName}</Text>
-            <RoleBadge role="building" />
+    <View style={styles.summaryCard}>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+        <View style={styles.summaryHead}>
+          <View style={styles.cardTitleWrap}>
+            <View style={styles.nameRow}>
+              <Text style={styles.exerciseName}>{displayName}</Text>
+              <RoleBadge role="building" />
+            </View>
+            <Text style={styles.goalLine}>Dual track · weighted load + bodyweight reps</Text>
           </View>
-          <Text style={styles.goalLine}>Dual track · weighted load + bodyweight reps</Text>
+          <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textMuted} />
         </View>
-        <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textMuted} />
-      </View>
-      <View style={styles.sessionLogs}>
-        <Text style={styles.label}>LAST SESSIONS</Text>
-        {sessions.length ? (
-          sessions.map((session) => (
-            <Text key={session.key} style={styles.sessionRow}>
-              {session.label}
-            </Text>
-          ))
-        ) : (
-          <Text style={styles.mutedSmall}>No sessions logged yet</Text>
-        )}
-      </View>
-    </TouchableOpacity>
+        <View style={styles.sessionLogs}>
+          <Text style={styles.label}>LAST SESSIONS</Text>
+          {sessions.length ? (
+            sessions.map((session) => (
+              <Text key={session.key} style={styles.sessionRow}>
+                {session.label}
+              </Text>
+            ))
+          ) : (
+            <Text style={styles.mutedSmall}>No sessions logged yet</Text>
+          )}
+        </View>
+      </TouchableOpacity>
+      <HistoryStrip exercise={exercise} />
+    </View>
   );
 }
 
@@ -553,8 +613,9 @@ function GoalHistoryTab({
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [setFilter, setSetFilter] = useState<SetFilter>("all");
   const chipScroll = useRef<ScrollView | null>(null);
+  const navigation = useNavigation<any>();
 
-  const target = peak(exercise.realistic);
+  const target = destinationAsWeekPoint(exercise) || peak(exercise.realistic);
   const current = exercise.current || exercise.realistic[0];
   const progressPct = goalProgress(sessions, role, current, target);
 
@@ -714,7 +775,12 @@ function GoalHistoryTab({
                 if (found[0]) setSelectedKey(found[0].key);
               }}
             />
-            <WorkoutDetailCallout sessions={scrubSessions} />
+            <WorkoutDetailCallout
+              sessions={scrubSessions}
+              onOpenSession={(sessionId) =>
+                navigation.navigate("Workouts", { editSessionId: sessionId })
+              }
+            />
           </View>
         </>
       ) : (
@@ -730,7 +796,7 @@ function GoalHistoryTab({
 
 function RoadmapTab({ exercise, role }: { exercise: ProjectedExercise; role: Role }) {
   const current = exercise.current || exercise.realistic[0];
-  const target = peak(exercise.realistic);
+  const target = destinationAsWeekPoint(exercise) || peak(exercise.realistic);
   const sessions = useMemo(() => getSessionRecords(exercise), [exercise]);
   const progress = goalProgress(sessions, role, current, target);
   const flatChart = role === "maintaining" || role === "support";
@@ -767,12 +833,10 @@ function RoadmapTab({ exercise, role }: { exercise: ProjectedExercise; role: Rol
         </View>
       </View>
 
-      {role !== "support" ? (
-        <View style={styles.detailSection}>
-          <Text style={styles.chartLabel}>HISTORY &amp; {PROJECTION_WEEKS}-WEEK ROADMAP</Text>
-          <Trajectory exercise={exercise} flat={flatChart} />
-        </View>
-      ) : null}
+      <View style={styles.detailSection}>
+        <Text style={styles.chartLabel}>HISTORY &amp; {PROJECTION_WEEKS}-WEEK ROADMAP</Text>
+        <Trajectory exercise={exercise} flat={flatChart} />
+      </View>
 
       <View style={[styles.detailSection, styles.detailSectionLast]}>
         <Text style={styles.chartLabel}>{role === "support" ? "SESSION PRESCRIPTION" : "WORKOUT RECOMMENDATIONS"}</Text>
@@ -970,23 +1034,18 @@ function ProgressionTable({ exercise, flat }: { exercise: ProjectedExercise; fla
 
   return (
     <View style={styles.progressionTable}>
-      {sessionCount > 1 ? (
-        <View style={styles.progressionRow}>
-          <Text style={[styles.progressionWeek, styles.progressionHeader]} />
-          {Array.from({ length: sessionCount }, (_, i) => (
-            <Text key={i} style={[styles.progressionCell, styles.progressionHeader]}>
-              Workout {i + 1}
-            </Text>
-          ))}
-        </View>
-      ) : null}
       {weeks.map(([week, sessions]) => (
-        <View key={week} style={styles.progressionRow}>
-          <Text style={styles.progressionWeek}>Week {week}</Text>
+        <View key={week} style={styles.progressionWeekBlock}>
+          <Text style={styles.progressionWeekLabel}>Week {week}</Text>
           {Array.from({ length: sessionCount }, (_, i) => (
-            <Text key={i} style={styles.progressionCell} numberOfLines={2}>
-              {describe(sessions.get(i + 1))}
-            </Text>
+            <View key={i} style={styles.progressionWorkoutRow}>
+              {sessionCount > 1 ? (
+                <Text style={styles.progressionWorkoutLabel}>Workout {i + 1}</Text>
+              ) : null}
+              <Text style={styles.progressionWorkoutSets} numberOfLines={3}>
+                {describe(sessions.get(i + 1))}
+              </Text>
+            </View>
           ))}
         </View>
       ))}
@@ -1030,6 +1089,12 @@ function formatSupportTarget(exercise: ProjectedExercise) {
 }
 
 function summaryGoalLine(exercise: ProjectedExercise, role: Role, target?: WeekPoint | null) {
+  const dest = resolveDestination(exercise);
+  if (role === "building" && dest) {
+    const weeks = dest.weeks || exercise.realistic.length || PROJECTION_WEEKS;
+    const reach = exercise.reachable === false ? " · stretch" : "";
+    return `Goal · ${dest.weight} lb × ${dest.reps} by ${targetDate(weeks)}${reach}`;
+  }
   if (role === "building" && target) {
     return `Goal · ${formatTarget(target)} by ${targetDate(exercise.realistic.length)}`;
   }
@@ -1040,6 +1105,11 @@ function summaryGoalLine(exercise: ProjectedExercise, role: Role, target?: WeekP
 }
 
 function detailGoalHeadline(exercise: ProjectedExercise, role: Role, target?: WeekPoint | null) {
+  const dest = resolveDestination(exercise);
+  if (role === "building" && dest) {
+    const weeks = dest.weeks || exercise.realistic.length || PROJECTION_WEEKS;
+    return `${dest.weight} lb × ${dest.reps} by ${targetDate(weeks)}`;
+  }
   if (role === "building" && target) {
     return `${formatTarget(target)} by ${targetDate(exercise.realistic.length)}`;
   }
@@ -1047,6 +1117,35 @@ function detailGoalHeadline(exercise: ProjectedExercise, role: Role, target?: We
     return `${formatSupportTarget(exercise)} reps`;
   }
   return "Holding steady — not a plateau.";
+}
+
+function resolveDestination(exercise: ProjectedExercise): {
+  weight: number;
+  reps: number;
+  weeks?: number;
+} | null {
+  if (exercise.destination?.weight && exercise.destination?.reps) {
+    return exercise.destination;
+  }
+  if (exercise.target_weight && exercise.target_reps) {
+    return {
+      weight: exercise.target_weight,
+      reps: exercise.target_reps,
+      weeks: exercise.target_weeks ?? undefined,
+    };
+  }
+  return null;
+}
+
+function destinationAsWeekPoint(exercise: ProjectedExercise): WeekPoint | null {
+  const dest = resolveDestination(exercise);
+  if (!dest) return null;
+  return {
+    week: dest.weeks || exercise.realistic.length || PROJECTION_WEEKS,
+    weight: dest.weight,
+    reps: dest.reps,
+    e1rm: calcE1rm(dest.weight, dest.reps),
+  };
 }
 
 function RoleBadge({ role }: { role: Role }) {
@@ -1083,6 +1182,7 @@ function RoleBadge({ role }: { role: Role }) {
  * supposed to hit in week 6?" actually lives, and it used to be inert.
  */
 export function Trajectory({ exercise, flat }: { exercise: ProjectedExercise; flat: boolean }) {
+  const navigation = useNavigation<any>();
   const width = Math.min(Dimensions.get("window").width - 68, 520);
   const height = 150;
   const plotTop = 12;
@@ -1212,19 +1312,15 @@ export function Trajectory({ exercise, flat }: { exercise: ProjectedExercise; fl
     setScrubTarget(best.point);
   };
 
-  const clearScrub = () => {
-    setScrubSessions([]);
-    setScrubTarget(null);
-  };
-
   const pan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (e) => scrubAtRef.current(e.nativeEvent.locationX),
       onPanResponderMove: (e) => scrubAtRef.current(e.nativeEvent.locationX),
-      onPanResponderRelease: clearScrub,
-      onPanResponderTerminate: clearScrub,
+      // Same as ScrubbableLineChart: leave the callout up after the finger lifts.
+      onPanResponderRelease: () => {},
+      onPanResponderTerminate: () => {},
     })
   ).current;
 
@@ -1355,7 +1451,7 @@ export function Trajectory({ exercise, flat }: { exercise: ProjectedExercise; fl
         </View>
       ) : (
         <Text style={styles.chartCaption}>
-          Drag anywhere — left of TODAY for logged sessions, right for upcoming targets
+          Tap a point — left of TODAY for logged sets, right for upcoming targets
         </Text>
       )}
 
@@ -1381,7 +1477,12 @@ export function Trajectory({ exercise, flat }: { exercise: ProjectedExercise; fl
         ) : null}
       </View>
 
-      <WorkoutDetailCallout sessions={scrubSessions} />
+      <WorkoutDetailCallout
+        sessions={scrubSessions}
+        onOpenSession={(sessionId) =>
+          navigation.navigate("Workouts", { editSessionId: sessionId })
+        }
+      />
     </View>
   );
 }
@@ -1440,6 +1541,21 @@ function lastSessions(exercise: ProjectedExercise, limit: number) {
  * This is the only route by which a chat turn reaches the live plan, and it
  * runs on a tap. The card lists each edit so "accept" is never a blank cheque.
  */
+function formatEditBefore(value: unknown): string {
+  if (value == null) return "—";
+  if (Array.isArray(value)) return value.map(String).join("-");
+  return String(value);
+}
+
+function formatEditAfter(value: unknown): string {
+  if (value == null) return "—";
+  if (Array.isArray(value)) return value.map(String).join("-");
+  if (typeof value === "object" && value && "exercise_name" in (value as object)) {
+    return String((value as { exercise_name?: string }).exercise_name);
+  }
+  return String(value);
+}
+
 function PendingSuggestions({
   pending,
   busy,
@@ -1464,6 +1580,20 @@ function PendingSuggestions({
           <MaterialCommunityIcons name="circle-small" size={20} color={colors.accentPrimary} />
           <View style={{ flex: 1 }}>
             <Text style={styles.suggestionEditTitle}>{edit.title}</Text>
+            {edit.from != null && edit.op?.startsWith("set_") ? (
+              <Text style={styles.roleCopy}>
+                {formatEditBefore(edit.from)} → {formatEditAfter(edit.value)}
+              </Text>
+            ) : null}
+            {edit.op === "replace_day_exercises" && Array.isArray(edit.value) ? (
+              <Text style={styles.roleCopy}>
+                {(edit.from as string[] | undefined)?.join(", ") || "empty"} →{" "}
+                {(edit.value as { exercise_name?: string }[])
+                  .map((ex) => ex.exercise_name)
+                  .filter(Boolean)
+                  .join(", ")}
+              </Text>
+            ) : null}
             {edit.rationale ? <Text style={styles.roleCopy}>{edit.rationale}</Text> : null}
           </View>
         </View>
@@ -1523,18 +1653,15 @@ function formatDate(s: string) {
   return Number.isNaN(d.valueOf()) ? s : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function shortDay(s: string) {
-  return s.replace(/\s+(day|workout)$/i, "");
-}
-
-function nextScheduled(day: string, schedule?: Record<string, string>) {
-  if (!schedule) return "Not scheduled";
+function nextScheduledAny(dayNames: string[], schedule?: Record<string, string>) {
+  if (!schedule || !dayNames.length) return "Not scheduled";
+  const wanted = new Set(dayNames);
   const today = new Date();
   for (let i = 0; i < 8; i++) {
     const d = new Date(today);
     d.setDate(today.getDate() + i);
     const key = WEEKDAYS[d.getDay()].toLowerCase();
-    if (schedule[key] === day) {
+    if (wanted.has(schedule[key])) {
       return i === 0 ? "Today" : i === 1 ? "Tomorrow" : WEEKDAYS[d.getDay()];
     }
   }
@@ -1663,6 +1790,23 @@ const styles = StyleSheet.create({
   metricValue: { fontSize: 13, fontWeight: "700", color: colors.textPrimary, marginTop: 4 },
   accent: { color: colors.accentPrimary },
   cards: { gap: 10, marginTop: 16 },
+  variantBlock: { gap: 10 },
+  variantHead: {
+    paddingHorizontal: 4,
+    paddingTop: 4,
+    paddingBottom: 2,
+    gap: 2,
+  },
+  variantTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: colors.textPrimary,
+    letterSpacing: 0.2,
+  },
+  variantFocus: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
   summaryCard: {
     backgroundColor: colors.cardBackground,
     borderWidth: 1,
@@ -1828,6 +1972,35 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   progressionTable: { gap: 0 },
+  progressionWeekBlock: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: 6,
+  },
+  progressionWeekLabel: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: colors.textSecondary,
+    letterSpacing: 0.3,
+  },
+  progressionWorkoutRow: {
+    gap: 2,
+    paddingLeft: 2,
+  },
+  progressionWorkoutLabel: {
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    color: colors.textMuted,
+    textTransform: "uppercase",
+  },
+  progressionWorkoutSets: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    lineHeight: 18,
+  },
   progressionRow: {
     flexDirection: "row",
     alignItems: "center",

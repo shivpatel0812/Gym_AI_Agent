@@ -51,6 +51,26 @@ def test_a_slot_with_items_joins_the_day():
     assert "snack" in derive_slot_targets(plan)
 
 
+def test_pre_workout_has_no_protein_floor():
+    """Fuel slots get a calorie band only — a banana should not read as low protein."""
+    plan = _plan()
+    plan["meal_anchors"].append({
+        "id": "pw",
+        "slot": "pre_workout",
+        "label": "Banana",
+        "days": ["mon", "tue", "wed", "thu", "fri"],
+        "foods": [{"name": "Banana", "calories": 105, "protein": 1}],
+    })
+    targets = derive_slot_targets(plan)
+
+    assert "pre_workout" in targets
+    assert targets["pre_workout"]["protein_min"] is None
+    assert targets["pre_workout"]["calorie_min"]
+    assert "protein" not in (
+        next(s for s in slot_summary(plan) if s["slot"] == "pre_workout")["headline"]
+    )
+
+
 def test_flexible_meal_range_beats_the_derived_share():
     plan = _plan(flexible_meals=[
         {"id": "f", "name": "Dinner", "calorie_min": 650, "calorie_max": 900}

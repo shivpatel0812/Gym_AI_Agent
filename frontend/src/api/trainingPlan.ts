@@ -14,6 +14,10 @@ export interface PlanExercise {
   priority?: "high" | "supporting" | "normal";
   target_rep_range?: [number, number];
   intensity?: string;
+  /** Destination finish line (e.g. 85 lb × 8). Travels with target_reps. */
+  target_weight?: number | null;
+  target_reps?: number | null;
+  target_weeks?: number | null;
 }
 
 export interface PlanDay {
@@ -63,7 +67,14 @@ export type PlanEditOp =
   | "set_sets"
   | "set_priority"
   | "set_goal"
-  | "set_notes";
+  | "set_notes"
+  | "set_destination"
+  | "clear_destination"
+  | "add_exercise"
+  | "remove_exercise"
+  | "add_day"
+  | "remove_day"
+  | "replace_day_exercises";
 
 export interface PlanEdit {
   id: string;
@@ -165,6 +176,10 @@ export interface ProjectedExercise extends PlanExercise {
     best_case_pct: number | null;
     realistic_pct: number | null;
   };
+  /** User-stated finish line when set on the plan exercise. */
+  destination?: { weight: number; reps: number; weeks?: number } | null;
+  arrived_week?: number | null;
+  reachable?: boolean | null;
   /** Cardio projects minutes and pace; the lifting curves are empty when set. */
   is_cardio?: boolean;
   cardio_modality?: "steady" | "sport";
@@ -174,6 +189,7 @@ export interface ProjectedExercise extends PlanExercise {
   last_trained?: string | null;
   recent_sessions?: Array<{
     date?: string;
+    session_id?: string;
     sets?: Array<{ set_number?: number; weight?: number; reps?: number; completed?: boolean }>;
     /**
      * The session's heaviest set, computed server-side without regard to the
@@ -187,6 +203,7 @@ export interface ProjectedExercise extends PlanExercise {
     lifetime_session_count: number;
     recent_sessions?: Array<{
       date?: string;
+      session_id?: string;
       sets?: Array<{ set_number?: number; weight?: number; reps?: number; completed?: boolean }>;
       top_set?: { weight?: number; reps?: number } | null;
     }>;
@@ -209,8 +226,29 @@ export interface MuscleGroupDay {
   sessions: Array<{
     exercise_id: string;
     exercise_name: string;
+    session_id?: string;
     sets: Array<{ set_number?: number; weight: number; reps: number; completed?: boolean }>;
   }>;
+}
+
+export interface NutritionWeekPoint {
+  week: number;
+  calories?: number | null;
+  protein?: number | null;
+  expected_weight_lb?: number | null;
+  expected_weight_change_lb?: number | null;
+  maintenance_calories?: number | null;
+  phase?: string;
+}
+
+export interface NutritionTrajectory {
+  plan_id?: string;
+  plan_name?: string;
+  goal?: string;
+  maintenance_calories?: number | null;
+  rationale?: string;
+  weeks: NutritionWeekPoint[];
+  warnings?: string[];
 }
 
 export interface PlanProjection {
@@ -227,6 +265,7 @@ export interface PlanProjection {
    * swapping incline press for cable flies reads as continuity, not a drop.
    */
   muscle_group_history?: Record<string, MuscleGroupDay[]>;
+  nutrition?: NutritionTrajectory | null;
 }
 
 export async function getPlanModes(): Promise<PlanModeOption[]> {
@@ -360,6 +399,10 @@ export async function setExerciseGoal(params: {
   targetRepRange?: [number, number];
   sets?: number;
   notes?: string;
+  targetWeight?: number | null;
+  targetReps?: number | null;
+  targetWeeks?: number | null;
+  clearDestination?: boolean;
 }): Promise<PlanEnvelope> {
   const res = await apiClient.post("/api/training-plan/exercise-goal", {
     day_name: params.dayName,
@@ -370,6 +413,10 @@ export async function setExerciseGoal(params: {
     target_rep_range: params.targetRepRange ?? null,
     sets: params.sets ?? null,
     notes: params.notes ?? null,
+    target_weight: params.targetWeight ?? null,
+    target_reps: params.targetReps ?? null,
+    target_weeks: params.targetWeeks ?? null,
+    clear_destination: params.clearDestination ?? null,
   });
   return { plan: res.data.plan, progress: res.data.progress };
 }

@@ -75,6 +75,7 @@ export default function AIHub() {
             onOpenNutritionPlan={() =>
               navigation.navigate("Nutrition", { tab: "updates" })
             }
+            onOpenTrainingPlan={() => setActiveTab("plan")}
           />
         ) : activeTab === "plan" ? (
           <PlanTab onAskCoach={askCoach} onOpenPlanMode={openPlanMode} />

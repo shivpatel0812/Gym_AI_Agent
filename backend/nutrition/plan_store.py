@@ -45,11 +45,9 @@ class NutritionPlanStore:
         return candidates[0]
 
     def list_plans(self, limit: int = 30) -> List[Dict[str, Any]]:
-        try:
-            docs = list(self._collection().limit(limit).stream())
-        except Exception as e:
-            print(f"Warning: could not list nutrition plans: {e}")
-            return []
+        # A database outage is not evidence that the user has no plan. Let
+        # callers report a retryable failure instead of returning empty data.
+        docs = list(self._collection().limit(limit).stream())
         plans = [{"id": d.id, **(d.to_dict() or {})} for d in docs]
         plans.sort(key=lambda p: p.get("created_at") or "", reverse=True)
         return plans

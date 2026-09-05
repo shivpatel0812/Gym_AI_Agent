@@ -20,6 +20,8 @@ export type LoggedSession = {
   e1rm: number;
   /** No set in this session carried external load. */
   isBodyweight: boolean;
+  /** Firestore workout session id when the server provided one. */
+  sessionId?: string;
 };
 
 /**
@@ -46,6 +48,8 @@ export type ChartPoint = {
   sessions?: LoggedSession[];
   trend?: SessionTrend;
   label?: string;
+  /** When set, the scrub badge shows this instead of "value unit · label". */
+  scrubText?: string;
 };
 
 export type ExerciseChart = {
@@ -145,6 +149,7 @@ type RawSet = {
 };
 type RawSession = {
   date?: string;
+  session_id?: string;
   sets?: RawSet[];
   top_set?: { weight?: number; reps?: number } | null;
 };
@@ -173,6 +178,7 @@ export function rawSessionsFor(exercise: ProjectedExercise): RawSession[] {
 export function getSessionRecords(exercise: ProjectedExercise): LoggedSession[] {
   const byDate = new Map<string, RawSet[]>();
   const topByDate = new Map<string, { weight: number; reps: number }>();
+  const idByDate = new Map<string, string>();
 
   for (const session of rawSessionsFor(exercise)) {
     const date = String(session.date);
@@ -181,6 +187,10 @@ export function getSessionRecords(exercise: ProjectedExercise): LoggedSession[] 
     const sets = byDate.get(date) || [];
     sets.push(...(session.sets || []));
     byDate.set(date, sets);
+
+    if (session.session_id && !idByDate.has(date)) {
+      idByDate.set(date, session.session_id);
+    }
 
     if (session.top_set && !topByDate.has(date)) {
       topByDate.set(date, {
@@ -241,6 +251,7 @@ export function getSessionRecords(exercise: ProjectedExercise): LoggedSession[] 
       topSet: { weight: topSet.weight, reps: topSet.reps },
       e1rm,
       isBodyweight,
+      sessionId: idByDate.get(date),
     });
   }
 
@@ -353,6 +364,7 @@ export function buildMuscleGroupPoints(days: MuscleGroupDay[]): ChartPoint[] {
       });
     }
 
+    const setCount = sessions.reduce((n, session) => n + session.sets.length, 0);
     raw.push({
       key: `mg-${day.date}`,
       date: day.date,
@@ -360,7 +372,10 @@ export function buildMuscleGroupPoints(days: MuscleGroupDay[]): ChartPoint[] {
       value: day.stimulus,
       session: sessions[0],
       sessions,
-      label: `${sessions.length} lift${sessions.length === 1 ? "" : "s"}`,
+      // Scrub shows sets, not the stimulus number — "537 volume" was meaningless
+      // next to the set list the callout already renders.
+      scrubText: `${setCount} set${setCount === 1 ? "" : "s"}`,
+      label: `${setCount} set${setCount === 1 ? "" : "s"}`,
     });
     prevDate = day.date;
   }

@@ -1,3 +1,4 @@
+import { localDateKey } from "../../lib/localDate";
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -17,7 +18,7 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
   const [showForm, setShowForm] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [formData, setFormData] = useState<HydrationEntry>({
-    date: new Date().toISOString().split('T')[0],
+    date: localDateKey(),
     amount_cups: 0,
     notes: '',
   });
@@ -55,7 +56,7 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
         await apiClient.post('/api/hydration', formData);
       }
       setFormData({
-        date: new Date().toISOString().split('T')[0],
+        date: localDateKey(),
         amount_cups: 0,
         notes: '',
       });
@@ -80,7 +81,7 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
 
   const handleCancel = () => {
       setFormData({
-        date: new Date().toISOString().split('T')[0],
+        date: localDateKey(),
         amount_cups: 0,
         notes: '',
       });
@@ -195,4 +196,3 @@ export default function HydrationSection({ editEntryId: propEditEntryId }: Hydra
     </div>
   );
 }
-

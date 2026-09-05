@@ -61,6 +61,7 @@ function series(
 }
 
 export default function QuickLogBars({
+  available = { sleep: true, stress: true, wellness: true, water: true },
   sleepHours,
   sleepQuality,
   stressLevel,
@@ -78,6 +79,7 @@ export default function QuickLogBars({
   onOpenStress,
   onLockScroll,
 }: {
+  available?: { sleep: boolean; stress: boolean; wellness: boolean; water: boolean };
   sleepHours: number | null;
   sleepQuality: number | null;
   stressLevel: number | null;
@@ -160,13 +162,13 @@ export default function QuickLogBars({
     <View>
       <View style={styles.head}>
         <Text style={styles.sectionLabel}>Quick log</Text>
-        <TouchableOpacity onPress={() => setHistory("stress")} hitSlop={8}>
+        <TouchableOpacity disabled={!available.stress} onPress={() => setHistory("stress")} hitSlop={8}>
           <Text style={styles.historyLink}>History</Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.row}>
-        <View style={styles.card}>
+        {available.sleep ? <View style={styles.card}>
           <TouchableOpacity onPress={() => setHistory("sleep")} activeOpacity={0.8}>
             <Text style={styles.cardLabel}>Sleep</Text>
             <Text style={[styles.cardValue, { color: "#A78BFA" }]}>
@@ -194,9 +196,9 @@ export default function QuickLogBars({
             maximumTrackTintColor="#1E2A38"
             thumbTintColor="#A78BFA"
           />
-        </View>
+        </View> : null}
 
-        <View style={styles.card}>
+        {available.stress ? <View style={styles.card}>
           <TouchableOpacity onPress={() => setHistory("stress")} activeOpacity={0.8}>
             <Text style={styles.cardLabel}>Stress</Text>
             <Text style={[styles.cardValue, { color: stressColor }]}>
@@ -220,11 +222,11 @@ export default function QuickLogBars({
             maximumTrackTintColor="#1E2A38"
             thumbTintColor={stressColor}
           />
-        </View>
+        </View> : null}
       </View>
 
       <View style={styles.bottomRow}>
-        <TouchableOpacity
+        {available.wellness ? <TouchableOpacity
           style={styles.wellness}
           onPress={onOpenWellness}
           activeOpacity={0.85}
@@ -239,9 +241,9 @@ export default function QuickLogBars({
             </Text>
           </View>
           <MaterialCommunityIcons name="chevron-right" size={16} color="#55647A" />
-        </TouchableOpacity>
+        </TouchableOpacity> : null}
 
-        <View style={styles.waterCard}>
+        {available.water ? <View style={styles.waterCard}>
           <View style={styles.waterTop}>
             <MaterialCommunityIcons name="cup-water" size={14} color={WATER} />
             <Text style={styles.cardLabel}>Water</Text>
@@ -294,7 +296,7 @@ export default function QuickLogBars({
               <MaterialCommunityIcons name="plus" size={13} color={WATER} />
             </TouchableOpacity>
           </View>
-        </View>
+        </View> : null}
       </View>
 
       <Modal visible={history != null} transparent animationType="slide" onRequestClose={() => setHistory(null)}>

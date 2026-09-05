@@ -1,3 +1,4 @@
+import { localDateKey } from "../../lib/localDate";
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -17,7 +18,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
   const [showForm, setShowForm] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [formData, setFormData] = useState<WellnessSurvey>({
-    date: new Date().toISOString().split('T')[0],
+    date: localDateKey(),
     fatigue: 5,
     body_aches: 5,
     energy: 5,
@@ -58,7 +59,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
         await apiClient.post('/api/wellness-survey', formData);
       }
       setFormData({
-        date: new Date().toISOString().split('T')[0],
+        date: localDateKey(),
         fatigue: 5,
         body_aches: 5,
         energy: 5,
@@ -95,7 +96,7 @@ export default function WellnessSurveySection({ editEntryId: propEditEntryId }: 
 
   const handleCancel = () => {
     setFormData({
-      date: new Date().toISOString().split('T')[0],
+      date: localDateKey(),
       fatigue: 5,
       body_aches: 5,
       energy: 5,

@@ -85,7 +85,6 @@ function MuscleGroupBlock({
         points={points}
         height={112}
         accent={colors.accentPrimary}
-        unit="volume"
         onScrub={onScrub}
       />
       {scrubSessions.length ? (

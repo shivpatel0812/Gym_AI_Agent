@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File, Form
 from typing import Optional, List, Dict
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 import tempfile
 import os
@@ -17,6 +17,8 @@ from models import (
 from nutrition.gpt_food_lookup import estimate_food_from_query
 from nutrition.adjust_estimate import adjust_macro_estimate
 from nutrition.fit_score import score_day, score_food
+from nutrition.logged_meals import slot_for_meal
+from nutrition.meal_timing import stamp_logged_at, summarize_meal_timing
 from nutrition.photo_estimate import normalize_cooking_style
 from nutrition.plan_store import NutritionPlanStore
 from nutrition.slot_targets import resolve_slot_targets
@@ -29,6 +31,7 @@ from nutrition.photo_log_store import (
 import re
 from auth import get_user_id
 from db import db
+from user_time import now as user_now
 from nutrition import analyze_food_image
 
 router = APIRouter(prefix="/api/macros", tags=["macros"])
@@ -305,6 +308,21 @@ def _with_fit(entry: dict, context) -> dict:
     }
 
 
+def _stamp_food_times(macro_dict: dict, user_id: str) -> None:
+    """
+    Give every new row a log time on the user's clock.
+
+    Existing stamps survive, which is what keeps a breakfast logged at 7am from
+    being re-dated to 9pm when dinner is added to the same day -- an update
+    rewrites the whole day's list. See nutrition/meal_timing.py.
+    """
+    try:
+        stamped_at = user_now(db, user_id).isoformat(timespec="seconds")
+    except Exception:
+        stamped_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    macro_dict["food_items"] = stamp_logged_at(macro_dict.get("food_items") or [], stamped_at)
+
+
 @router.get("")
 async def get_macro_entries(user_id: str = Depends(get_user_id), date_filter: Optional[str] = Query(None)):
     macros_ref = db.collection("users").document(user_id).collection("macros")
@@ -319,6 +337,31 @@ async def get_macro_entries(user_id: str = Depends(get_user_id), date_filter: Op
         for macro in macros
     ]
 
+@router.get("/meal-timing")
+async def get_meal_timing(
+    days: int = Query(30, ge=1, le=180),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    When this user actually eats: per-slot clock habits, daily eating windows,
+    and the slot corrections they have made by hand.
+
+    Declared above the write routes only for readability -- it reads the same
+    `macros` collection the day view does, no extra bookkeeping collection.
+    """
+    try:
+        cutoff = user_now(db, user_id) - timedelta(days=days)
+    except Exception:
+        cutoff = datetime.now() - timedelta(days=days)
+    horizon = cutoff.strftime("%Y-%m-%d")
+    macros_ref = db.collection("users").document(user_id).collection("macros")
+    entries = [
+        {"id": doc.id, **(doc.to_dict() or {})}
+        for doc in macros_ref.where("date", ">=", horizon).stream()
+    ]
+    return summarize_meal_timing(entries)
+
+
 @router.post("")
 async def create_macro_entry(macro_entry: MacroEntry, user_id: str = Depends(get_user_id)):
     macro_dict = macro_entry.dict(exclude={"id"})
@@ -332,6 +375,7 @@ async def create_macro_entry(macro_entry: MacroEntry, user_id: str = Depends(get
         macro_dict["total_fats"] = sum(item.get("fats", 0) or 0 for item in macro_dict["food_items"])
     if not macro_dict.get("food_items"):
         macro_dict["food_items"] = []
+    _stamp_food_times(macro_dict, user_id)
     macro_dict["created_at"] = datetime.now().isoformat()
     doc_ref = db.collection("users").document(user_id).collection("macros").document()
     doc_ref.set(macro_dict)
@@ -354,6 +398,7 @@ async def update_macro_entry(macro_id: str, macro_entry: MacroEntry, user_id: st
         macro_dict["total_fats"] = sum(item.get("fats", 0) or 0 for item in macro_dict["food_items"])
     if not macro_dict.get("food_items"):
         macro_dict["food_items"] = []
+    _stamp_food_times(macro_dict, user_id)
     macro_dict["updated_at"] = datetime.now().isoformat()
     doc_ref = db.collection("users").document(user_id).collection("macros").document(macro_id)
     prev_snap = doc_ref.get()
@@ -649,7 +694,8 @@ async def preview_fit(payload: FitPreviewRequest, user_id: str = Depends(get_use
     if not context:
         return {"fit": None}
     item = payload.dict()
-    slot = str(item.get("meal") or "").strip().lower()
+    raw_meal = str(item.get("meal") or "").strip().lower()
+    slot = slot_for_meal(raw_meal) or raw_meal
     return {
         "fit": score_food(
             item,
@@ -657,6 +703,7 @@ async def preview_fit(payload: FitPreviewRequest, user_id: str = Depends(get_use
             daily_calories=context["daily_calories"],
             daily_protein=context["daily_protein"],
             slot_target=context["slot_targets"].get(slot),
+            slot=slot or None,
         )
     }
 

@@ -23,7 +23,7 @@ PLAN_MODE_HISTORY_MESSAGES = 40
 # Plan-mode interviews pull more records and write longer answers
 PLAN_MAX_TOOL_ROUNDS = 4
 PLAN_MAX_TOOL_CALLS = 8
-PLAN_MAX_TOKENS = 1200
+PLAN_MAX_TOKENS = 1800
 # Prepended to every coach system prompt. Keeps the model inside a fitness-coach
 # scope and out of diagnosis, and gives it a fixed response for the two topics
 # that carry real risk in a calorie-and-training app.
@@ -110,10 +110,11 @@ def fresh_log_tool(message: str) -> Optional[str]:
     """Pick the log reader that must run first, or ``required`` if ambiguous."""
     if not asks_about_fresh_personal_data(message):
         return None
-    nutrition = bool(_NUTRITION_DATA_RE.search(message))
-    workout = bool(_WORKOUT_DATA_RE.search(message))
+    text = str(message or "")
+    nutrition = bool(_NUTRITION_DATA_RE.search(text))
+    workout = bool(_WORKOUT_DATA_RE.search(text))
     if nutrition and not workout:
-        if _REMAINING_NUTRITION_RE.search(message):
+        if _REMAINING_NUTRITION_RE.search(text):
             return "get_today_remaining"
         return "get_nutrition_log"
     if workout and not nutrition:
@@ -122,6 +123,44 @@ def fresh_log_tool(message: str) -> Optional[str]:
     # training questions still have to use a tool, while leaving the model
     # free to issue both relevant reads in parallel.
     return "get_recent_activity"
+
+
+_PLAN_IMPROVE_RE = re.compile(
+    r"\b(improve|update|edit|fix|change|fill|complete|rebuild)\b.{0,40}\b"
+    r"(my |the )?(plan|program|split|routine)\b"
+    r"|\b(add|put|include)\b.{0,40}\b(to |on |in )?(my |the )?(plan|day|push|pull|legs)\b",
+    re.IGNORECASE,
+)
+
+
+def required_tool_for_turn(
+    message: str,
+    mode: str,
+    conversation_history: Optional[List[Dict]] = None,
+) -> Optional[str]:
+    """
+    First-round tool the API must invoke, if any.
+
+    Plan Mode always reads recent sessions on the opening turn so the interview
+    cannot invent a split while logs sit unread. Improve-my-plan asks force a
+    training-plan read so edits target real day names.
+    """
+    fresh = fresh_log_tool(message)
+    if fresh:
+        return fresh
+
+    history = conversation_history or []
+    user_turns = sum(
+        1 for m in history if str(m.get("role") or "").lower() == "user"
+    )
+
+    if mode == "plan" and user_turns == 0:
+        return "get_recent_sessions"
+
+    if _PLAN_IMPROVE_RE.search(str(message or "")):
+        return "get_training_plan"
+
+    return None
 
 
 def clean_for_json(obj: Any) -> Any:
@@ -545,6 +584,13 @@ coaching from them. Emphasis was NOT applied to their training."""
     ) -> str:
         """Interview prompt used when the user is designing a training plan."""
         split_json = json.dumps(split_context or {"days": []}, indent=2, default=str)
+        plan_snapshot = ""
+        if toolbox is not None:
+            try:
+                plan_snapshot = toolbox.compact_active_plan()
+            except Exception:
+                plan_snapshot = ""
+
         prompt = f"""You are in PLAN MODE. Your job is to interview this user until you can design a training plan that actually fits them — not to give generic coaching advice.
 {SAFETY_RAILS}
 
@@ -555,19 +601,30 @@ Today is {today.strftime('%A, %B %d, %Y')}.
 CURRENT SPLIT (their normal routine, reconstructed from logged workouts when the split itself only stores day names):
 {split_json}
 
+{plan_snapshot}
+
 How to run the interview:
 - Start from what they just said. Ask 1–2 follow-up questions at a time, not a long checklist.
-- Ground questions in their actual split, lifts, and recent training. Call tools to inspect recent sessions, exercise history, personal records, recovery, and their current split before assuming anything.
+- ALWAYS open the structure question early if they have logged workouts: "Do you want to follow the workout structure you already do (I can pull specific past sessions), tweak it, or rebuild?" Do not invent a brand-new split when their logs already show Push/Pull/Legs (or similar).
+- Call get_recent_sessions (14+ days) early. When they pick a past day as a template, call get_workout_session for that date and use those exercises — not a one-lift conversation.
+- Ground questions in their actual split, lifts, and recent training. Call tools before assuming.
 - Cover, across the conversation (skip anything already answered or obvious from their data):
   1. The specific goal and how they'll know it worked (e.g. a lift, a look, a race).
   2. Timeline / block length.
   3. Days per week and session length they can actually keep.
   4. Equipment and injuries / pain.
   5. How much their current split can change: keep it (follow), tweak it (adapt), or rebuild (build for me).
-  6. Which lifts or qualities should be the priority.
+  6. Which lifts or qualities should be the priority (building vs maintaining vs support).
   7. Recovery constraints (sleep, stress, travel).
-- Be conversational and precise. Reference real numbers from their logs.
-- Do NOT output a JSON plan, full weekly spreadsheet, or exercise list to activate. When you have enough, summarise the brief in a few bullets and tell them to tap Generate Plan so the program can be built and reviewed.
+- Be conversational and precise. Reference real numbers and dates from their logs.
+- FULL WEEK DRAFT (required before Generate): Once you know the split shape, write out EVERY training day with its full exercise list in chat — not only the focus lift. Example:
+  **Push** — Incline DB Press (building), Flat press, Laterals, Triceps…
+  **Pull** — …
+  **Legs** — …
+  Mark building vs maintaining. Invite them to swap a day for a specific logged session ("use Aug 12 Push?").
+- Under-filling is the failure mode to avoid: chatting about incline must still leave Pull and Legs complete.
+- Do NOT output JSON. When they confirm the day lists, summarise the brief in a few bullets and tell them to tap Generate Plan so the program can be built and reviewed.
+- If they already have an ACTIVE plan and want improvements (fill missing days, retarget a lift), call propose_plan_edits with structure and/or field ops so they can Accept on Plan Hub — do not claim the live plan changed.
 - If they ask to generate now and you still have a critical gap, ask that one question first.
 
 Where a metric reads "not logged", say you don't have that data instead of guessing."""
@@ -575,7 +632,7 @@ Where a metric reads "not logged", say you don't have that data instead of guess
         if toolbox is not None:
             prompt += """
 
-Use tools in this mode. Look up recent sessions and the current split early so follow-ups are specific (e.g. "You've been pressing incline once a week — want a second day?"). If a tool returns no data, say so plainly."""
+Use tools in this mode. Look up recent sessions and the current split on the first turn so follow-ups are specific (e.g. "You've been pressing incline once a week — want a second day?"). If a tool returns no data, say so plainly. Prefer replace_day_exercises when filling a sparse day from a real logged workout."""
         return prompt
 
     def _build_nutrition_mode_prompt(
@@ -649,6 +706,11 @@ Use tools in this mode. Look up the nutrition plan, recent eating, and the train
         context = self._build_chatbot_context(summary)
         # Appended once here so every mode (coach, plan, nutrition) inherits it
         context += self._build_body_scan_context(toolbox)
+        if toolbox is not None:
+            try:
+                context += "\n\n" + toolbox.session_digest(days=14)
+            except Exception:
+                pass
         # Relative dates in the question and every tool lookback must share
         # one calendar. The API server commonly runs in UTC, which is already
         # tomorrow during a US evening; using its clock here makes "today" in
@@ -665,17 +727,28 @@ Use tools in this mode. Look up the nutrition plan, recent eating, and the train
                 context, today, nutrition_context, toolbox
             )
         else:
+            plan_snapshot = ""
+            if toolbox is not None:
+                try:
+                    plan_snapshot = "\n\n" + toolbox.compact_active_plan()
+                except Exception:
+                    plan_snapshot = ""
             system_message = f"""You are a personal fitness coach who knows this user's training history and current status.
 {SAFETY_RAILS}
 
 Today is {today.strftime('%A, %B %d, %Y')}.
 
-{context}
+{context}{plan_snapshot}
 
 Provide specific, personalized advice based on their actual data. Be conversational but precise.
-Reference their actual numbers when relevant (sleep hours, training frequency, etc.).
+Reference their actual numbers and named workout days when relevant (sleep hours, training frequency, specific sessions in RECENT WORKOUTS).
 Consider the constraints listed in their profile above in your recommendations.
-Where a metric reads "not logged", say you don't have that data instead of guessing at a value."""
+Where a metric reads "not logged", say you don't have that data instead of guessing at a value.
+
+When the user wants to improve, fix, fill, or edit their training plan, call get_training_plan /
+use ACTIVE TRAINING PLAN, then propose_plan_edits. Prefer filling sparse days from logged
+sessions (replace_day_exercises) over inventing a one-lift plan. Those edits are staged for
+Accept on the Plan tab — never say you already changed the live plan."""
 
             if toolbox is not None:
                 system_message += """
@@ -786,7 +859,9 @@ from them."""
             nutrition_context,
         )
         max_rounds = PLAN_MAX_TOOL_ROUNDS if _is_design_mode(mode) else MAX_TOOL_ROUNDS
-        required_fresh_tool = fresh_log_tool(user_message)
+        required_fresh_tool = required_tool_for_turn(
+            user_message, mode, clean_history
+        )
 
         try:
             total_tokens = 0
@@ -886,7 +961,9 @@ from them."""
             nutrition_context,
         )
         max_rounds = PLAN_MAX_TOOL_ROUNDS if _is_design_mode(mode) else MAX_TOOL_ROUNDS
-        required_fresh_tool = fresh_log_tool(user_message)
+        required_fresh_tool = required_tool_for_turn(
+            user_message, mode, clean_history
+        )
 
         try:
             total_tokens = 0

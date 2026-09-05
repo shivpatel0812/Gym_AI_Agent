@@ -11,7 +11,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { colors } from "../../theme";
 import { bp } from "../../lib/blueprintTheme";
 import Ring from "../nutrition/Ring";
-import { FoodItem } from "../nutrition/types";
+import { FoodItem, NutritionTargets } from "../nutrition/types";
 import {
   GoToItem,
   MealAnchor,
@@ -102,6 +102,7 @@ function goToCount(item: GoToItem, foods: FoodItem[]) {
 
 export default function TodayFoodLog({
   plan,
+  targets,
   todayFoods,
   loggingId,
   onLogMeal,
@@ -111,6 +112,7 @@ export default function TodayFoodLog({
   onBumpFood,
 }: {
   plan: NutritionPlan | null;
+  targets: NutritionTargets;
   todayFoods: FoodItem[];
   loggingId: string | null;
   onLogMeal: (meal: HomeMealId, uncertain?: boolean) => void;
@@ -125,9 +127,8 @@ export default function TodayFoodLog({
   /** Meal the active go-to will log under (defaults to the current time window). */
   const [goToMeal, setGoToMeal] = useState<HomeMealId>(currentMealId());
   const now = currentMealId();
-  const targets = plan?.targets || {};
-  const calTarget = Math.max(Number(targets.calories) || 2200, 1);
-  const proTarget = Math.max(Number(targets.protein) || 175, 1);
+  const calTarget = Math.max(targets.calories, 1);
+  const proTarget = Math.max(targets.protein, 1);
   const totals = mealMacros(todayFoods);
   const calLeft = Math.max(calTarget - totals.calories, 0);
   const calOver = Math.max(totals.calories - calTarget, 0);

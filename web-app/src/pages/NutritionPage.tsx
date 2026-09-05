@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import apiClient from "../lib/api-client";
+import { auth } from "../lib/firebase";
 import { MacroEntry, FoodItem, HydrationEntry } from "../types";
 import LogFoodForm, { MEALS } from "../components/nutrition/LogFoodModal";
 
@@ -45,11 +46,11 @@ const DEFAULT_TARGETS: NutritionTargets = {
   water: 16,
 };
 
-const TARGETS_STORAGE_KEY = "nutrition-targets";
+const targetsStorageKey = () => `nutrition-targets:${auth.currentUser?.uid || "signed-out"}`;
 
 function loadCachedTargets(): NutritionTargets {
   try {
-    const raw = localStorage.getItem(TARGETS_STORAGE_KEY);
+    const raw = localStorage.getItem(targetsStorageKey());
     if (!raw) return { ...DEFAULT_TARGETS };
     const parsed = JSON.parse(raw);
     return { ...DEFAULT_TARGETS, ...parsed };
@@ -303,6 +304,10 @@ export default function NutritionPage() {
   const [targetDraft, setTargetDraft] = useState<NutritionTargets>(loadCachedTargets);
   const [showTargets, setShowTargets] = useState(false);
   const [savingTargets, setSavingTargets] = useState(false);
+  const [targetSaveError, setTargetSaveError] = useState<string | null>(null);
+  const targetsOpenRef = useRef(showTargets);
+  targetsOpenRef.current = showTargets;
+  const targetRequestRef = useRef(0);
 
   useEffect(() => {
     if (tabParam === "plan" || tabParam === "foods" || tabParam === "today") {
@@ -326,19 +331,21 @@ export default function NutritionPage() {
       console.error("Error fetching nutrition data:", error);
     }
     try {
+      const request = ++targetRequestRef.current;
       const targetsRes = await apiClient.get("/api/user-profile/nutrition-targets");
+      if (request !== targetRequestRef.current) return;
       const loaded = { ...DEFAULT_TARGETS, ...(targetsRes.data || {}) };
       setTargets(loaded);
-      setTargetDraft(loaded);
-      localStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(loaded));
+      if (!targetsOpenRef.current) setTargetDraft(loaded);
+      try { localStorage.setItem(targetsStorageKey(), JSON.stringify(loaded)); } catch { /* Cache is optional. */ }
     } catch (error) {
       console.error("Error fetching nutrition targets:", error);
     }
   }, []);
 
   useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
+    if (hubTab === "today") void fetchAll();
+  }, [hubTab, fetchAll]);
 
   // Day tabs: Today, Yesterday, then 3 prior weekdays
   const dayTabs = useMemo(() => {
@@ -527,18 +534,18 @@ export default function NutritionPage() {
       water: Math.max(0, Number(targetDraft.water) || 0),
     };
     setSavingTargets(true);
+    ++targetRequestRef.current;
+    setTargetSaveError(null);
     try {
       const res = await apiClient.put("/api/user-profile/nutrition-targets", next);
       const saved = { ...DEFAULT_TARGETS, ...(res.data || next) };
       setTargets(saved);
       setTargetDraft(saved);
-      localStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(saved));
+      try { localStorage.setItem(targetsStorageKey(), JSON.stringify(saved)); } catch { /* Server save succeeded. */ }
       setShowTargets(false);
     } catch (error) {
       console.error("Error saving nutrition targets:", error);
-      setTargets(next);
-      localStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(next));
-      setShowTargets(false);
+      setTargetSaveError("Targets were not saved. Your changes are still here; check your connection and try again.");
     } finally {
       setSavingTargets(false);
     }
@@ -562,7 +569,7 @@ export default function NutritionPage() {
     getTodayGuidance(selectedDate)
       .then(setGuidance)
       .catch(() => setGuidance(null));
-  }, [hubTab, selectedDate, totals.calories, totals.protein]);
+  }, [hubTab, selectedDate, totals.calories, totals.protein, targets]);
 
   // Meal anchors power the one-tap "log my usual" shortcut.
   useEffect(() => {
@@ -570,7 +577,7 @@ export default function NutritionPage() {
     getActiveNutritionPlan()
       .then(setPlan)
       .catch(() => setPlan(null));
-  }, [hubTab]);
+  }, [hubTab, targets]);
 
   /** Anchors whose slot maps to this meal row, e.g. Breakfast -> slot "breakfast". */
   const anchorsForMeal = useCallback(
@@ -787,6 +794,8 @@ export default function NutritionPage() {
       {showTargets && (
         <div className="rounded-2xl bg-[#161A22] border border-[#2A2D35] p-5 mb-6">
           <p className="text-sm font-bold text-white mb-1">Daily targets</p>
+          <p className="text-sm text-[#8E8E93]">Changes apply to Home, Nutrition, and your current nutrition plan.</p>
+          {targetSaveError && <p role="alert" className="text-sm text-red-400">{targetSaveError}</p>}
           <p className="text-xs text-[#8E8E93] mb-4">
             These are your goals for every day. Rings and remaining calories use them.
           </p>

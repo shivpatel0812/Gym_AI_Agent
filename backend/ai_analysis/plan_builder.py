@@ -622,6 +622,18 @@ Return only the JSON object."""
                 rep_range = PlanBuilder._rep_range(ex.get("target_rep_range"))
                 if rep_range:
                     entry["target_rep_range"] = rep_range
+                # Destination finish line — weight and reps travel together.
+                try:
+                    tw = float(ex.get("target_weight")) if ex.get("target_weight") is not None else None
+                except (TypeError, ValueError):
+                    tw = None
+                tr = PlanBuilder._clamp(ex.get("target_reps"), 1, 30, None)
+                if tw is not None and tw > 0 and tr is not None:
+                    entry["target_weight"] = round(tw, 1)
+                    entry["target_reps"] = tr
+                    twk = PlanBuilder._clamp(ex.get("target_weeks"), 1, 16, None)
+                    if twk is not None:
+                        entry["target_weeks"] = twk
                 exercises.append(entry)
 
             clean_day = {

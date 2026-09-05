@@ -124,14 +124,10 @@ export default function ScrubbableLineChart({
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (e) => scrubAtRef.current(e.nativeEvent.locationX),
       onPanResponderMove: (e) => scrubAtRef.current(e.nativeEvent.locationX),
-      onPanResponderRelease: () => {
-        setScrubIndex(null);
-        onScrub?.(null);
-      },
-      onPanResponderTerminate: () => {
-        setScrubIndex(null);
-        onScrub?.(null);
-      },
+      // Keep the selected session pinned after release so the set list stays
+      // on screen — clearing on lift made every tap feel broken.
+      onPanResponderRelease: () => {},
+      onPanResponderTerminate: () => {},
     })
   ).current;
 
@@ -243,13 +239,15 @@ export default function ScrubbableLineChart({
         <View style={styles.scrubBadge}>
           <Text style={styles.scrubDate}>{formatShortDate(activePoint.date)}</Text>
           <Text style={styles.scrubValue}>
-            {round(activePoint.value)}
-            {unit ? ` ${unit}` : ""}
-            {activePoint.label ? ` · ${activePoint.label}` : ""}
+            {activePoint.scrubText
+              ? activePoint.scrubText
+              : `${round(activePoint.value)}${unit ? ` ${unit}` : ""}${
+                  activePoint.label ? ` · ${activePoint.label}` : ""
+                }`}
           </Text>
         </View>
       ) : (
-        <Text style={styles.hint}>Drag to inspect a logged session</Text>
+        <Text style={styles.hint}>Tap a point to see that session’s sets</Text>
       )}
     </View>
   );

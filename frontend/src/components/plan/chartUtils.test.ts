@@ -344,6 +344,27 @@ describe("buildMuscleGroupPoints", () => {
     expect(points[0].sessions).toHaveLength(1);
     expect(points[0].sessions?.[0].exerciseName).toBe("Incline Dumbbell Press");
   });
+
+  it("scrubs to set count instead of volume", () => {
+    const points = buildMuscleGroupPoints([
+      {
+        date: "2026-08-29",
+        stimulus: 537,
+        sessions: [
+          {
+            exercise_id: "ex-1",
+            exercise_name: "Incline Dumbbell Press",
+            sets: [
+              { set_number: 1, weight: 80, reps: 3 },
+              { set_number: 2, weight: 80, reps: 4 },
+              { set_number: 3, weight: 70, reps: 6 },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(points[0].scrubText).toBe("3 sets");
+  });
 });
 
 describe("trendColor", () => {

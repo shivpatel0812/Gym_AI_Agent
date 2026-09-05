@@ -198,6 +198,7 @@ class ProgressionEngine:
         exercise_record: Optional[Dict] = None,
         top_lifts: Optional[Dict[str, Any]] = None,
         stale_last_session: Optional[Dict] = None,
+        alternate_day_reference: Optional[Dict] = None,
         focus_goal: Optional[str] = None,
         rep_range_override: Optional[tuple] = None,
         readiness: Optional[Any] = None,
@@ -224,8 +225,15 @@ class ProgressionEngine:
             exercise_record=exercise_record,
             top_lifts=top_lifts,
             stale_last_session=stale_last_session,
+            alternate_day_reference=alternate_day_reference,
             focus_goal=focus_goal,
         )
+
+        if day_intensity:
+            result.reasoning_context = {
+                **(result.reasoning_context or {}),
+                "day_intensity": day_intensity,
+            }
 
         base_config = get_goal_config(user_goal)
         applied_config = resolve_goal_config(user_goal, focus_goal)
@@ -264,6 +272,7 @@ class ProgressionEngine:
         exercise_record: Optional[Dict] = None,
         top_lifts: Optional[Dict[str, Any]] = None,
         stale_last_session: Optional[Dict] = None,
+        alternate_day_reference: Optional[Dict] = None,
         focus_goal: Optional[str] = None,
         rep_range_override: Optional[tuple] = None,
     ) -> ProgressionResult:
@@ -277,11 +286,14 @@ class ProgressionEngine:
             recent_sessions: List of session dicts, most recent first.
                 Each: {date, sets: [{weight, reps, difficulty?, completed?}]}
             num_sets: Number of sets to recommend (from plan_target_sets)
-            day_intensity: "heavy" | "light" | "normal" | None
+            day_intensity: "heavy" | "volume" | "light" | "normal" | None
             heavy_day_weight: For light days, the weight used on heavy day
             exercise_record: Optional dict with exercise model fields
                 (muscle_group, type, name) for custom exercise resolution
             top_lifts: Optional working weights for major compound lifts
+            alternate_day_reference: A recent exposure from another plan day,
+                used only to calibrate the first Heavy/Volume session on this
+                day. It is never evaluated as though it used today's rep band.
             focus_goal: Optional per-exercise goal override (e.g. "strength" on
                 bench while the rest of the program stays hypertrophy). Ignored
                 if unrecognized.
@@ -313,6 +325,21 @@ class ProgressionEngine:
         # 2. Bodyweight (0 increment)?
         if metadata.min_increment_lb == 0.0:
             return self._handle_bodyweight(recent_sessions, num_sets, rep_range, metadata)
+
+        # A repeated lift can have deliberately different Heavy and Volume
+        # prescriptions. On the first exposure for a day, translate the other
+        # day's performance into this rep band rather than judging 80x5 as a
+        # failed attempt at 10 reps or blindly prescribing 80x10.
+        if not recent_sessions and alternate_day_reference:
+            calibrated = self._handle_plan_day_calibration(
+                alternate_day_reference,
+                num_sets,
+                rep_range,
+                metadata,
+                day_intensity,
+            )
+            if calibrated:
+                return calibrated
 
         # 3. No history in the last 30 days → estimate 3 sets they can hit now
         if not recent_sessions:
@@ -371,6 +398,12 @@ class ProgressionEngine:
         # user between two loads indefinitely.
         outcome = evaluate_session(latest_sets, rep_range)
         strategy = select_strategy(metadata, goal_config)
+        if day_intensity == "volume":
+            # Volume work should use repeatable straight sets, even when the
+            # same compound lift uses a top-set shape on its Heavy day.
+            strategy = ProgressionStrategy.BAND
+        elif day_intensity == "heavy" and metadata.compound and rep_range.high <= 8:
+            strategy = ProgressionStrategy.TOP_SET
 
         # 6. Check difficulty ratings
         difficulties = [s.get("difficulty") for s in latest_sets if s.get("difficulty")]
@@ -715,6 +748,95 @@ class ProgressionEngine:
             reasoning_context=context,
         )
 
+    def _handle_plan_day_calibration(
+        self,
+        reference_session: Dict,
+        num_sets: int,
+        rep_range: RepRangeConfig,
+        metadata: ExerciseMetadata,
+        day_intensity: Optional[str],
+    ) -> Optional[ProgressionResult]:
+        """Translate another plan day's performance into today's rep target.
+
+        Epley gives a common capacity estimate across rep bands. A 5% reserve
+        keeps the result suitable for several working sets rather than turning
+        a best-set estimate into a failure target. This is a one-time
+        calibration; future recommendations use this day's own logged history.
+        """
+        usable, has_implausible = self._filter_implausible_sets(
+            reference_session.get("sets") or [], metadata
+        )
+        if not usable:
+            return None
+
+        best = max(
+            usable,
+            key=lambda item: float(item.get("weight") or 0)
+            * (1 + int(item.get("reps") or 0) / 30),
+        )
+        reference_weight = float(best.get("weight") or 0)
+        reference_reps = int(best.get("reps") or 0)
+        if reference_weight <= 0 or reference_reps <= 0:
+            return None
+
+        resolution = self._weight_resolution(metadata)
+        target_reps = rep_range.midpoint
+        reference_e1rm = reference_weight * (1 + reference_reps / 30)
+
+        if day_intensity == "light":
+            estimated_weight = self._round_to_increment(
+                reference_weight * 0.875, resolution
+            )
+            target_reps = rep_range.high
+        else:
+            multi_set_reserve = 0.95
+            raw_weight = (
+                reference_e1rm / (1 + target_reps / 30) * multi_set_reserve
+            )
+            estimated_weight = self._round_to_increment(raw_weight, resolution)
+            if day_intensity == "volume" and target_reps > reference_reps:
+                # A higher-rep exposure must actually step down from the
+                # Heavy-day load, even if coarse equipment rounding says tie.
+                estimated_weight = min(
+                    estimated_weight,
+                    max(resolution, reference_weight - resolution),
+                )
+
+        days_ago = days_since_session(reference_session.get("date"))
+        if days_ago is not None and days_ago > 30:
+            comeback = estimate_comeback_weight(
+                estimated_weight, days_ago, increment=resolution
+            )
+            if comeback:
+                estimated_weight = comeback
+
+        sets = self._straight_sets(
+            num_sets, rep_range, estimated_weight, aim=target_reps
+        )
+        context = {
+            "reason": "plan_day_calibration",
+            "plan_day_calibration": True,
+            "reference_weight": reference_weight,
+            "reference_reps": reference_reps,
+            "reference_day": reference_session.get("split_day"),
+            "estimated_weight": estimated_weight,
+            "target_reps": target_reps,
+            "rep_range": (rep_range.low, rep_range.high),
+        }
+        if has_implausible:
+            context["has_implausible_data"] = True
+        return ProgressionResult(
+            sets=sets,
+            decision=Decision.FIRST_SESSION,
+            confidence="medium",
+            strategy=ProgressionStrategy.BAND.value,
+            guidance=(
+                "Treat set 1 as a calibration: keep 1-2 reps in reserve and "
+                "adjust one equipment increment if needed."
+            ),
+            reasoning_context=context,
+        )
+
     def _filter_implausible_sets(self, sets: List[Dict], metadata=None) -> tuple:
         """
         Filter out implausible set data and flag the session.
@@ -798,7 +920,13 @@ class ProgressionEngine:
         rep_range: RepRangeConfig,
         metadata: ExerciseMetadata,
     ) -> ProgressionResult:
-        """Bodyweight progression: pure rep increases."""
+        """Progress a bodyweight-capable movement without erasing added load.
+
+        ``Bodyweight`` describes the base movement, not necessarily the mode
+        used in a particular session. Pull-ups and dips can contain weighted
+        working sets followed by an unloaded finisher. Those positive values
+        are added load and remain part of the next prescription.
+        """
         if not recent_sessions:
             sets = [
                 RecommendedSet(set_number=i + 1, reps=rep_range.low, weight=0)
@@ -828,22 +956,34 @@ class ProgressionEngine:
         # to be pushed back under: the old min(prev + 1, rep_range.high) handed
         # someone who had just done 11 reps a prescription of 10 — a decrease,
         # labelled "rep increase" — and under a strength band it answered 11
-        # with 6. Bodyweight work has no load to add, so clamping the one
-        # variable that can progress is a dead end by construction.
+        # with 6. For an unloaded set, reps are the only variable that can
+        # progress. For a weighted dip/pull-up set, retain its logged added
+        # load; classifying the exercise as Bodyweight must never zero it out.
+        logged_loads = []
+        for item in latest_sets:
+            try:
+                load = float(item.get("weight") or 0)
+            except (TypeError, ValueError):
+                load = 0
+            logged_loads.append(load if math.isfinite(load) and load > 0 else 0)
+
         new_sets = []
         swept_band = True
+        has_added_load = any(logged_loads)
         for i in range(num_sets):
             if i < len(latest_sets):
                 prev_reps = latest_sets[i].get("reps") or rep_range.low
+                prev_weight = logged_loads[i]
             else:
                 prev_reps = rep_range.low
+                prev_weight = 0
             if prev_reps < rep_range.high:
                 swept_band = False
             new_reps = prev_reps + 1
             new_sets.append(RecommendedSet(
                 set_number=i + 1,
                 reps=new_reps,
-                weight=0,
+                weight=prev_weight,
                 rep_low=rep_range.low,
                 rep_high=rep_range.high,
                 preferred_reps=new_reps,
@@ -853,11 +993,18 @@ class ProgressionEngine:
         # Say so rather than silently prescribing an ever-longer set.
         guidance = None
         if swept_band:
-            guidance = (
-                "You are working above the top of this rep range on bodyweight "
-                "alone — add external load (belt, vest or held plate) and rebuild "
-                f"from {rep_range.low} reps."
-            )
+            if has_added_load:
+                guidance = (
+                    "Your weighted sets are above the top of this rep range — use "
+                    "the next available added-load increment and rebuild from "
+                    f"{rep_range.low} reps."
+                )
+            else:
+                guidance = (
+                    "You are working above the top of this rep range on bodyweight "
+                    "alone — add external load (belt, vest or held plate) and rebuild "
+                    f"from {rep_range.low} reps."
+                )
 
         return ProgressionResult(
             sets=new_sets,
@@ -870,6 +1017,8 @@ class ProgressionEngine:
                 "new_reps": [s.reps for s in new_sets],
                 "rep_range": (rep_range.low, rep_range.high),
                 "above_band": swept_band,
+                "weighted_bodyweight": has_added_load,
+                "added_loads": [s.weight for s in new_sets if s.weight > 0],
             },
         )
 

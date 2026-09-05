@@ -1,3 +1,4 @@
+import { localDateKey } from "../lib/localDate";
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import apiClient from '../lib/api-client';
@@ -13,7 +14,7 @@ export default function ActivityPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingActivity, setEditingActivity] = useState<PhysicalActivity | null>(null);
   const [formData, setFormData] = useState<PhysicalActivity>({
-    date: new Date().toISOString().split('T')[0],
+    date: localDateKey(),
     steps: undefined,
     activity_type: '',
     description: '',
@@ -85,7 +86,7 @@ export default function ActivityPage() {
 
   const resetForm = () => {
     setFormData({
-      date: new Date().toISOString().split('T')[0],
+      date: localDateKey(),
       steps: undefined,
       activity_type: '',
       description: '',

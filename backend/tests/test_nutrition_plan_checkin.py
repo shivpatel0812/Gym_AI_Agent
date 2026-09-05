@@ -97,6 +97,24 @@ def test_low_protein_is_called_out_against_the_slot_floor():
     assert "45g" in verdict["reason"]
 
 
+def test_pre_workout_is_not_flagged_for_low_protein():
+    """A banana before training is fuel — protein is not this slot's job."""
+    target = {
+        "slot": "pre_workout",
+        "calorie_min": 150,
+        "calorie_max": 250,
+        "protein_min": 5,
+    }
+    verdict = fits_target(
+        {"calories": 200, "protein": 1},
+        target,
+        slot="pre_workout",
+    )
+
+    assert verdict["verdict"] == "fits"
+    assert "training fuel" in verdict["reason"]
+
+
 def test_slot_facts_score_each_logged_meal_against_the_slot_target():
     facts = slot_log_facts(
         _entries(),

@@ -1,3 +1,4 @@
+import { localDateKey } from "../lib/localDate";
 import { useEffect, useState } from "react";
 import apiClient from "../lib/api-client";
 import {
@@ -16,37 +17,31 @@ export default function DashboardPage() {
     macros: 0,
     stress: 0,
   });
-  const [loading, setLoading] = useState(true);
+  const [states, setStates] = useState<Record<string, { loaded: boolean; loading: boolean; error: boolean }>>({});
+  const endpoints = {
+    workouts: "workout-sessions", activities: "physical-activities", macros: "macros", stress: "stress",
+  };
 
-  useEffect(() => {
-    fetchStats();
-  }, []);
+  useEffect(() => { void fetchStats(); }, []);
 
-  const fetchStats = async () => {
-    try {
-      const today = new Date().toISOString().split("T")[0];
-      const [sessions, activities, macros, stress] = await Promise.all([
-        apiClient.get(`/api/workout-sessions?date_filter=${today}`),
-        apiClient.get(`/api/physical-activities?date_filter=${today}`),
-        apiClient.get(`/api/macros?date_filter=${today}`),
-        apiClient.get(`/api/stress?date_filter=${today}`),
-      ]);
-      setStats({
-        workouts: sessions.data.length,
-        activities: activities.data.length,
-        macros: macros.data.length,
-        stress: stress.data.length,
-      });
-    } catch (error) {
-      console.error("Error fetching stats:", error);
-    } finally {
-      setLoading(false);
-    }
+  const fetchStats = async (only?: string) => {
+    const today = localDateKey();
+    await Promise.all(Object.entries(endpoints).filter(([key]) => !only || key === only).map(async ([key, endpoint]) => {
+      setStates(prev => ({ ...prev, [key]: { loaded: prev[key]?.loaded || false, loading: true, error: false } }));
+      try {
+        const { data } = await apiClient.get(`/api/${endpoint}?date_filter=${today}`, { timeout: 30000 });
+        setStats(prev => ({ ...prev, [key]: data.length }));
+        setStates(prev => ({ ...prev, [key]: { loaded: true, loading: false, error: false } }));
+      } catch {
+        setStates(prev => ({ ...prev, [key]: { loaded: prev[key]?.loaded || false, loading: false, error: true } }));
+      }
+    }));
   };
 
   const statCards = [
     {
       label: "Workouts Today",
+      key: "workouts",
       value: stats.workouts,
       icon: MdFitnessCenter,
       iconBg: "bg-[#FF6B35]/15",
@@ -54,6 +49,7 @@ export default function DashboardPage() {
     },
     {
       label: "Activities",
+      key: "activities",
       value: stats.activities,
       icon: MdDirectionsRun,
       iconBg: "bg-[#5EEAD4]/15",
@@ -61,6 +57,7 @@ export default function DashboardPage() {
     },
     {
       label: "Macro Entries",
+      key: "macros",
       value: stats.macros,
       icon: MdRestaurant,
       iconBg: "bg-[#F5C542]/15",
@@ -68,6 +65,7 @@ export default function DashboardPage() {
     },
     {
       label: "Wellness",
+      key: "stress",
       value: stats.stress,
       icon: MdFavorite,
       iconBg: "bg-[#C4B5FD]/15",
@@ -98,9 +96,14 @@ export default function DashboardPage() {
                 <Icon className={`${stat.iconColor} text-xl`} />
               </div>
               <p className="text-3xl font-bold text-white mb-1">
-                {loading ? "—" : stat.value}
+                {states[stat.key]?.loaded ? stat.value : "—"}
               </p>
               <p className="text-sm font-medium text-[#8E8E93]">{stat.label}</p>
+              {states[stat.key]?.error && <div role="status" className="text-sm text-[#8E8E93] mt-2">
+                <p>{states[stat.key].loaded ? "Last loaded value; may be out of date." : "Could not load."}</p>
+                <button onClick={() => void fetchStats(stat.key)} className="text-[#FF6B35]">Retry</button>
+              </div>}
+              {states[stat.key]?.loading && <p className="text-sm text-[#8E8E93]">Loading…</p>}
             </div>
           );
         })}

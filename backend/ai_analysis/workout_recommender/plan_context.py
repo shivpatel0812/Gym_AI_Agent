@@ -32,7 +32,10 @@ LIVE_STATUSES = {"active"}
 
 DAY_TYPE_TO_INTENSITY = {
     "heavy": "heavy",
-    "volume": "normal",
+    # Volume is its own prescription mode. Collapsing it to "normal" made a
+    # high-volume day indistinguishable from every other workout and allowed a
+    # heavy-day load/rep target to bleed into it.
+    "volume": "volume",
     "light": "light",
     "deload": "light",
     "normal": "normal",
@@ -49,6 +52,10 @@ class PlanContext:
     target_rep_range: Optional[Tuple[int, int]] = None
     day_type: Optional[str] = None
     target_sets: Optional[int] = None
+    # True when this exercise appears on more than one plan day. The
+    # recommender then progresses each Heavy/Volume exposure from its own
+    # history instead of treating unlike rep bands as one sequence.
+    day_specific_progression: bool = False
     notes: Optional[str] = None
 
     # Transparency — lets the UI say why a recommendation looks the way it does
@@ -78,6 +85,10 @@ class PlanContext:
         }
         if self.target_rep_range:
             data["target_rep_range"] = list(self.target_rep_range)
+        if self.target_sets:
+            data["target_sets"] = self.target_sets
+        if self.day_specific_progression:
+            data["day_specific_progression"] = True
         return {k: v for k, v in data.items() if v is not None}
 
 
@@ -200,7 +211,13 @@ class PlanContextResolver:
         return None
 
     def _find_exercise(
-        self, day: Optional[Dict], plan: Dict, exercise_id: str, exercise_name: str
+        self,
+        day: Optional[Dict],
+        plan: Dict,
+        exercise_id: str,
+        exercise_name: str,
+        *,
+        allow_other_days: bool = True,
     ) -> Tuple[Optional[Dict], Optional[Dict]]:
         """
         Locate the exercise entry, preferring the given day.
@@ -208,22 +225,30 @@ class PlanContextResolver:
         Falls back to scanning every day so an exercise still resolves when the
         client doesn't say which day it belongs to. Returns (exercise, day).
         """
-        def match(entry: Dict) -> bool:
-            if exercise_id and entry.get("exercise_id") == exercise_id:
-                return True
-            return self._names_match(entry.get("exercise_name", ""), exercise_name)
-
         if day:
             for entry in day.get("exercises") or []:
-                if match(entry):
+                if self._entry_matches(entry, exercise_id, exercise_name):
                     return entry, day
+
+        # An explicit day is authoritative. If the user adds a lift to Push B,
+        # it must not silently inherit Push A's strength target merely because
+        # that lift also exists there.
+        if not allow_other_days:
+            return None, day
 
         for candidate_day in plan.get("days") or []:
             for entry in candidate_day.get("exercises") or []:
-                if match(entry):
+                if self._entry_matches(entry, exercise_id, exercise_name):
                     return entry, candidate_day
 
         return None, day
+
+    def _entry_matches(
+        self, entry: Dict, exercise_id: str, exercise_name: str
+    ) -> bool:
+        if exercise_id and entry.get("exercise_id") == exercise_id:
+            return True
+        return self._names_match(entry.get("exercise_name", ""), exercise_name)
 
     # --- resolution -------------------------------------------------------
 
@@ -283,8 +308,24 @@ class PlanContextResolver:
             return context
 
         day = self._find_day(plan, split_day)
-        entry, entry_day = self._find_exercise(day, plan, exercise_id, exercise_name)
+        entry, entry_day = self._find_exercise(
+            day,
+            plan,
+            exercise_id,
+            exercise_name,
+            allow_other_days=not bool(split_day),
+        )
         day = entry_day or day
+
+        matching_days = [
+            candidate_day
+            for candidate_day in plan.get("days") or []
+            if any(
+                self._entry_matches(candidate, exercise_id, exercise_name)
+                for candidate in candidate_day.get("exercises") or []
+            )
+        ]
+        context.day_specific_progression = len(matching_days) > 1
 
         # 2. Day-level plan intent
         if day:
@@ -293,9 +334,12 @@ class PlanContextResolver:
             context.day_name = day.get("day_name")
             context.day_goal = day.get("day_goal")
             context.day_type = day.get("day_type") or day.get("intensity")
+            # The day contributes intent even when it relies on the profile's
+            # goal. Keeping source="profile" hid Volume/Heavy context from the
+            # client and made the card look generic.
+            context.source = "plan_day"
             if is_known_goal(day.get("goal") or ""):
                 context.goal = resolve_goal_key(day["goal"])
-                context.source = "plan_day"
 
         # 1. Exercise-level plan intent (most specific)
         if entry:
@@ -303,13 +347,15 @@ class PlanContextResolver:
             context.plan_name = plan.get("plan_name")
             if is_known_goal(entry.get("goal") or ""):
                 context.goal = resolve_goal_key(entry["goal"])
-                context.source = "plan_exercise"
 
+            # Legacy/generated plans commonly carry only `reps`. It is still
+            # explicit plan intent and must reach the engine when no range was
+            # supplied.
             rep_range = normalize_rep_range(entry.get("target_rep_range"))
+            if rep_range is None:
+                rep_range = normalize_rep_range(entry.get("reps"))
             if rep_range:
                 context.target_rep_range = rep_range
-                if context.source not in ("plan_exercise",):
-                    context.source = "plan_exercise"
 
             if entry.get("priority"):
                 context.priority = entry["priority"]
@@ -323,5 +369,9 @@ class PlanContextResolver:
                 pass
             if entry.get("notes"):
                 context.notes = entry["notes"]
+
+            # Finding the entry is itself the most-specific plan layer; sets,
+            # reps, priority and notes all matter even when `goal` is omitted.
+            context.source = "plan_exercise"
 
         return context

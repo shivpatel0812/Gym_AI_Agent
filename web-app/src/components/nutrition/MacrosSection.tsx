@@ -1,3 +1,4 @@
+import { localDateKey } from "../../lib/localDate";
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -18,7 +19,7 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
   const [showForm, setShowForm] = useState(false);
   const [useIndividualFoods, setUseIndividualFoods] = useState(true);
   const [formData, setFormData] = useState<MacroEntry>({
-    date: new Date().toISOString().split('T')[0],
+    date: localDateKey(),
     food_items: [],
     total_calories: undefined,
     total_protein: undefined,
@@ -130,7 +131,7 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
       }
 
       setFormData({
-        date: new Date().toISOString().split('T')[0],
+        date: localDateKey(),
         food_items: [],
         total_calories: undefined,
         total_protein: undefined,
@@ -152,7 +153,7 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
 
   const handleCancel = () => {
     setFormData({
-      date: new Date().toISOString().split('T')[0],
+      date: localDateKey(),
       food_items: [],
       total_calories: undefined,
       total_protein: undefined,
@@ -662,4 +663,3 @@ export default function MacrosSection({ editEntryId: propEditEntryId }: MacrosSe
     </div>
   );
 }
-

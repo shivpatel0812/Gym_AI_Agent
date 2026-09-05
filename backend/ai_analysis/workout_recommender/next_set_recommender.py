@@ -36,6 +36,15 @@ class NextSetRecommender:
         current_rpe = last.get("rpe")
         metadata = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
         increment = float(metadata.min_increment_lb or 0)
+        session_sets = [
+            *(completed_sets or []),
+            *(remaining_sets or []),
+            *((base_recommendation or {}).get("sets") or []),
+        ]
+        weighted_bodyweight = (
+            metadata.equipment == "Bodyweight"
+            and any(self._number(item.get("weight"), 0) > 0 for item in session_sets)
+        )
 
         fatigue = calculate_session_fatigue(
             exercise_id, exercise_name, current_workout_exercises
@@ -46,7 +55,12 @@ class NextSetRecommender:
             "remaining_sets": remaining_sets,
             "base_recommendation": base_recommendation or {},
             "session_fatigue": fatigue,
-            "equipment": metadata.equipment,
+            "equipment": (
+                "Bodyweight with external added load"
+                if weighted_bodyweight
+                else metadata.equipment
+            ),
+            "load_mode": "weighted_bodyweight" if weighted_bodyweight else "standard",
             "compound": metadata.compound,
             "minimum_weight_increment_lb": increment,
             "personalized_outcomes": learned_context or {},
@@ -63,7 +77,11 @@ class NextSetRecommender:
                         "progressive overload, but never sacrifice form. Do not prescribe failure: "
                         "target 1-2 reps in reserve. A load increase may be at most one available "
                         "equipment increment from the just-completed set. If RPE is 9-10 or reps "
-                        "fell below the range, hold or reduce load. Return JSON with next_set "
+                        "fell below the range, hold or reduce load. Never move a next-set target "
+                        "outside base_recommendation.rep_range; that range is the active plan's "
+                        "Heavy/Volume intent. For weighted bodyweight work, "
+                        "positive weight is external added load; keep it explicit and never silently "
+                        "switch the set to bodyweight-only. Return JSON with next_set "
                         "{weight, rep_low, rep_high, preferred_reps}, reasoning (one sentence), "
                         "and action: repeat|increase|backoff."
                     ),
@@ -99,8 +117,18 @@ class NextSetRecommender:
             proposed_weight = min(proposed_weight, current_weight)
 
         default_reps = max(1, current_reps or 1)
-        low = self._integer(next_set.get("rep_low"), default_reps, 1, 30)
-        high = self._integer(next_set.get("rep_high"), max(low, default_reps), low, 30)
+        prescribed_range = (base_recommendation or {}).get("rep_range")
+        if (
+            isinstance(prescribed_range, (list, tuple))
+            and len(prescribed_range) == 2
+        ):
+            plan_low = self._integer(prescribed_range[0], default_reps, 1, 30)
+            plan_high = self._integer(prescribed_range[1], plan_low, plan_low, 30)
+            low = self._integer(next_set.get("rep_low"), plan_low, plan_low, plan_high)
+            high = self._integer(next_set.get("rep_high"), plan_high, low, plan_high)
+        else:
+            low = self._integer(next_set.get("rep_low"), default_reps, 1, 30)
+            high = self._integer(next_set.get("rep_high"), max(low, default_reps), low, 30)
         preferred = self._integer(next_set.get("preferred_reps"), low, low, high)
 
         return {

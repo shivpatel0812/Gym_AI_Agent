@@ -50,6 +50,38 @@ MIN_SESSIONS_FOR_ADHERENCE = 4
 # over-promise this module exists to avoid.
 DEFAULT_ADHERENCE = 0.75
 
+
+def exercise_sessions_per_week(plan: Dict[str, Any]) -> Dict[str, int]:
+    """
+    How many times each exercise is trained in a calendar week.
+
+    Counted from the weekly schedule and which plan days carry the lift — not
+    from how often a day *name* repeats. Push A and Push B each appear once a
+    week, but incline on both is two sessions; treating each day as frequency 1
+    made the recommendations table collapse to a single "Workout" column.
+    """
+    day_frequency: Dict[str, int] = {}
+    for day_name in (plan.get("weekly_schedule") or {}).values():
+        if not day_name or str(day_name).strip().lower() == "rest":
+            continue
+        key = str(day_name)
+        day_frequency[key] = day_frequency.get(key, 0) + 1
+
+    out: Dict[str, int] = {}
+    for day in plan.get("days") or []:
+        if not isinstance(day, dict):
+            continue
+        day_name = day.get("day_name")
+        freq = day_frequency.get(day_name, 1) if day_name else 1
+        for exercise in day.get("exercises") or []:
+            if not isinstance(exercise, dict):
+                continue
+            ex_id = exercise.get("exercise_id")
+            if not ex_id:
+                continue
+            out[ex_id] = out.get(ex_id, 0) + freq
+    return out
+
 # The most estimated 1RM a projection will claim per week, compounding.
 #
 # A modelling assumption, not a measurement: it is set generously, at roughly
@@ -199,6 +231,11 @@ class ExerciseProjection:
     cardio_best_case: List[CardioWeekPoint] = field(default_factory=list)
     cardio_realistic: List[CardioWeekPoint] = field(default_factory=list)
 
+    # User-stated finish line (e.g. 85×8 in 10 weeks). None when open-ended.
+    destination: Optional[Dict[str, Any]] = None
+    arrived_week: Optional[int] = None
+    reachable: Optional[bool] = None
+
     def to_dict(self) -> Dict[str, Any]:
         if self.is_cardio:
             return self._cardio_dict()
@@ -209,7 +246,16 @@ class ExerciseProjection:
         # to end on a reset.
         end_best = max((p.e1rm for p in self.best_case), default=start)
         end_real = max((p.e1rm for p in self.realistic), default=start)
-        return {
+        # When a destination is set, progress is toward that finish line, not
+        # whatever peak the open walk happened to hit.
+        if self.destination:
+            dest_e1rm = e1rm(
+                self.destination.get("weight"), self.destination.get("reps")
+            )
+            if dest_e1rm > 0:
+                end_best = dest_e1rm
+                end_real = dest_e1rm
+        payload = {
             "exercise_id": self.exercise_id,
             "exercise_name": self.exercise_name,
             "day_name": self.day_name,
@@ -226,6 +272,11 @@ class ExerciseProjection:
                 "realistic_pct": round((end_real - start) / start * 100, 1) if start else None,
             },
         }
+        if self.destination:
+            payload["destination"] = self.destination
+            payload["arrived_week"] = self.arrived_week
+            payload["reachable"] = self.reachable
+        return payload
 
     def _cardio_dict(self) -> Dict[str, Any]:
         start = self.cardio_current.minutes if self.cardio_current else 0
@@ -326,6 +377,34 @@ def measure_adherence(
     )
 
 
+def _hits_destination(point: WeekPoint, dest_weight: float, dest_reps: int) -> bool:
+    """A prescribed top set meets the finish line (load and reps, not e1RM alone)."""
+    return point.weight >= dest_weight and point.reps >= dest_reps
+
+
+def _parse_destination(
+    target_weight: Any, target_reps: Any, target_weeks: Any
+) -> Optional[Dict[str, Any]]:
+    try:
+        weight = float(target_weight) if target_weight is not None else None
+    except (TypeError, ValueError):
+        weight = None
+    try:
+        reps = int(float(target_reps)) if target_reps is not None else None
+    except (TypeError, ValueError):
+        reps = None
+    if weight is None or weight <= 0 or reps is None or reps <= 0:
+        return None
+    out: Dict[str, Any] = {"weight": round(weight, 1), "reps": reps}
+    try:
+        weeks = int(float(target_weeks)) if target_weeks is not None else None
+    except (TypeError, ValueError):
+        weeks = None
+    if weeks is not None:
+        out["weeks"] = max(1, min(MAX_PROJECTION_WEEKS, weeks))
+    return out
+
+
 class PlanProjector:
     """Projects an Active Plan forward on a weekly axis."""
 
@@ -347,6 +426,9 @@ class PlanProjector:
         adherence: float = DEFAULT_ADHERENCE,
         exercise_record: Optional[Dict] = None,
         top_lifts: Optional[Dict] = None,
+        target_weight: Optional[float] = None,
+        target_reps: Optional[int] = None,
+        target_weeks: Optional[int] = None,
     ) -> ExerciseProjection:
         """
         Walk the real engine forward, assuming every prescription is met.
@@ -355,7 +437,15 @@ class PlanProjector:
         this the *ceiling* rather than a forecast. The realistic line is derived
         from it afterwards rather than simulated separately, so the two can
         never tell contradictory stories about the same plan.
+
+        When a destination (weight × reps) is set, the horizon prefers
+        target_weeks and the walk holds once the finish line is hit.
         """
+        destination = _parse_destination(target_weight, target_reps, target_weeks)
+        if destination and destination.get("weeks"):
+            weeks = destination["weeks"]
+        weeks = max(1, min(MAX_PROJECTION_WEEKS, int(weeks)))
+
         sessions_per_week = max(1, sessions_per_week)
         simulated = _normalize_history_sets(history)
         seeded = bool(simulated)
@@ -407,10 +497,47 @@ class PlanProjector:
         schedule: List[WeekPoint] = []
         baseline_e1rm = current.e1rm if current else None
         plateaued_at: Optional[int] = None
+        arrived_week: Optional[int] = None
+        hold_after_destination = False
 
         for week in range(1, weeks + 1):
             point = None
             sessions_recorded = 0
+
+            # Once the finish line is hit, hold that prescription for the rest
+            # of the horizon rather than inventing further progression.
+            if hold_after_destination and best_case:
+                held = best_case[-1]
+                best_case.append(
+                    WeekPoint(
+                        week=week,
+                        weight=held.weight,
+                        reps=held.reps,
+                        e1rm=held.e1rm,
+                        decision="maintain",
+                    )
+                )
+                for session_index in range(1, sessions_per_week + 1):
+                    schedule.append(
+                        WeekPoint(
+                            week=week,
+                            weight=held.weight,
+                            reps=held.reps,
+                            e1rm=held.e1rm,
+                            decision="maintain",
+                            session=session_index,
+                            sets=list(held.sets) or [
+                                {
+                                    "set_number": i + 1,
+                                    "weight": held.weight,
+                                    "reps": held.reps,
+                                }
+                                for i in range(num_sets)
+                            ],
+                        )
+                    )
+                continue
+
             for session_index in range(1, sessions_per_week + 1):
                 result = self.engine.compute_recommendation(
                     exercise_id=exercise_id,
@@ -468,6 +595,18 @@ class PlanProjector:
                         ],
                     },
                 )
+
+                if (
+                    destination
+                    and arrived_week is None
+                    and _hits_destination(
+                        candidate, destination["weight"], destination["reps"]
+                    )
+                ):
+                    arrived_week = week
+                    hold_after_destination = True
+                    break
+
             if point is None:
                 # Stalled (or nothing to prescribe) — hold the last known point
                 # so the horizon stays a full N weeks rather than truncating.
@@ -519,6 +658,10 @@ class PlanProjector:
             first = best_case[0]
             current = WeekPoint(week=0, weight=first.weight, reps=first.reps, e1rm=first.e1rm)
 
+        reachable = None
+        if destination:
+            reachable = arrived_week is not None
+
         return ExerciseProjection(
             exercise_id=exercise_id,
             exercise_name=exercise_name,
@@ -529,6 +672,9 @@ class PlanProjector:
             realistic=self._stretch(best_case, current, adherence),
             schedule=self._stretch_schedule(schedule, weeks, sessions_per_week, adherence),
             seeded_from_history=seeded,
+            destination=destination,
+            arrived_week=arrived_week,
+            reachable=reachable,
         )
 
     def _project_cardio(

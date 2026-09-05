@@ -51,6 +51,12 @@ BAND = 0.14
 MIN_MAIN_PROTEIN = 20
 MIN_SNACK_PROTEIN = 5
 
+# Slots that exist to fuel training, not to carry protein. Breakfast, lunch,
+# and dinner do that job. A protein floor here is how a banana before the gym
+# gets labelled a failure — fit scoring, slot suggestions, and plan copy all
+# read this set the same way.
+FUEL_SLOTS = frozenset({"pre_workout"})
+
 SLOT_LABELS = {
     "breakfast": "Breakfast",
     "lunch": "Lunch",
@@ -68,6 +74,10 @@ SLOT_FRAMING = {
     "dinner": "is usually the biggest meal",
     "snack": "fills the gaps between meals",
 }
+
+
+def is_fuel_slot(slot: Optional[str]) -> bool:
+    return str(slot or "").strip().lower() in FUEL_SLOTS
 
 # A flexible meal is named, not slotted, so "Dinner out" has to be matched back
 # to a slot the same way the day blueprint does it.
@@ -254,10 +264,13 @@ def derive_slot_targets(plan: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         centre = cal_target * weight
         low = _round_to(centre * (1 - BAND), 25)
         high = _round_to(centre * (1 + BAND), 25)
-        floor = MIN_SNACK_PROTEIN if slot in ("snack", "pre_workout") else MIN_MAIN_PROTEIN
-        protein_min = (
-            max(_round_to(protein_target * weight, 5), floor) if protein_target else None
-        )
+        # Fuel slots get a calorie band only. Deriving a protein floor for them
+        # is what made every banana read as "low protein" to the suggestion AI.
+        if is_fuel_slot(slot) or not protein_target:
+            protein_min = None
+        else:
+            floor = MIN_SNACK_PROTEIN if slot == "snack" else MIN_MAIN_PROTEIN
+            protein_min = max(_round_to(protein_target * weight, 5), floor)
         out[slot] = {
             "slot": slot,
             "calorie_min": max(low, 50),
@@ -295,7 +308,7 @@ def resolve_slot_targets(plan: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             # slot's share of the day. Taking the lower of the two would quietly
             # under-allocate protein and guarantee the daily number is missed, so
             # the higher figure wins.
-            if flex.get("protein_min"):
+            if flex.get("protein_min") and not is_fuel_slot(slot):
                 base["protein_min"] = max(
                     int(flex["protein_min"]), int(base.get("protein_min") or 0)
                 )
@@ -311,8 +324,12 @@ def resolve_slot_targets(plan: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             base["calorie_min"] = int(round(min(low, high)))
             base["calorie_max"] = int(round(max(low, high)))
             base["source"] = "plan"
-        if stored_protein:
+        if stored_protein and not is_fuel_slot(slot):
             base["protein_min"] = int(round(stored_protein))
+        if is_fuel_slot(slot):
+            # Drop any leftover protein floor from derivation or an older plan
+            # so fuel slots never reintroduce the nag through a stored value.
+            base["protein_min"] = None
 
         base["slot"] = slot
         base["stance"] = str(profile.get("stance") or "anchors").strip().lower()
@@ -362,6 +379,11 @@ def slot_description(plan: Dict[str, Any], slot: str, target: Dict[str, Any]) ->
         )
 
     if stance == "eat_out":
+        if is_fuel_slot(slot):
+            return (
+                f"You usually grab {label.lower()} out. Order toward {band} — "
+                "easy carbs that sit well before training, not a protein meal."
+            )
         return (
             f"You usually eat out for {label.lower()}. Order toward {band}{protein_bit} — "
             "lead with the protein and treat the sides as the flexible part."
@@ -406,8 +428,13 @@ def slot_description(plan: Dict[str, Any], slot: str, target: Dict[str, Any]) ->
         )
 
     protein_note = ""
-    if protein and have_protein < protein:
+    if protein and have_protein < protein and not is_fuel_slot(slot):
         protein_note = f" Protein is a little light at {int(have_protein)}g against {int(protein)}g."
+    if is_fuel_slot(slot):
+        return (
+            f"{label} is covered — about {have} kcal of training fuel, "
+            f"inside the {band} this slot should carry."
+        )
     return (
         f"{label} is covered — about {have} kcal and {int(have_protein)}g protein, "
         f"inside the {band} this slot should carry.{protein_note}"

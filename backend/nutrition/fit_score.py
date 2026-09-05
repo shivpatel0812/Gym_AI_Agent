@@ -20,12 +20,17 @@ information and is noise.
 
 What it measures
 ----------------
-Protein pull is the backbone. Every goal here — fat loss, maintenance, muscle —
-is a body-composition goal, and the item's protein per calorie against the
-*day's required* protein per calorie is the one ratio that means the same thing
-under all of them. The rest adjusts for direction: on a deficit, calories are
-the scarce resource and energy density counts against an item; on a surplus,
-getting the calories in is the job and being tiny is the failure mode.
+Protein pull is the backbone for meals that carry the day's protein. Every goal
+here — fat loss, maintenance, muscle — is a body-composition goal, and the
+item's protein per calorie against the *day's required* protein per calorie is
+the one ratio that means the same thing under all of them. The rest adjusts for
+direction: on a deficit, calories are the scarce resource and energy density
+counts against an item; on a surplus, getting the calories in is the job and
+being tiny is the failure mode.
+
+Fuel slots (pre-workout) are the exception. Those meals exist to put carbs in
+before training, so protein density is not the yardstick and the reason line
+never says "low protein".
 
 Scored against the meal slot, not the running day, so an item's score never
 changes because of something logged after it.
@@ -34,6 +39,9 @@ changes because of something logged after it.
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+
+from nutrition.logged_meals import slot_for_meal
+from nutrition.slot_targets import FUEL_SLOTS, is_fuel_slot
 
 # Goals that are trying to add calories. On these, a low-calorie item is not a
 # virtue — it is a meal that failed to do its job.
@@ -126,13 +134,30 @@ def _direction_component(goal: str, calories: float, slot_max: Optional[float]) 
     return DIRECTION_POINTS * 0.6
 
 
+def _normalize_slot(slot: Optional[str], item: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Map free-text meal labels ("pre-workout", "shake") onto blueprint slots."""
+    known = FUEL_SLOTS | {"breakfast", "lunch", "dinner", "snack"}
+    if slot and str(slot).strip().lower() in known:
+        return str(slot).strip().lower()
+    meal = slot or (item or {}).get("meal")
+    return slot_for_meal(meal) or (str(meal).strip().lower() if meal else None)
+
+
 def _reason(
     goal: str,
     protein_ratio: Optional[float],
     calorie_share: Optional[float],
     fiber_per_100: float,
+    slot: Optional[str] = None,
 ) -> str:
     """One short clause naming the dominant factor, always goal-relative."""
+    if is_fuel_slot(slot):
+        # Pre-workout is fuel. Never complain about protein here.
+        if calorie_share is not None and calorie_share >= 1.2:
+            return "Heavy for a pre-workout"
+        if calorie_share is not None and calorie_share < 0.25:
+            return "Light fuel before training"
+        return "Solid training fuel"
     if protein_ratio is not None and protein_ratio >= 1.25:
         return "Strong protein for the calories"
     if calorie_share is not None and calorie_share >= 1.2:
@@ -159,6 +184,7 @@ def score_food(
     daily_calories: Optional[float],
     daily_protein: Optional[float],
     slot_target: Optional[Dict[str, Any]] = None,
+    slot: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Score one logged food against the plan. None when there is no target."""
     day_cal = _num(daily_calories)
@@ -171,7 +197,9 @@ def score_food(
         return None
 
     goal_key = str(goal or "").strip().lower()
+    resolved_slot = _normalize_slot(slot or (slot_target or {}).get("slot"), item)
     slot_max = _num((slot_target or {}).get("calorie_max")) or None
+    fuel = is_fuel_slot(resolved_slot)
 
     if calories < TRIVIAL_CALORIES:
         return {
@@ -189,10 +217,19 @@ def score_food(
     protein_ratio = item_density / required_density if required_density > 0 else None
     calorie_share = calories / slot_max if slot_max else None
 
+    if fuel:
+        # Protein is not this slot's job — award the protein points flat so a
+        # carb snack cannot tank the badge, and lean on calorie fit instead.
+        protein_points = PROTEIN_POINTS * 0.9
+        fiber_points = FIBER_POINTS * 0.4
+    else:
+        protein_points = _protein_component(item_density, required_density)
+        fiber_points = _fiber_component(fiber, calories)
+
     total = (
-        _protein_component(item_density, required_density)
+        protein_points
         + _calorie_component(calories, slot_max)
-        + _fiber_component(fiber, calories)
+        + fiber_points
         + _direction_component(goal_key, calories, slot_max)
     )
     score = max(0, min(100, int(round(total))))
@@ -200,10 +237,18 @@ def score_food(
     return {
         "score": score,
         "band": _band(score),
-        "reason": _reason(goal_key, protein_ratio, calorie_share, fiber / calories * 100),
+        "reason": _reason(
+            goal_key,
+            None if fuel else protein_ratio,
+            calorie_share,
+            fiber / calories * 100,
+            slot=resolved_slot,
+        ),
         "goal": goal_key,
         # Kept so a surprising score can be explained rather than argued with.
-        "protein_ratio": round(protein_ratio, 2) if protein_ratio is not None else None,
+        "protein_ratio": (
+            None if fuel else (round(protein_ratio, 2) if protein_ratio is not None else None)
+        ),
         "slot_share": round(calorie_share, 2) if calorie_share is not None else None,
     }
 
@@ -227,13 +272,14 @@ def score_day(
     weight = 0.0
 
     for item in items or []:
-        slot = str(item.get("meal") or "").strip().lower()
+        slot = _normalize_slot(None, item)
         result = score_food(
             item,
             goal=goal,
             daily_calories=daily_calories,
             daily_protein=daily_protein,
-            slot_target=targets.get(slot),
+            slot_target=targets.get(slot) if slot else None,
+            slot=slot,
         )
         scored.append(result)
         if result and result.get("score") is not None:

@@ -1,3 +1,4 @@
+import { localDateKey } from "../../lib/localDate";
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -17,7 +18,7 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
   const [showForm, setShowForm] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [formData, setFormData] = useState<BodyFeeling>({
-    date: new Date().toISOString().split('T')[0],
+    date: localDateKey(),
     description: '',
   });
 
@@ -54,7 +55,7 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
         await apiClient.post('/api/body-feelings', formData);
       }
       setFormData({
-        date: new Date().toISOString().split('T')[0],
+        date: localDateKey(),
         description: '',
       });
       setEditingEntryId(null);
@@ -78,7 +79,7 @@ export default function BodyFeelingsSection({ editEntryId: propEditEntryId }: Bo
 
   const handleCancel = () => {
     setFormData({
-      date: new Date().toISOString().split('T')[0],
+      date: localDateKey(),
       description: '',
     });
     setEditingEntryId(null);

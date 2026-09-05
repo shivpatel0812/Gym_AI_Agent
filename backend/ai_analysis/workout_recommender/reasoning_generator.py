@@ -67,7 +67,10 @@ class ReasoningGenerator:
         # This state is a UI/data-quality instruction, not coaching prose. Keep
         # it deterministic so an LLM cannot accidentally recommend "0 lbs" or
         # obscure an invalid-history warning.
-        if decision == Decision.NEEDS_STARTING_WEIGHT:
+        if (
+            decision == Decision.NEEDS_STARTING_WEIGHT
+            or reasoning_context.get("plan_day_calibration")
+        ):
             return self._template_reasoning(decision, reasoning_context, exercise_name)
 
         # Try LLM if available
@@ -129,6 +132,13 @@ class ReasoningGenerator:
             parts.append(f"Reps achieved last session: {ctx['prev_reps']}")
         if "new_reps" in ctx:
             parts.append(f"New reps: {ctx['new_reps']}")
+        if ctx.get("weighted_bodyweight"):
+            parts.append(
+                "Movement mode: weighted bodyweight; every positive weight is "
+                "external added load that remains in the prescription"
+            )
+            if ctx.get("added_loads"):
+                parts.append(f"Added loads retained: {ctx['added_loads']} lbs")
         # The band and the aim are what make this readable as coaching rather
         # than arithmetic, so the model needs both to explain the decision.
         if "aim" in ctx:
@@ -189,6 +199,18 @@ class ReasoningGenerator:
             )
 
         if decision == Decision.FIRST_SESSION:
+            if ctx.get("plan_day_calibration"):
+                day = str(ctx.get("day_intensity") or "plan").capitalize()
+                weight = ctx.get("estimated_weight", 0)
+                reps = ctx.get("target_reps", 0)
+                ref_weight = ctx.get("reference_weight", 0)
+                ref_reps = ctx.get("reference_reps", 0)
+                reference_day = ctx.get("reference_day")
+                source = f" on {reference_day}" if reference_day else " on your other plan day"
+                return (
+                    f"{day} day: your {ref_weight:g} lbs × {ref_reps}{source} "
+                    f"calibrates to {weight:g} lbs × {reps}; keep 1-2 reps in reserve."
+                )
             if ctx.get("estimated_from_stale_history"):
                 weight = ctx.get("estimated_weight", 0)
                 prev = ctx.get("prev_weight")
@@ -322,6 +344,11 @@ class ReasoningGenerator:
             return "Starting with a baseline cardio session."
 
         if decision == Decision.BODYWEIGHT_PROGRESS:
+            if ctx.get("weighted_bodyweight"):
+                return (
+                    "Keeping each added load from last time and adding one rep "
+                    "where possible."
+                )
             if ctx.get("above_band"):
                 high = (ctx.get("rep_range") or (None, None))[1]
                 return (

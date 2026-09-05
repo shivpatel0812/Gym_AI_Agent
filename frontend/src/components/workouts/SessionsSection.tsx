@@ -7,6 +7,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
@@ -15,6 +16,9 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import apiClient from "../../api/client";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { auth } from "../../firebase";
+import { workoutDraftStore, newWorkoutId } from "../../lib/workoutDraft";
 import {
   Exercise,
   Split,
@@ -23,6 +27,7 @@ import {
   WorkoutSet,
   TodaysWorkout,
   PlanContextInfo,
+  SessionFormData,
 } from "./types";
 import defaultExercises, { categoryToMuscleGroup } from "../../data/defaultExercises";
 import { colors, spacing, borderRadius } from "../../theme";
@@ -59,6 +64,8 @@ import {
   MUSCLE_GROUP_LABELS,
   muscleGroupsForSplitDay,
   recCopiesLastWorkout,
+  recDropsLastWorkoutLoad,
+  recNeedsAlgorithmRefresh,
   recHasWeightedSets,
   recHasApplicableSets,
   resolveExerciseCategory,
@@ -82,6 +89,9 @@ import {
 interface SessionsSectionProps {
   exercises: Exercise[];
   splits: Split[];
+  /** Open this session once sessions have loaded (from Plan Hub scrub). */
+  initialEditSessionId?: string | null;
+  onInitialEditConsumed?: () => void;
 }
 
 const PLAN_GOAL_LABELS: Record<string, string> = {
@@ -90,6 +100,42 @@ const PLAN_GOAL_LABELS: Record<string, string> = {
   fat_loss: "Fat Loss Focus",
   general: "General Focus",
 };
+
+const PLAN_DAY_LABELS: Record<string, string> = {
+  heavy: "Heavy / Low Volume",
+  volume: "High Volume",
+  light: "Light Day",
+  deload: "Deload",
+  normal: "Normal Day",
+};
+
+type SetEntryField = "reps" | "weight" | "rpe";
+
+const SET_ENTRY_FIELDS: SetEntryField[] = ["reps", "weight", "rpe"];
+
+function setEntryKey(exerciseIdx: number, setIdx: number, field: SetEntryField) {
+  return `${exerciseIdx}:${setIdx}:${field}`;
+}
+
+/** Keep the text the user is actively typing intact (notably `12.`). */
+function normalizeSetEntryDraft(value: string, allowDecimal: boolean) {
+  const normalized = value.replace(/,/g, ".");
+  if (!allowDecimal) return normalized.replace(/\D/g, "");
+
+  const digitsAndDots = normalized.replace(/[^\d.]/g, "");
+  const dotIndex = digitsAndDots.indexOf(".");
+  if (dotIndex < 0) return digitsAndDots;
+
+  const whole = digitsAndDots.slice(0, dotIndex) || "0";
+  const decimal = digitsAndDots.slice(dotIndex + 1).replace(/\./g, "");
+  return `${whole}.${decimal}`;
+}
+
+function numberFromSetEntryDraft(value: string) {
+  if (!value || value === ".") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 
 /**
  * Older saved recommendations may contain paragraph-length LLM prose. Keep
@@ -147,20 +193,29 @@ function compactRecommendationReasoning(recommendation: any): string {
  */
 function planExerciseLabel(ctx?: PlanContextInfo): string | null {
   if (!ctx) return null;
-  if (ctx.source !== "plan_exercise") return null;
+  if (!String(ctx.source || "").startsWith("plan_")) return null;
 
   const parts: string[] = [];
+  if (ctx.day_type) {
+    parts.push(PLAN_DAY_LABELS[ctx.day_type] || ctx.day_type);
+  }
   if (ctx.goal && ctx.goal !== "hypertrophy") {
     parts.push(PLAN_GOAL_LABELS[ctx.goal] || ctx.goal);
   }
   if (ctx.priority === "high") parts.push("High Priority");
-  if (!parts.length && ctx.target_rep_range) {
-    parts.push(`Target ${ctx.target_rep_range[0]}-${ctx.target_rep_range[1]} reps`);
+  if (ctx.target_rep_range) {
+    const [low, high] = ctx.target_rep_range;
+    parts.push(`Target ${low === high ? low : `${low}-${high}`} reps`);
   }
   return parts.length ? parts.join(" · ") : null;
 }
 
-export default function SessionsSection({ exercises, splits }: SessionsSectionProps) {
+export default function SessionsSection({
+  exercises,
+  splits,
+  initialEditSessionId,
+  onInitialEditConsumed,
+}: SessionsSectionProps) {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -194,6 +249,15 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [pendingSave, setPendingSave] = useState(false);
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+  const [restoredTimer, setRestoredTimer] = useState<ReturnType<typeof persistFromSession>>(null);
+  const draftStore = useMemo(() => auth.currentUser
+    ? workoutDraftStore<{ form: SessionFormData; sessionId: string | null; inputs: Record<string, string>; timer: ReturnType<typeof persistFromSession> }>(AsyncStorage, auth.currentUser.uid)
+    : null, []);
+  const draftSessionIdRef = useRef(newWorkoutId());
+  const editorOpenRef = useRef(false);
   const [todaysPlanWorkout, setTodaysPlanWorkout] = useState<TodaysWorkout | null>(null);
   // Purpose of the session being logged, when it came from the Active Plan
   const [activePlanDay, setActivePlanDay] = useState<{
@@ -210,6 +274,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const previousNextSetRequestRef = useRef<Record<string, string>>({});
   const previousSuggestedSetRef = useRef<Record<string, { index: number; set: WorkoutSet }>>({});
   const [updatedSetIndex, setUpdatedSetIndex] = useState<Record<string, number>>({});
+  const [setInputDrafts, setSetInputDrafts] = useState<Record<string, string>>({});
+  const setInputRefs = useRef<Record<string, TextInput | null>>({});
+  const setInputOrderRef = useRef<string[]>([]);
   const fetchedLastRef = useRef<Set<string>>(new Set());
   const formDataRef = useRef(formData);
   const editingSessionIdRef = useRef(editingSessionId);
@@ -219,6 +286,16 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   const autoSaveChainRef = useRef(Promise.resolve(true));
   formDataRef.current = formData;
   editingSessionIdRef.current = editingSessionId;
+  editorOpenRef.current = showForm;
+  setInputOrderRef.current = formData.exercises.flatMap((exercise, exerciseIdx) =>
+    collapsedExercises[exerciseIdx] ||
+    isCardioExercise(exercise) ||
+    !Array.isArray(exercise.sets)
+      ? []
+      : exercise.sets.flatMap((_, setIdx) =>
+          SET_ENTRY_FIELDS.map((field) => setEntryKey(exerciseIdx, setIdx, field))
+        )
+  );
 
   const editingSession = sessions.find((s) => s.id === editingSessionId);
   const weekGroups = useMemo(() => groupSessionsByWeek(sessions), [sessions]);
@@ -247,11 +324,40 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     [exercises]
   );
   const timer = useSessionTimer(
-    showForm ? editingSessionId || "draft" : null,
-    persistFromSession(editingSession)
+    showForm ? `${auth.currentUser?.uid}:${editingSessionId || "draft"}` : null,
+    restoredTimer || persistFromSession(editingSession)
   );
   const timerPersistRef = useRef(timer.getPersist);
   timerPersistRef.current = timer.getPersist;
+
+  useEffect(() => {
+    let cancelled = false;
+    draftStore?.read().then((draft) => {
+      if (cancelled || !draft) return;
+      if (!draft.form || !Array.isArray(draft.form.exercises)) throw new Error("Invalid workout draft");
+      setFormData(draft.form);
+      setEditingSessionId(draft.sessionId);
+      draftSessionIdRef.current = draft.sessionId || newWorkoutId();
+      setSetInputDrafts(draft.inputs || {});
+      setRestoredTimer(draft.timer);
+      setAiRecommendations(hydrateAiRecommendations(draft.form.exercises));
+      setShowForm(true);
+      setPendingSave(true);
+      setDraftNotice("Restored your workout from this device.");
+    }).catch(() => {
+      if (!cancelled) setDraftNotice("Could not restore the local workout draft.");
+    }).finally(() => { if (!cancelled) setDraftReady(true); });
+    if (!draftStore) setDraftReady(true);
+    return () => { cancelled = true; };
+  }, [draftStore]);
+
+  useEffect(() => {
+    if (!draftReady || !showForm || !editorOpenRef.current || !draftStore) return;
+    void draftStore.save({ form: formData, sessionId: editingSessionId || draftSessionIdRef.current,
+      inputs: setInputDrafts, timer: timer.getPersist() }).catch(() => {
+        setDraftNotice("Local backup failed. Keep this workout open until it is saved online.");
+      });
+  }, [draftReady, showForm, formData, editingSessionId, setInputDrafts, timer.isRunning, draftStore]);
 
   const lastExerciseUrl = (exerciseId: string) => {
     const sessionId = editingSessionIdRef.current;
@@ -305,15 +411,29 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   }, [fetchSessions, fetchTodaysPlan]);
 
   useEffect(() => {
+    if (!initialEditSessionId || !sessions.length) return;
+    const match = sessions.find((s) => s.id === initialEditSessionId);
+    if (!match) return;
+    handleEdit(match);
+    onInitialEditConsumed?.();
+    // handleEdit is stable enough for this one-shot open; listing it would
+    // re-fire whenever the form helpers change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialEditSessionId, sessions]);
+
+  useEffect(() => {
     setActiveMuscleFilter(null);
   }, [formData.split_day, formData.split_name]);
 
   const performAutoSave = useCallback(
-    async () => {
+    async (options?: { finalize?: boolean }) => {
       const run = async () => {
+        if (!editorOpenRef.current) return false;
         const data = formDataRef.current;
-        const payload = buildSessionPayload(data, timerPersistRef.current());
-        const canSave = payload.exercises.length > 0 || hasCardioLog(data);
+        const payload = buildSessionPayload(data, timerPersistRef.current(), {
+          preserveUnloggedExercises: !options?.finalize,
+        });
+        const canSave = payload.exercises.length > 0 || hasCardioLog(data) || Boolean(data.notes.trim());
         if (!canSave) {
           // Nothing valid to write. Distinct from a failed request, and not an
           // error while the user is still filling the form in — but it must not
@@ -326,16 +446,16 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
           if (sessionId) {
             await apiClient.put(`/api/workout-sessions/${sessionId}`, payload);
           } else {
-            const response = await apiClient.post("/api/workout-sessions", payload);
-            if (response.data?.id) {
-              editingSessionIdRef.current = response.data.id;
-              setEditingSessionId(response.data.id);
-            }
+            const id = draftSessionIdRef.current;
+            await apiClient.put(`/api/workout-sessions/${id}`, payload);
+            editingSessionIdRef.current = id;
+            setEditingSessionId(id);
           }
           setLastSaved(new Date());
+          if (formDataRef.current === data) setPendingSave(false);
           setSaveError(null);
           fetchSessions();
-          return true;
+          return formDataRef.current === data;
         } catch (error) {
           console.error("Error auto-saving session:", error);
           setSaveError("Auto-save failed");
@@ -355,7 +475,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   );
 
   useEffect(() => {
-    if (!showForm || (formData.exercises.length === 0 && !hasCardioLog(formData))) {
+    if (showForm) setPendingSave(true);
+    if (!showForm || (formData.exercises.length === 0 && !hasCardioLog(formData) && !formData.notes.trim())) {
       return;
     }
     if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
@@ -499,7 +620,14 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         editingSessionId
       );
       const lastSets = lastWorkingSets(lastData);
-      if (!recCopiesLastWorkout(rec, lastSets)) return;
+      // Recommendations saved before weighted-bodyweight support copied the
+      // reps but zeroed every dip/pull-up load. Refresh that stale shape too,
+      // so an in-progress saved session heals after the backend fix.
+      if (
+        !recNeedsAlgorithmRefresh(rec) &&
+        !recCopiesLastWorkout(rec, lastSets) &&
+        !recDropsLastWorkoutLoad(rec, lastData)
+      ) return;
       if (staleRecRetryRef.current.has(ex.exercise_id)) return;
       staleRecRetryRef.current.add(ex.exercise_id);
       void fetchAiRecommendation(ex.exercise_id, ex.exercise_name, idx);
@@ -886,7 +1014,14 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   };
 
   const resetForm = () => {
+    editorOpenRef.current = false;
+    draftSessionIdRef.current = newWorkoutId();
+    setRestoredTimer(null);
+    setDraftNotice(null);
+    setPendingSave(false);
     setFormData(emptySessionForm());
+    setSetInputDrafts({});
+    setInputRefs.current = {};
     setActivePlanDay(null);
     setEditingSessionId(null);
     setShowForm(false);
@@ -920,7 +1055,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     setSaveError(null);
     try {
       timer.stop();
-      const saved = await performAutoSave();
+      const saved = await performAutoSave({ finalize: true });
       if (!saved) {
         // Previously this only bailed when there was no session id yet, so a
         // failed final write to an *existing* session fell through, reset the
@@ -934,6 +1069,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
         return;
       }
       timer.clear();
+      editorOpenRef.current = false;
+      await draftStore?.clear();
       resetForm();
       fetchSessions();
       fetchTodaysPlan();
@@ -945,10 +1082,22 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
   };
 
   const handleCancel = async () => {
-    await performAutoSave();
-    resetForm();
-    fetchSessions();
-    fetchTodaysPlan();
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const hasDraft = formDataRef.current.exercises.length > 0 || Boolean(formDataRef.current.notes.trim());
+      if (hasDraft && !(await performAutoSave())) {
+        setSaveError("Your workout has not saved. Keep it open and retry when connected.");
+        return;
+      }
+      editorOpenRef.current = false;
+      await draftStore?.clear();
+      resetForm();
+      fetchSessions();
+      fetchTodaysPlan();
+    } catch {
+      setSaveError("Could not close the saved draft. Please retry.");
+    } finally { setIsSaving(false); }
   };
 
   const handleEdit = (session: WorkoutSession) => {
@@ -1021,13 +1170,18 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
           sets: emptyWorkoutSets(setCount),
         };
       });
-      setFormData({
+      const nextForm: SessionFormData = {
         ...emptySessionForm(),
         split_id: todayData.split_id || "",
         split_name: todayData.plan_name || "",
         split_day: todayData.day_name || "",
         exercises: planExercises,
-      });
+      };
+      // Recommendation requests start immediately below. React state has not
+      // rendered yet, so update the request source synchronously or Push B can
+      // be sent with Push A/blank context and inherit the wrong plan entry.
+      formDataRef.current = nextForm;
+      setFormData(nextForm);
       setActivePlanDay({
         day_name: todayData.day_name,
         day_goal: todayData.day_goal,
@@ -1158,6 +1312,61 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
       exercises[exerciseIdx] = { ...exercise, sets };
       return { ...prev, exercises };
     });
+  };
+
+  const beginSetEntry = (key: string, value: string) => {
+    setSetInputDrafts((current) =>
+      Object.prototype.hasOwnProperty.call(current, key)
+        ? current
+        : { ...current, [key]: value }
+    );
+  };
+
+  const endSetEntry = (key: string) => {
+    setSetInputDrafts((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, key)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const setEntryValue = (key: string, fallback: string) =>
+    Object.prototype.hasOwnProperty.call(setInputDrafts, key)
+      ? setInputDrafts[key]
+      : fallback;
+
+  const changeSetEntry = (
+    exerciseIdx: number,
+    setIdx: number,
+    field: SetEntryField,
+    rawValue: string
+  ) => {
+    const key = setEntryKey(exerciseIdx, setIdx, field);
+    const draft = normalizeSetEntryDraft(rawValue, field !== "reps");
+    const parsed = numberFromSetEntryDraft(draft);
+    setSetInputDrafts((current) => ({ ...current, [key]: draft }));
+    updateSet(exerciseIdx, setIdx, {
+      [field]: field === "reps" ? (parsed == null ? 0 : Math.trunc(parsed)) : parsed,
+    });
+  };
+
+  const focusNextSetInput = (key: string) => {
+    const order = setInputOrderRef.current;
+    const currentIndex = order.indexOf(key);
+    for (let index = currentIndex + 1; index < order.length; index += 1) {
+      const input = setInputRefs.current[order[index]];
+      if (input) {
+        input.focus();
+        return;
+      }
+    }
+    Keyboard.dismiss();
+  };
+
+  const hasNextSetInput = (key: string) => {
+    const order = setInputOrderRef.current;
+    return order.indexOf(key) < order.length - 1;
   };
 
   const applyWorkoutLiveAction = useCallback(
@@ -1371,6 +1580,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
     { id: "CORE", label: "Core" },
   ];
 
+  if (!draftReady) return <ActivityIndicator color={colors.accentPrimary} />;
+
   if (showForm) {
     const selectedSplit = splits.find((s) => s.id === formData.split_id);
     return (
@@ -1382,7 +1593,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
           ref={sessionScrollRef}
           style={styles.flex}
           contentContainerStyle={styles.formPad}
-          keyboardShouldPersistTaps="handled"
+          keyboardShouldPersistTaps="always"
+          keyboardDismissMode="none"
         >
           {activePlanDay && (activePlanDay.day_goal || activePlanDay.day_type) ? (
             <View style={styles.planBanner}>
@@ -1402,7 +1614,7 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
 
           <View style={styles.sessionHeaderCard}>
             <View style={styles.formHeader}>
-              <TouchableOpacity onPress={handleCancel} style={styles.backBtn}>
+              <TouchableOpacity onPress={handleCancel} disabled={isSaving} accessibilityLabel="Save and close workout" style={styles.backBtn}>
                 <MaterialCommunityIcons name="arrow-left" size={18} color={colors.textSecondary} />
               </TouchableOpacity>
               <View style={styles.flex}>
@@ -1425,31 +1637,28 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                   <View style={styles.saveBadgeInline}>
                     <MaterialCommunityIcons
                       name={
-                        isAutoSaving
+                        saveError ? "cloud-alert" : isAutoSaving
                           ? "cloud-sync-outline"
-                          : lastSaved
+                          : lastSaved && !pendingSave
                             ? "cloud-check-outline"
                             : "cloud-outline"
                       }
                       size={13}
                       color={
-                        isAutoSaving
+                        saveError ? colors.danger : isAutoSaving
                           ? colors.warning
-                          : lastSaved
+                          : lastSaved && !pendingSave
                             ? colors.success
                             : colors.textMuted
                       }
                     />
                     <Text style={styles.saveBadgeText} numberOfLines={1}>
-                      {isAutoSaving
+                      {saveError ? "Failed" : isAutoSaving
                         ? "Saving"
-                        : lastSaved
-                          ? lastSaved.toLocaleTimeString([], {
-                              hour: "numeric",
-                              minute: "2-digit",
-                            })
+                        : lastSaved && !pendingSave
+                          ? "Saved"
                           : formData.exercises.length > 0
-                            ? "Auto-save"
+                            ? "Pending"
                             : ""}
                     </Text>
                   </View>
@@ -1642,7 +1851,8 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
               </Text>
             ) : null}
           </View>
-          {saveError ? <Text style={styles.error}>{saveError}</Text> : null}
+          {draftNotice ? <Text style={styles.error}>{draftNotice}</Text> : null}
+          {saveError ? <TouchableOpacity disabled={isAutoSaving} onPress={() => void performAutoSave()}><Text style={styles.error}>{saveError} Tap to retry.</Text></TouchableOpacity> : null}
 
           <TouchableOpacity
             style={styles.detailsRow}
@@ -2082,6 +2292,9 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                               (lastSet?.weight != null && lastSet.weight > 0
                                 ? lastSet.weight
                                 : undefined);
+                            const repsKey = setEntryKey(idx, setIdx, "reps");
+                            const weightKey = setEntryKey(idx, setIdx, "weight");
+                            const rpeKey = setEntryKey(idx, setIdx, "rpe");
                             return (
                               <View key={setIdx} style={[
                                 styles.setBlock,
@@ -2099,47 +2312,115 @@ export default function SessionsSection({ exercises, splits }: SessionsSectionPr
                                     </Text>
                                   ) : null}
                                 </View>
+                                {/* One shared keypad layout prevents a hide/show cycle when
+                                    moving between reps, weight, and RPE. */}
                                 <TextInput
-                                  keyboardType="number-pad"
-                                  value={set.reps === 0 ? "" : String(set.reps)}
-                                  onChangeText={(v) =>
-                                    updateSet(idx, setIdx, {
-                                      reps: v === "" ? 0 : parseInt(v, 10) || 0,
-                                    })
+                                  ref={(input) => {
+                                    setInputRefs.current[repsKey] = input;
+                                  }}
+                                  keyboardType="decimal-pad"
+                                  keyboardAppearance="dark"
+                                  returnKeyType={hasNextSetInput(repsKey) ? "next" : "done"}
+                                  inputAccessoryViewButtonLabel={
+                                    hasNextSetInput(repsKey) ? "Next" : "Done"
+                                  }
+                                  submitBehavior={
+                                    hasNextSetInput(repsKey) ? "submit" : "blurAndSubmit"
+                                  }
+                                  selectTextOnFocus
+                                  value={setEntryValue(
+                                    repsKey,
+                                    set.reps === 0 ? "" : String(set.reps)
+                                  )}
+                                  onFocus={() =>
+                                    beginSetEntry(
+                                      repsKey,
+                                      set.reps === 0 ? "" : String(set.reps)
+                                    )
+                                  }
+                                  onEndEditing={() => endSetEntry(repsKey)}
+                                  onSubmitEditing={() => focusNextSetInput(repsKey)}
+                                  onChangeText={(value) =>
+                                    changeSetEntry(idx, setIdx, "reps", value)
                                   }
                                   placeholder={
                                     repPlaceholder != null && Number(repPlaceholder) > 0
                                       ? String(repPlaceholder)
                                       : "—"
                                   }
+                                  accessibilityLabel={`${ex.exercise_name}, set ${set.set_number}, reps`}
                                   placeholderTextColor={colors.textMuted}
                                   style={[styles.setInput, { flex: 2 }]}
                                 />
                                 <TextInput
+                                  ref={(input) => {
+                                    setInputRefs.current[weightKey] = input;
+                                  }}
                                   keyboardType="decimal-pad"
-                                  value={set.weight != null ? String(set.weight) : ""}
-                                  onChangeText={(v) =>
-                                    updateSet(idx, setIdx, {
-                                      weight: v ? parseFloat(v) : undefined,
-                                    })
+                                  keyboardAppearance="dark"
+                                  returnKeyType={hasNextSetInput(weightKey) ? "next" : "done"}
+                                  inputAccessoryViewButtonLabel={
+                                    hasNextSetInput(weightKey) ? "Next" : "Done"
+                                  }
+                                  submitBehavior={
+                                    hasNextSetInput(weightKey) ? "submit" : "blurAndSubmit"
+                                  }
+                                  selectTextOnFocus
+                                  value={setEntryValue(
+                                    weightKey,
+                                    set.weight != null ? String(set.weight) : ""
+                                  )}
+                                  onFocus={() =>
+                                    beginSetEntry(
+                                      weightKey,
+                                      set.weight != null ? String(set.weight) : ""
+                                    )
+                                  }
+                                  onEndEditing={() => endSetEntry(weightKey)}
+                                  onSubmitEditing={() => focusNextSetInput(weightKey)}
+                                  onChangeText={(value) =>
+                                    changeSetEntry(idx, setIdx, "weight", value)
                                   }
                                   placeholder={
                                     weightPlaceholder != null && Number(weightPlaceholder) > 0
                                       ? String(weightPlaceholder)
                                       : "—"
                                   }
+                                  accessibilityLabel={`${ex.exercise_name}, set ${set.set_number}, weight`}
                                   placeholderTextColor={colors.textMuted}
                                   style={[styles.setInput, { flex: 2 }]}
                                 />
                                 <TextInput
-                                  keyboardType="number-pad"
-                                  value={set.rpe != null ? String(set.rpe) : ""}
-                                  onChangeText={(v) =>
-                                    updateSet(idx, setIdx, {
-                                      rpe: v ? parseInt(v, 10) : undefined,
-                                    })
+                                  ref={(input) => {
+                                    setInputRefs.current[rpeKey] = input;
+                                  }}
+                                  keyboardType="decimal-pad"
+                                  keyboardAppearance="dark"
+                                  returnKeyType={hasNextSetInput(rpeKey) ? "next" : "done"}
+                                  inputAccessoryViewButtonLabel={
+                                    hasNextSetInput(rpeKey) ? "Next" : "Done"
+                                  }
+                                  submitBehavior={
+                                    hasNextSetInput(rpeKey) ? "submit" : "blurAndSubmit"
+                                  }
+                                  selectTextOnFocus
+                                  value={setEntryValue(
+                                    rpeKey,
+                                    set.rpe != null ? String(set.rpe) : ""
+                                  )}
+                                  onFocus={() =>
+                                    beginSetEntry(
+                                      rpeKey,
+                                      set.rpe != null ? String(set.rpe) : ""
+                                    )
+                                  }
+                                  onEndEditing={() => endSetEntry(rpeKey)}
+                                  onSubmitEditing={() => focusNextSetInput(rpeKey)}
+                                  onChangeText={(value) =>
+                                    changeSetEntry(idx, setIdx, "rpe", value)
                                   }
                                   placeholder="—"
+                                  accessibilityLabel={`${ex.exercise_name}, set ${set.set_number}, RPE`}
                                   placeholderTextColor={colors.textMuted}
                                   style={[styles.setInput, { flex: 1.2 }]}
                                 />

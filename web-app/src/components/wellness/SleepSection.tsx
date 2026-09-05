@@ -1,3 +1,4 @@
+import { localDateKey } from "../../lib/localDate";
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -17,7 +18,7 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
   const [showForm, setShowForm] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [formData, setFormData] = useState<SleepEntry>({
-    date: new Date().toISOString().split('T')[0],
+    date: localDateKey(),
     hours_slept: 8,
     quality: 5,
     bedtime: '',
@@ -58,7 +59,7 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
         await apiClient.post('/api/sleep', formData);
       }
       setFormData({
-        date: new Date().toISOString().split('T')[0],
+        date: localDateKey(),
         hours_slept: 8,
         quality: 5,
         bedtime: '',
@@ -98,7 +99,7 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
 
   const handleCancel = () => {
     setFormData({
-      date: new Date().toISOString().split('T')[0],
+      date: localDateKey(),
       hours_slept: 8,
       quality: 5,
       bedtime: '',
@@ -274,4 +275,3 @@ export default function SleepSection({ editEntryId: propEditEntryId }: SleepSect
     </div>
   );
 }
-

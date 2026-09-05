@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import axios from "axios";
 import apiClient from "@/lib/api-client";
+import { auth } from "@/lib/firebase";
 import { WorkoutSession, WorkoutSet, Exercise, Split, SessionExercise, TodaysWorkout } from "@/types";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
@@ -352,6 +353,7 @@ function lastWorkoutHasWeight(lastData: any): boolean {
  * that returns the same, correct, answer.
  */
 const DELIBERATE_HOLDS = new Set(["maintain", "fill_band", "deload", "light_day"]);
+const CURRENT_RECOMMENDATION_ALGORITHM_VERSION = 1;
 
 function recCopiesLastWorkout(rec: any, lastSets: { reps: number; weight?: number }[]) {
   if (!rec?.sets?.length || !lastSets.length) return false;
@@ -370,6 +372,10 @@ function recHasWeightedSets(rec: any): boolean {
   return Array.isArray(rec?.sets) && rec.sets.some((s: any) => Number(s.weight) > 0);
 }
 
+function recNeedsAlgorithmRefresh(rec: any): boolean {
+  return (Number(rec?.algorithm_version) || 0) < CURRENT_RECOMMENDATION_ALGORITHM_VERSION;
+}
+
 function mapRecSets(rec: any): WorkoutSet[] {
   return rec.sets.map((s: any, i: number) => ({
     set_number: s.set_number || i + 1,
@@ -382,6 +388,7 @@ function mapRecSets(rec: any): WorkoutSet[] {
 function toStoredRecommendation(rec: any) {
   if (!rec || typeof rec !== "object") return undefined;
   return {
+    algorithm_version: rec.algorithm_version,
     sets: rec.sets,
     reasoning: rec.reasoning,
     progression_type: rec.progression_type,
@@ -393,10 +400,41 @@ function toStoredRecommendation(rec: any) {
     branch: rec.branch,
     rep_range: rec.rep_range,
     last_session: rec.last_session,
+    plan_context: rec.plan_context,
     time: rec.time,
     speed: rec.speed,
     generated_at: rec.generated_at || new Date().toISOString(),
   };
+}
+
+const PLAN_GOAL_LABELS: Record<string, string> = {
+  strength: "Strength Focus",
+  hypertrophy: "Hypertrophy Focus",
+  fat_loss: "Fat Loss Focus",
+  general: "General Focus",
+};
+
+const PLAN_DAY_LABELS: Record<string, string> = {
+  heavy: "Heavy / Low Volume",
+  volume: "High Volume",
+  light: "Light Day",
+  deload: "Deload",
+  normal: "Normal Day",
+};
+
+function planExerciseLabel(ctx?: SessionExercise["plan_context"]): string | null {
+  if (!ctx || !String(ctx.source || "").startsWith("plan_")) return null;
+  const parts: string[] = [];
+  if (ctx.day_type) parts.push(PLAN_DAY_LABELS[ctx.day_type] || ctx.day_type);
+  if (ctx.goal && ctx.goal !== "hypertrophy") {
+    parts.push(PLAN_GOAL_LABELS[ctx.goal] || ctx.goal);
+  }
+  if (ctx.priority === "high") parts.push("High Priority");
+  if (ctx.target_rep_range) {
+    const [low, high] = ctx.target_rep_range;
+    parts.push(`Target ${low === high ? low : `${low}-${high}`} reps`);
+  }
+  return parts.length ? parts.join(" · ") : null;
 }
 
 /** A set's rep target: the band when there is one, the single aim otherwise. */
@@ -464,11 +502,16 @@ function sessionToForm(session: WorkoutSession): SessionFormData {
 
 function buildSessionPayload(
   formData: SessionFormData,
-  timer?: { accumulatedMs: number; runningSince: number | null; firstStartedAt: number | null } | null
+  timer?: { accumulatedMs: number; runningSince: number | null; firstStartedAt: number | null } | null,
+  options: { preserveUnloggedExercises?: boolean } = {}
 ) {
   const filteredExercises = formData.exercises
     .map((ex) => {
       if (ex.sets && Array.isArray(ex.sets)) {
+        // Auto-save persists the in-progress layout. Do not discard exercises
+        // the user has not reached yet, or blank future sets on a partially
+        // logged exercise. Final submission still filters them below.
+        if (options.preserveUnloggedExercises) return ex;
         const validSets = ex.sets.filter(isValidSet);
         if (
           validSets.length > 0 ||
@@ -578,10 +621,22 @@ export default function SessionsSection({
   onSessionMetaChange,
   onSessionSummaryChange,
 }: SessionsSectionProps) {
+  const draftKey = `workout-draft:v1:${auth.currentUser?.uid || "signed-out"}`;
+  const [recoveredDraft] = useState(() => {
+    try {
+      const draft = JSON.parse(localStorage.getItem(draftKey) || "null");
+      return draft?.form && Array.isArray(draft.form.exercises) ? draft : null;
+    } catch { return null; }
+  });
+  const newSessionIdRef = useRef(recoveredDraft?.sessionId || crypto.randomUUID());
+  const handledEditRequestRef = useRef<string | null>(recoveredDraft ? propEditSessionId || null : null);
+  const editorOpenRef = useRef(Boolean(recoveredDraft));
+  const [pendingSave, setPendingSave] = useState(Boolean(recoveredDraft));
+  const [draftNotice, setDraftNotice] = useState<string | null>(recoveredDraft ? "Restored your workout from this browser." : null);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
-  const [showForm, setShowForm] = useState(false);
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [formData, setFormData] = useState<SessionFormData>(emptySessionForm);
+  const [showForm, setShowForm] = useState(Boolean(recoveredDraft));
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(recoveredDraft?.sessionId || null);
+  const [formData, setFormData] = useState<SessionFormData>(recoveredDraft?.form || emptySessionForm());
   const [showSplitDropdown, setShowSplitDropdown] = useState(false);
   const [showDayDropdown, setShowDayDropdown] = useState(false);
   const splitDropdownRef = useRef<HTMLDivElement>(null);
@@ -617,13 +672,25 @@ export default function SessionsSection({
   const autoSaveChainRef = useRef(Promise.resolve(true));
   formDataRef.current = formData;
   editingSessionIdRef.current = editingSessionId;
+  editorOpenRef.current = showForm;
   const editingSession = sessions.find((s) => s.id === editingSessionId);
   const timer = useSessionTimer(
-    showForm ? editingSessionId || "draft" : null,
-    persistFromSession(editingSession)
+    showForm ? `${auth.currentUser?.uid}:${editingSessionId || "draft"}` : null,
+    recoveredDraft?.sessionId === editingSessionId ? recoveredDraft.timer : persistFromSession(editingSession)
   );
   const timerPersistRef = useRef(timer.getPersist);
   timerPersistRef.current = timer.getPersist;
+  const persistDraft = useCallback(() => {
+    if (!editorOpenRef.current) return;
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({ form: formDataRef.current,
+        sessionId: editingSessionIdRef.current || newSessionIdRef.current,
+        timer: timerPersistRef.current() }));
+    } catch {
+      setDraftNotice("Local backup failed. Keep this workout open until it is saved online.");
+    }
+  }, [draftKey]);
+  useEffect(() => { persistDraft(); }, [formData, editingSessionId, showForm, timer.isRunning, persistDraft]);
   const [, setAiSummaryStatus] = useState<{
     hasSetup: boolean;
     needsSetup: boolean;
@@ -690,17 +757,22 @@ export default function SessionsSection({
         return {
           exercise_id: ex.exercise_id,
           exercise_name: ex.exercise_name,
+          plan_context: ex.plan_context,
           sets,
         };
       });
 
-      setFormData({
+      const nextForm: SessionFormData = {
         ...emptySessionForm(),
         split_id: todayData.split_id || "",
         split_name: todayData.plan_name || "",
         split_day: todayData.day_name || "",
         exercises: planExercises,
-      });
+      };
+      // The recommendation calls below happen before React renders this state.
+      // Keep their ref current so a Volume day cannot be sent as blank/Push A.
+      formDataRef.current = nextForm;
+      setFormData(nextForm);
       setShowForm(true);
 
       // Fetch AI recommendations for each exercise
@@ -747,17 +819,20 @@ export default function SessionsSection({
     fetchTodaysPlan();
 
     // Check for startPlan URL param
-    if (searchParams.get("startPlan") === "true") {
+    if (!recoveredDraft && searchParams.get("startPlan") === "true") {
       handleStartPlan();
     }
   }, []);
 
-  const performAutoSave = useCallback(async (opts?: { silent?: boolean }) => {
+  const performAutoSave = useCallback(async (opts?: { silent?: boolean; finalize?: boolean }) => {
     const run = async () => {
+      if (!editorOpenRef.current) return false;
       const data = formDataRef.current;
-      const payload = buildSessionPayload(data, timerPersistRef.current());
+      const payload = buildSessionPayload(data, timerPersistRef.current(), {
+        preserveUnloggedExercises: !opts?.finalize,
+      });
       const canSave =
-        payload.exercises.length > 0 || hasCardioLog(data);
+        payload.exercises.length > 0 || hasCardioLog(data) || Boolean(data.notes.trim());
       if (!canSave) {
         return false;
       }
@@ -768,17 +843,17 @@ export default function SessionsSection({
         if (sessionId) {
           await apiClient.put(`/api/workout-sessions/${sessionId}`, payload);
         } else {
-          const response = await apiClient.post("/api/workout-sessions", payload);
-          if (response.data && response.data.id) {
-            editingSessionIdRef.current = response.data.id;
-            setEditingSessionId(response.data.id);
-          }
+          const id = newSessionIdRef.current;
+          await apiClient.put(`/api/workout-sessions/${id}`, payload);
+          editingSessionIdRef.current = id;
+          setEditingSessionId(id);
         }
 
         setLastSaved(new Date());
+        if (formDataRef.current === data) setPendingSave(false);
         setSaveError(null);
         fetchSessions();
-        return true;
+        return formDataRef.current === data;
       } catch (error) {
         console.error("Error auto-saving session:", error);
         setSaveError(getApiErrorMessage(error, "Auto-save failed"));
@@ -798,7 +873,8 @@ export default function SessionsSection({
 
   // Auto-save as you log. You should not need to press Save Workout.
   useEffect(() => {
-    if (!showForm || (formData.exercises.length === 0 && !hasCardioLog(formData))) {
+    if (showForm) setPendingSave(true);
+    if (!showForm || (formData.exercises.length === 0 && !hasCardioLog(formData) && !formData.notes.trim())) {
       return;
     }
 
@@ -827,6 +903,7 @@ export default function SessionsSection({
 
   useEffect(() => {
     const flush = () => {
+      persistDraft();
       void performAutoSave({ silent: true });
     };
     const onHide = () => {
@@ -839,7 +916,7 @@ export default function SessionsSection({
       document.removeEventListener("visibilitychange", onHide);
       flush();
     };
-  }, [performAutoSave]);
+  }, [performAutoSave, persistDraft]);
 
   // Check AI recommendation status and auto-trigger if needed
   const checkAiSummaryStatus = async () => {
@@ -893,7 +970,7 @@ export default function SessionsSection({
     setAiRecommendationLoading(prev => ({ ...prev, [exerciseId]: true }));
     try {
       // Send exercises already done in current workout (for fatigue consideration)
-      const currentExercises = formData.exercises.map(ex => ({
+      const currentExercises = formDataRef.current.exercises.map(ex => ({
         exercise_id: ex.exercise_id,
         exercise_name: ex.exercise_name,
         sets: ex.sets || []
@@ -901,8 +978,8 @@ export default function SessionsSection({
 
       const response = await apiClient.post(`/api/workout-sessions/ai-recommendation/${exerciseId}`, {
         exercise_name: exerciseName,
-        split_name: formData.split_name || undefined,
-        split_day: undefined,
+        split_name: formDataRef.current.split_name || undefined,
+        split_day: formDataRef.current.split_day || undefined,
         position_in_workout: positionInWorkout,
         current_workout_exercises: currentExercises,
         plan_target_sets: planTargetSets,
@@ -931,9 +1008,10 @@ export default function SessionsSection({
             ...prev,
             exercises: prev.exercises.map((ex) =>
               ex.exercise_id === exerciseId
-                ? {
+                  ? {
                     ...ex,
                     ai_recommendation: stored,
+                    ...(rec?.plan_context ? { plan_context: rec.plan_context } : {}),
                     ...(shouldApplySets ? { sets: mapRecSets(rec) } : {}),
                   }
                 : ex
@@ -962,7 +1040,15 @@ export default function SessionsSection({
         editingSessionId
       );
       const lastSets = lastWorkingSets(lastData);
-      if (!recCopiesLastWorkout(rec, lastSets)) return;
+      // Heal recommendations saved before weighted-bodyweight support: those
+      // copied the reps from weighted dips/pull-ups but erased every load.
+      const droppedLastLoad =
+        lastWorkoutHasWeight(lastData) && !recHasWeightedSets(rec);
+      if (
+        !recNeedsAlgorithmRefresh(rec) &&
+        !recCopiesLastWorkout(rec, lastSets) &&
+        !droppedLastLoad
+      ) return;
       if (staleRecRetryRef.current.has(ex.exercise_id)) return;
       staleRecRetryRef.current.add(ex.exercise_id);
       void fetchAiRecommendation(ex.exercise_id, ex.exercise_name, idx);
@@ -978,16 +1064,18 @@ export default function SessionsSection({
   ]);
 
   useEffect(() => {
+    if (editorOpenRef.current || propEditSessionId === handledEditRequestRef.current) return;
     if (propEditSessionId && sessions.length > 0) {
       const sessionToEdit = sessions.find((s) => s.id === propEditSessionId);
       if (sessionToEdit) {
+        handledEditRequestRef.current = propEditSessionId;
         setFormData(sessionToForm(sessionToEdit));
         setAiRecommendations(hydrateAiRecommendations(sessionToEdit.exercises || []));
         setEditingSessionId(sessionToEdit.id || null);
         setShowForm(true);
       }
     }
-  }, [propEditSessionId, sessions]);
+  }, [propEditSessionId, sessions, showForm]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1136,8 +1224,8 @@ export default function SessionsSection({
     setSaveError(null);
     try {
       timer.stop();
-      const saved = await performAutoSave();
-      if (!saved && !editingSessionIdRef.current) {
+      const saved = await performAutoSave({ finalize: true });
+      if (!saved) {
         setSaveError("Could not save workout");
         return;
       }
@@ -1154,6 +1242,11 @@ export default function SessionsSection({
   };
 
   const resetForm = () => {
+    localStorage.removeItem(draftKey);
+    editorOpenRef.current = false;
+    newSessionIdRef.current = crypto.randomUUID();
+    setPendingSave(false);
+    setDraftNotice(null);
     setFormData(emptySessionForm());
     setEditingSessionId(null);
     setShowForm(false);
@@ -1180,10 +1273,19 @@ export default function SessionsSection({
   };
 
   const handleCancel = async () => {
-    await performAutoSave();
-    resetForm();
-    fetchSessions();
-    fetchTodaysPlan();
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const hasDraft = formDataRef.current.exercises.length > 0 || Boolean(formDataRef.current.notes.trim()) || hasCardioLog(formDataRef.current);
+      if (hasDraft && !(await performAutoSave())) {
+        setSaveError("Your workout has not saved. Keep it open and retry when connected.");
+        return;
+      }
+      resetForm();
+      fetchSessions();
+      fetchTodaysPlan();
+    } catch { setSaveError("Could not close the saved draft. Please retry."); }
+    finally { setIsSaving(false); }
   };
 
   const handleEdit = (session: WorkoutSession) => {
@@ -1414,6 +1516,54 @@ export default function SessionsSection({
   const getCompletedSetCount = (sets: SessionExercise["sets"]) => {
     if (!Array.isArray(sets)) return 0;
     return sets.filter(isValidSet).length;
+  };
+
+  const moveToNextSetInput = (current: HTMLInputElement) => {
+    const inputs = Array.from(
+      current.form?.querySelectorAll<HTMLInputElement>(
+        'input[data-workout-set-input="true"]'
+      ) || []
+    ).filter((input) => !input.disabled && input.offsetParent !== null);
+    const next = inputs[inputs.indexOf(current) + 1];
+    if (next) {
+      next.focus();
+      next.select();
+      return;
+    }
+    current.blur();
+  };
+
+  const handleSetInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    moveToNextSetInput(event.currentTarget);
+  };
+
+  const handleSetFormSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    // Mobile number pads treat Next/Done as a form submit. Finishing a workout
+    // must remain an explicit action, so submission advances the active field.
+    event.preventDefault();
+    const activeInput = document.activeElement;
+    if (
+      activeInput instanceof HTMLInputElement &&
+      activeInput.dataset.workoutSetInput === "true"
+    ) {
+      moveToNextSetInput(activeInput);
+    }
+  };
+
+  const hasSetInputAfter = (exerciseIdx: number, setIdx: number) => {
+    const currentSets = formData.exercises[exerciseIdx]?.sets;
+    if (Array.isArray(currentSets) && setIdx < currentSets.length - 1) return true;
+    return formData.exercises.slice(exerciseIdx + 1).some((exercise, offset) => {
+      const nextExerciseIdx = exerciseIdx + offset + 1;
+      return (
+        !collapsedExercises[nextExerciseIdx] &&
+        !isCardioExercise(exercise) &&
+        Array.isArray(exercise.sets) &&
+        exercise.sets.length > 0
+      );
+    });
   };
 
   const categoryFilterPills = [
@@ -1746,12 +1896,12 @@ export default function SessionsSection({
               <div className="flex items-center gap-2 flex-shrink-0">
                 {/* Auto-save indicator */}
                 <span className="text-[11px] text-[#636366]">
-                  {isAutoSaving
+                  {saveError ? "Failed" : isAutoSaving
                     ? "Saving..."
-                    : lastSaved
+                    : lastSaved && !pendingSave
                     ? `Saved ${lastSaved.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
                     : formData.exercises.length > 0 || hasCardioLog(formData)
-                    ? "Auto-saves as you log"
+                    ? "Pending"
                     : ""}
                 </span>
               </div>
@@ -1784,11 +1934,12 @@ export default function SessionsSection({
               </button>
             </div>
             {saveError && (
-              <p className="mt-3 text-xs text-[#EF4444]">{saveError}</p>
+              <button type="button" disabled={isAutoSaving} onClick={() => void performAutoSave()} className="mt-3 text-xs text-[#EF4444]">{saveError} Retry save.</button>
             )}
+            {draftNotice && <p role="status" className="mt-3 text-xs text-[#8E8E93]">{draftNotice}</p>}
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSetFormSubmit} className="space-y-5">
             <button
               type="button"
               onClick={() => setShowSessionDetails(!showSessionDetails)}
@@ -2293,6 +2444,9 @@ export default function SessionsSection({
                   const maxData = maxExerciseData[ex.exercise_id];
                   const aiRec =
                     aiRecommendations[ex.exercise_id] || ex.ai_recommendation;
+                  const planLabel = planExerciseLabel(
+                    ex.plan_context || aiRec?.plan_context
+                  );
                   const aiLoading = aiRecommendationLoading[ex.exercise_id];
                   const bestSetLabel = getBestSetLabel(maxData);
                   const confPct =
@@ -2329,6 +2483,11 @@ export default function SessionsSection({
                           <p className="text-xs text-[#8E8E93] mt-0.5">
                             {categoryLabel} · {roleLabel}
                           </p>
+                          {planLabel && (
+                            <p className="text-[11px] font-semibold text-[#9CC0E8] mt-0.5">
+                              {planLabel}
+                            </p>
+                          )}
                           {/* The open recommendation carries its own "Last time"
                               row, so this only fills in when that one is absent —
                               rather than vanishing whenever a recommendation
@@ -2851,6 +3010,9 @@ export default function SessionsSection({
                                     <div className="col-span-4">
                                       <input
                                         type="number"
+                                        inputMode="numeric"
+                                        enterKeyHint="next"
+                                        data-workout-set-input="true"
                                         value={set.reps === 0 ? "" : set.reps}
                                         onChange={(e) => {
                                           const newExercises = [
@@ -2875,14 +3037,19 @@ export default function SessionsSection({
                                             exercises: newExercises,
                                           });
                                         }}
+                                        onKeyDown={handleSetInputKeyDown}
                                         onFocus={(e) => e.target.select()}
                                         placeholder={lastRepsHint}
+                                        aria-label={`${ex.exercise_name}, set ${set.set_number}, reps`}
                                         className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
                                       />
                                     </div>
                                     <div className="col-span-4">
                                       <input
                                         type="number"
+                                        inputMode="decimal"
+                                        enterKeyHint="next"
+                                        data-workout-set-input="true"
                                         value={set.weight || ""}
                                         onChange={(e) => {
                                           const newExercises = [
@@ -2904,13 +3071,19 @@ export default function SessionsSection({
                                             exercises: newExercises,
                                           });
                                         }}
+                                        onKeyDown={handleSetInputKeyDown}
+                                        onFocus={(e) => e.target.select()}
                                         placeholder={lastWeightHint}
+                                        aria-label={`${ex.exercise_name}, set ${set.set_number}, weight`}
                                         className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
                                       />
                                     </div>
                                     <div className="col-span-2">
                                       <input
                                         type="number"
+                                        inputMode="decimal"
+                                        enterKeyHint={hasSetInputAfter(idx, setIdx) ? "next" : "done"}
+                                        data-workout-set-input="true"
                                         min="1"
                                         max="10"
                                         step="0.5"
@@ -2935,7 +3108,10 @@ export default function SessionsSection({
                                             exercises: newExercises,
                                           });
                                         }}
+                                        onKeyDown={handleSetInputKeyDown}
+                                        onFocus={(e) => e.target.select()}
                                         placeholder="—"
+                                        aria-label={`${ex.exercise_name}, set ${set.set_number}, RPE`}
                                         className="w-full h-10 px-2 rounded-lg bg-[#0B0C10] border border-[#2A2D35] text-white text-sm text-center placeholder:text-[#636366] focus:outline-none focus:ring-1 focus:ring-[#FF6B35]/50"
                                       />
                                     </div>

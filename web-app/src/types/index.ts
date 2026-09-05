@@ -60,6 +60,7 @@ export interface RecommendationLastSession {
 }
 
 export interface ExerciseAiRecommendation {
+  algorithm_version?: number;
   sets?: RecommendedSetTarget[];
   reasoning?: string;
   progression_type?: string;
@@ -75,6 +76,21 @@ export interface ExerciseAiRecommendation {
   time?: number;
   speed?: number;
   generated_at?: string;
+  plan_context?: PlanContextInfo;
+}
+
+export interface PlanContextInfo {
+  goal?: string;
+  source?: string;
+  priority?: "high" | "supporting" | "normal";
+  target_rep_range?: [number, number];
+  target_sets?: number;
+  day_type?: string;
+  day_goal?: string;
+  plan_name?: string;
+  day_name?: string;
+  day_specific_progression?: boolean;
+  notes?: string;
 }
 
 export interface SessionExercise {
@@ -90,6 +106,7 @@ export interface SessionExercise {
   notes?: string;
   is_custom?: boolean;
   ai_recommendation?: ExerciseAiRecommendation;
+  plan_context?: PlanContextInfo;
 }
 
 export interface WorkoutSession {

@@ -4,6 +4,10 @@
  * Shows session timer, current exercise, set progress, and a one-tap
  * "Log set" that fills the prescribed weight/reps. Full number pads still
  * live in the app — OS lock screens don't allow free-form entry.
+ *
+ * On iOS we also post a quiet local notification with the same copy. When
+ * expo-widgets paints a blank Live Activity shell (known failure mode), the
+ * notification still shows the exercise / set / elapsed text.
  */
 
 import * as Notifications from "expo-notifications";
@@ -54,8 +58,8 @@ function fingerprint(snapshot: WorkoutLiveSnapshot) {
     snapshot.setLabel,
     snapshot.prescription,
     snapshot.isRunning ? "1" : "0",
-    // Elapsed is native on iOS; only bump Android notif every 30s.
-    Platform.OS === "android" ? Math.floor(snapshot.elapsedSeconds / 30) : "t",
+    // Plain-text elapsed on both platforms — refresh about every 15s.
+    Math.floor(snapshot.elapsedSeconds / 15),
   ].join("|");
 }
 
@@ -85,33 +89,41 @@ async function ensureCategory() {
   ]);
 }
 
-function formatElapsed(elapsedSeconds: number) {
-  const hours = Math.floor(elapsedSeconds / 3600);
-  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
-  const seconds = elapsedSeconds % 60;
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
-    : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+function liveProps(snapshot: WorkoutLiveSnapshot) {
+  // ActivityKit / the widget bridge is picky about undefined — coerce to
+  // plain strings/booleans so a partial snapshot never blanks the card.
+  return {
+    dayLabel: String(snapshot.dayLabel || "GymAI"),
+    exerciseName: String(snapshot.exerciseName || "Workout"),
+    setLabel: String(snapshot.setLabel || ""),
+    prescription: String(snapshot.prescription || ""),
+    elapsedLabel: String(snapshot.elapsedLabel || "00:00"),
+    isRunning: Boolean(snapshot.isRunning),
+  };
 }
 
-async function syncAndroidNotification(snapshot: WorkoutLiveSnapshot) {
+async function syncReadableNotification(snapshot: WorkoutLiveSnapshot) {
   await ensureCategory();
   const perms = await Notifications.getPermissionsAsync();
   if (perms.status !== "granted") {
     const asked = await Notifications.requestPermissionsAsync();
     if (asked.status !== "granted") return;
   }
-  const bodyParts = [snapshot.setLabel, snapshot.prescription].filter(Boolean);
-  const elapsed = formatElapsed(snapshot.elapsedSeconds);
-  bodyParts.push(elapsed);
+  const bodyParts = [snapshot.setLabel, snapshot.prescription, snapshot.elapsedLabel].filter(
+    Boolean
+  );
   await Notifications.scheduleNotificationAsync({
     identifier: WORKOUT_NOTIF_ID,
     content: {
       title: snapshot.exerciseName,
       body: bodyParts.join(" · "),
       categoryIdentifier: WORKOUT_CATEGORY,
-      sticky: true,
+      sticky: Platform.OS === "android",
       autoDismiss: false,
+      // Quiet on iOS so a blank Live Activity shell isn't paired with a buzz.
+      ...(Platform.OS === "ios"
+        ? { sound: false, interruptionLevel: "passive" as const }
+        : {}),
       data: {
         type: WORKOUT_LIVE_TYPE,
         exerciseIdx: snapshot.exerciseIdx,
@@ -134,16 +146,7 @@ async function syncIosLiveActivity(snapshot: WorkoutLiveSnapshot) {
   const factory = loadLiveActivityFactory();
   if (!factory) return;
 
-  const props = {
-    dayLabel: snapshot.dayLabel,
-    exerciseName: snapshot.exerciseName,
-    setLabel: snapshot.setLabel,
-    prescription: snapshot.prescription,
-    timerBaseEpochMs: snapshot.timerBaseEpochMs,
-    isRunning: snapshot.isRunning,
-    pauseTimeEpochMs: snapshot.pauseTimeEpochMs || Date.now(),
-    logSetUrl: WORKOUT_LOG_SET_URL,
-  };
+  const props = liveProps(snapshot);
   const staleDate = new Date(Date.now() + 4 * 60 * 60 * 1000);
 
   try {
@@ -171,17 +174,16 @@ export async function syncWorkoutLive(snapshot: WorkoutLiveSnapshot | null): Pro
     return;
   }
   const fp = fingerprint(snapshot);
-  // Android refreshes the sticky body every 30s via the fingerprint bucket;
-  // iOS timer ticks natively so exercise/set/pause changes are the only bumps.
   if (fp === lastFingerprint) return;
   lastFingerprint = fp;
 
   if (Platform.OS === "ios") {
     await syncIosLiveActivity(snapshot);
+    // Readable fallback when the Live Activity paints as an empty dark shell.
+    await syncReadableNotification(snapshot);
     return;
   }
-  // Android: sticky ongoing notification with Log set / Open actions.
-  await syncAndroidNotification(snapshot);
+  await syncReadableNotification(snapshot);
 }
 
 export async function endWorkoutLive(): Promise<void> {

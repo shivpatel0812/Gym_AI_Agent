@@ -1,3 +1,4 @@
+import { localDateKey } from "../../lib/localDate";
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -17,7 +18,7 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
   const [showForm, setShowForm] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [formData, setFormData] = useState<StressEntry>({
-    date: new Date().toISOString().split('T')[0],
+    date: localDateKey(),
     level: 5,
     description: '',
   });
@@ -55,7 +56,7 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
         await apiClient.post('/api/stress', formData);
       }
       setFormData({
-        date: new Date().toISOString().split('T')[0],
+        date: localDateKey(),
         level: 5,
         description: '',
       });
@@ -92,7 +93,7 @@ export default function StressSection({ editEntryId: propEditEntryId }: StressSe
 
   const handleCancel = () => {
     setFormData({
-      date: new Date().toISOString().split('T')[0],
+      date: localDateKey(),
       level: 5,
       description: '',
     });

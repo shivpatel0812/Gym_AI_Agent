@@ -8,6 +8,7 @@ import {
   Platform,
   StatusBar,
 } from "react-native";
+import { useRoute } from "@react-navigation/native";
 import apiClient from "../../api/client";
 import { Exercise, Split } from "./types";
 import ExercisesSection from "./ExercisesSection";
@@ -18,9 +19,20 @@ import { colors, spacing } from "../../theme";
 type TabType = "exercises" | "splits" | "sessions";
 
 export default function Workouts() {
+  const route = useRoute<any>();
   const [activeTab, setActiveTab] = useState<TabType>("sessions");
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [splits, setSplits] = useState<Split[]>([]);
+  const [editSessionId, setEditSessionId] = useState<string | null>(
+    typeof route.params?.editSessionId === "string" ? route.params.editSessionId : null
+  );
+
+  useEffect(() => {
+    if (typeof route.params?.editSessionId === "string" && route.params.editSessionId) {
+      setEditSessionId(route.params.editSessionId);
+      setActiveTab("sessions");
+    }
+  }, [route.params?.editSessionId]);
 
   useEffect(() => {
     fetchExercises();
@@ -76,7 +88,12 @@ export default function Workouts() {
         })}
       </View>
       {activeTab === "sessions" ? (
-        <SessionsSection exercises={exercises} splits={splits} />
+        <SessionsSection
+          exercises={exercises}
+          splits={splits}
+          initialEditSessionId={editSessionId}
+          onInitialEditConsumed={() => setEditSessionId(null)}
+        />
       ) : (
         <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
           {activeTab === "exercises" && (

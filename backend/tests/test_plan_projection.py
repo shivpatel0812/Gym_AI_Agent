@@ -18,6 +18,7 @@ from ai_analysis.plan_projection import (
     MIN_SESSIONS_FOR_ADHERENCE,
     PlanProjector,
     e1rm,
+    exercise_sessions_per_week,
     measure_adherence,
 )
 from nutrition.trajectory import (
@@ -451,3 +452,103 @@ class TestMaintenanceTracksBodyweight:
         ]
         # Once calories cap out, each further week should add slightly less.
         assert weekly[-1] < weekly[len(weekly) // 2]
+
+
+class TestDestinationProjection:
+    def test_open_ended_without_destination(self, projector):
+        result = project(projector, [session(50, [8, 8, 8])], weeks=8)
+        assert result.destination is None
+        assert result.reachable is None
+        assert len(result.best_case) == 8
+
+    def test_horizon_follows_target_weeks(self, projector):
+        result = project(
+            projector,
+            [session(50, [8, 8, 8])],
+            weeks=12,
+            target_weight=55,
+            target_reps=8,
+            target_weeks=6,
+        )
+        assert result.destination == {"weight": 55.0, "reps": 8, "weeks": 6}
+        assert [p.week for p in result.best_case] == list(range(1, 7))
+
+    def test_holds_after_hitting_destination(self, projector):
+        result = project(
+            projector,
+            [session(80, [8, 8, 8])],
+            weeks=10,
+            target_weight=80,
+            target_reps=8,
+            target_weeks=10,
+        )
+        assert result.arrived_week == 1
+        assert result.reachable is True
+        # Remaining weeks hold the destination load rather than climbing forever.
+        assert all(p.weight >= 80 and p.reps >= 8 for p in result.best_case)
+
+    def test_unreachable_destination_flags_false(self, projector):
+        result = project(
+            projector,
+            [session(50, [8, 8, 8])],
+            weeks=4,
+            target_weight=500,
+            target_reps=8,
+            target_weeks=4,
+        )
+        assert result.destination["weight"] == 500.0
+        assert result.reachable is False
+        assert result.arrived_week is None
+
+
+class TestExerciseSessionsPerWeek:
+    """Incline on Push A + Push B is two sessions, even though each day is once."""
+
+    def test_counts_a_lift_across_a_b_days(self):
+        plan = {
+            "weekly_schedule": {
+                "monday": "Push A",
+                "tuesday": "Pull A",
+                "wednesday": "Legs",
+                "thursday": "Pull B",
+                "friday": "Push B",
+            },
+            "days": [
+                {
+                    "day_name": "Push A",
+                    "exercises": [{"exercise_id": "incline", "exercise_name": "Incline"}],
+                },
+                {
+                    "day_name": "Pull A",
+                    "exercises": [{"exercise_id": "row", "exercise_name": "Row"}],
+                },
+                {
+                    "day_name": "Legs",
+                    "exercises": [{"exercise_id": "squat", "exercise_name": "Squat"}],
+                },
+                {
+                    "day_name": "Pull B",
+                    "exercises": [{"exercise_id": "row", "exercise_name": "Row"}],
+                },
+                {
+                    "day_name": "Push B",
+                    "exercises": [{"exercise_id": "incline", "exercise_name": "Incline"}],
+                },
+            ],
+        }
+        freq = exercise_sessions_per_week(plan)
+        assert freq["incline"] == 2
+        assert freq["row"] == 2
+        assert freq["squat"] == 1
+
+    def test_schedule_emits_workout_columns_when_twice_weekly(self, projector):
+        result = project(
+            projector,
+            [session(50, [8, 8, 8])],
+            weeks=2,
+            sessions_per_week=2,
+        )
+        sessions = sorted({p.session for p in result.schedule})
+        assert sessions == [1, 2]
+        week_one = [p for p in result.schedule if p.week == 1]
+        assert len(week_one) == 2

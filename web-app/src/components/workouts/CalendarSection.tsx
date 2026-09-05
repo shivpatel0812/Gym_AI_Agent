@@ -1,3 +1,4 @@
+import { localDateKey } from "../../lib/localDate";
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../../lib/api-client';
@@ -41,8 +42,8 @@ export default function CalendarSection({}: CalendarSectionProps) {
 
   const fetchCalendarData = async () => {
     try {
-      const startDate = new Date(year, month, 1).toISOString().split('T')[0];
-      const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
+      const startDate = localDateKey(new Date(year, month, 1));
+      const endDate = localDateKey(new Date(year, month + 1, 0));
 
       const [workoutsRes, nutritionRes, stressRes, bodyFeelingsRes, surveysRes, activitiesRes, sleepRes, hydrationRes] = await Promise.all([
         apiClient.get('/api/workout-sessions'),
@@ -1064,4 +1065,3 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
     </div>
   );
 }
-

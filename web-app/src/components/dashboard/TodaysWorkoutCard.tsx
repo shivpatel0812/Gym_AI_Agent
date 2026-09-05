@@ -16,6 +16,7 @@ export default function TodaysWorkoutCard() {
     null
   );
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -23,11 +24,13 @@ export default function TodaysWorkoutCard() {
   }, []);
 
   const fetchTodaysWorkout = async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
-      const res = await apiClient.get("/api/workout-plan/today");
+      const res = await apiClient.get("/api/workout-plan/today", { timeout: 30000 });
       setTodaysWorkout(res.data);
     } catch {
-      setTodaysWorkout(null);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -43,6 +46,12 @@ export default function TodaysWorkoutCard() {
   }
 
   // No plan state
+  if (loadError) return (
+    <div role="status" className="bg-[#161A22] border border-[#2A2D35] rounded-2xl p-6 mb-6 text-[#8E8E93]">
+      <p>Could not refresh today's workout.{todaysWorkout ? ` Last loaded: ${todaysWorkout.day_name || todaysWorkout.status.replace(/_/g, " ")}.` : ""}</p>
+      <button onClick={fetchTodaysWorkout} className="mt-2 text-[#FF6B35]">Retry workout</button>
+    </div>
+  );
   if (!todaysWorkout || todaysWorkout.status === "no_plan") {
     return (
       <div className="bg-gradient-to-r from-[#161A22] to-[#1A1512] border border-[#2A2D35] rounded-2xl p-6 mb-6">

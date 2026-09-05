@@ -6,6 +6,9 @@ from user_time import get_timezone, set_timezone
 from datetime import datetime
 from typing import Optional, Union
 from pydantic import BaseModel
+import math
+from nutrition.plan_store import NutritionPlanStore
+from nutrition.targets import resolve_targets
 
 router = APIRouter(prefix="/api/user-profile", tags=["user-profile"])
 
@@ -118,7 +121,8 @@ async def get_nutrition_targets(user_id: str = Depends(get_user_id)):
     )
     doc = doc_ref.get()
     data = doc.to_dict() if doc.exists else {}
-    return data.get("nutrition_targets") or {}
+    plan = NutritionPlanStore(db, user_id).get_active() or {}
+    return resolve_targets(data.get("nutrition_targets"), plan.get("targets"))
 
 
 @router.put("/nutrition-targets")
@@ -126,9 +130,9 @@ async def update_nutrition_targets(
     payload: NutritionTargetsRequest,
     user_id: str = Depends(get_user_id),
 ):
-    values = {k: v for k, v in payload.dict().items() if v is not None}
+    values = payload.model_dump(exclude_none=True)
     for key, value in values.items():
-        if not isinstance(value, (int, float)) or value < 0 or value > 20000:
+        if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or value > 20000:
             raise HTTPException(status_code=422, detail=f"Invalid {key} target")
     doc_ref = (
         db.collection("users")
@@ -138,14 +142,34 @@ async def update_nutrition_targets(
     )
     existing_doc = doc_ref.get()
     existing = existing_doc.to_dict() if existing_doc.exists else {}
-    merged = {**(existing.get("nutrition_targets") or {}), **values}
-    doc_ref.set(
+    plan = NutritionPlanStore(db, user_id).get_active()
+    merged = {**resolve_targets(existing.get("nutrition_targets"), (plan or {}).get("targets")), **values}
+    # Manual edits apply to both daily totals and the current plan's guidance.
+    # A batch prevents a successful profile write leaving the plan out of sync.
+    batch = db.batch()
+    batch.set(doc_ref,
         {
             "nutrition_targets": merged,
             "updated_at": datetime.now().isoformat(),
         },
         merge=True,
     )
+    if plan:
+        previous_targets = plan.get("targets") or {}
+        plan_targets = {**previous_targets, **{k: v for k, v in merged.items() if k != "water"}}
+        if plan_targets.get("calories") != previous_targets.get("calories"):
+            # A manually chosen point target replaces the old plan's range.
+            plan_targets.update(calories_min=None, calories_max=None)
+        if plan_targets != previous_targets:
+            batch.update(
+                db.collection("users").document(user_id).collection("nutrition_plans").document(plan["id"]),
+                {
+                    "targets": plan_targets,
+                    "version": int(plan.get("version") or 1) + 1,
+                    "updated_at": datetime.now().isoformat(),
+                },
+            )
+    batch.commit()
     return merged
 
 @router.put("/timezone")
@@ -202,4 +226,3 @@ async def update_user_profile(profile: UserProfile, user_id: str = Depends(get_u
         profile_dict["created_at"] = datetime.now().isoformat()
     doc_ref.set(profile_dict)
     return {"id": doc_ref.id, **profile_dict}
-

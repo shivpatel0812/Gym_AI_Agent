@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -16,12 +16,15 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import apiClient from "../api/client";
-import { useNavigation, useRoute } from "@react-navigation/native";
-import { colors, spacing } from "../theme";
+import { auth } from "../firebase";
+import { useFocusEffect, useNavigation, useRoute } from "@react-navigation/native";
+import { borderRadius, colors, spacing, typography, weight } from "../theme";
 import Ring from "./nutrition/Ring";
 import { DayFitSummary, FitBadge, FitReason } from "./nutrition/FitBadge";
 import LogFoodForm, { PlanMealPick } from "./nutrition/LogFoodForm";
 import MealReminderRow from "./nutrition/MealReminderRow";
+import MealTimingCard from "./nutrition/MealTimingCard";
+import { MealDragHandle, useMealDrag } from "./nutrition/MealDrag";
 import NutritionPlanTab from "./nutrition/plan/NutritionPlanTab";
 import NutritionSuggestionsTab from "./nutrition/plan/NutritionSuggestionsTab";
 import SavedFoodsTab from "./nutrition/SavedFoodsTab";
@@ -32,7 +35,13 @@ import {
   daysLabel,
   NutritionPlan,
 } from "../api/nutritionPlan";
-import { normalizeMealLabel } from "../lib/recentMeals";
+import { displayMealLabel, normalizeMealLabel } from "../lib/recentMeals";
+import {
+  foodClockLabel,
+  isMoved,
+  moveFoodToMeal,
+  replaceFoodAt,
+} from "../lib/mealTiming";
 import { planItemAppliesToday, todayWeekdayKey } from "../lib/mealSlots";
 import {
   DEFAULT_TARGETS,
@@ -44,11 +53,11 @@ import {
   toDateKey,
 } from "./nutrition/types";
 
-const TARGETS_STORAGE_KEY = "nutrition-targets";
+const targetsStorageKey = () => `nutrition-targets:${auth.currentUser?.uid || "signed-out"}`;
 
 async function loadCachedTargets(): Promise<NutritionTargets> {
   try {
-    const raw = await AsyncStorage.getItem(TARGETS_STORAGE_KEY);
+    const raw = await AsyncStorage.getItem(targetsStorageKey());
     if (!raw) return { ...DEFAULT_TARGETS };
     return { ...DEFAULT_TARGETS, ...JSON.parse(raw) };
   } catch {
@@ -199,6 +208,15 @@ export default function Nutrition() {
   const [targetDraft, setTargetDraft] = useState<NutritionTargets>({ ...DEFAULT_TARGETS });
   const [showTargets, setShowTargets] = useState(false);
   const [savingTargets, setSavingTargets] = useState(false);
+  const [targetSaveError, setTargetSaveError] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  /** Row whose meal is being picked from a list — the no-drag path. */
+  const [movePickerRow, setMovePickerRow] = useState<MealRow | null>(null);
+  /** Bumped after a move so the timing card refetches what just changed. */
+  const [timingKey, setTimingKey] = useState(0);
+  const targetsOpenRef = useRef(showTargets);
+  targetsOpenRef.current = showTargets;
+  const targetRequestRef = useRef(0);
 
   useEffect(() => {
     const tab = route.params?.tab;
@@ -231,18 +249,20 @@ export default function Nutrition() {
       console.error("Error fetching nutrition data:", error);
     }
     try {
+      const request = ++targetRequestRef.current;
       const targetsRes = await apiClient.get("/api/user-profile/nutrition-targets");
+      if (request !== targetRequestRef.current) return;
       const loaded = { ...DEFAULT_TARGETS, ...(targetsRes.data || {}) };
       setTargets(loaded);
-      setTargetDraft(loaded);
-      await AsyncStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(loaded));
+      if (!targetsOpenRef.current) setTargetDraft(loaded);
+      await AsyncStorage.setItem(targetsStorageKey(), JSON.stringify(loaded)).catch(() => undefined);
     } catch (error) {
       console.error("Error fetching nutrition targets:", error);
     }
     try {
       setActivePlan(await getActiveNutritionPlan());
     } catch {
-      setActivePlan(null);
+      // Keep the last successfully loaded plan during a temporary outage.
     }
   }, []);
 
@@ -250,12 +270,9 @@ export default function Nutrition() {
     let cancelled = false;
     (async () => {
       const cached = await loadCachedTargets();
-      if (!cancelled) {
+      if (!cancelled && targetRequestRef.current === 0 && !targetsOpenRef.current) {
         setTargets(cached);
         setTargetDraft(cached);
-      }
-      if (!cancelled) {
-        await fetchAll();
       }
     })();
     return () => {
@@ -263,10 +280,9 @@ export default function Nutrition() {
     };
   }, [fetchAll]);
 
-  useEffect(() => {
-    if (hubTab !== "today") return;
-    fetchAll();
-  }, [hubTab, fetchAll]);
+  useFocusEffect(useCallback(() => {
+    if (hubTab === "today") void fetchAll();
+  }, [hubTab, fetchAll]));
 
   const dayTabs = useMemo(() => {
     const tabs: { key: string; label: string }[] = [];
@@ -463,6 +479,45 @@ export default function Nutrition() {
     }
   };
 
+  /**
+   * Re-file one logged food under a different meal.
+   *
+   * The macros PUT rewrites a whole day, so this rebuilds the entry's list
+   * with a single row swapped rather than sending the moved item on its own.
+   * `moveFoodToMeal` decides what the move records; see lib/mealTiming.ts.
+   */
+  const moveFood = async (row: MealRow, targetMeal: string) => {
+    setMovePickerRow(null);
+    const next = moveFoodToMeal(row.food, targetMeal);
+    if (next === row.food) return;
+    const entry = dayEntries.find((e) => e.id === row.entryId);
+    if (!entry?.id) return;
+    setMoveError(null);
+    try {
+      await apiClient.put(`/api/macros/${entry.id}`, {
+        date: entry.date,
+        food_items: replaceFoodAt(entry.food_items || [], row.indexInEntry, next),
+      });
+      setTimingKey((key) => key + 1);
+      await fetchAll();
+    } catch (error) {
+      console.error("Error moving food:", error);
+      setMoveError(
+        `"${row.food.name}" could not be moved. Check your connection and try again.`
+      );
+    }
+  };
+
+  const {
+    controller: dragController,
+    dragging,
+    layer: dragLayer,
+  } = useMealDrag<MealRow>({
+    meals: MEALS,
+    onDrop: (row, mealId) => void moveFood(row, mealId),
+    onTapHandle: (row) => setMovePickerRow(row),
+  });
+
   const setWater = async (count: number) => {
     try {
       if (hydrationForDay?.id) {
@@ -509,18 +564,19 @@ export default function Nutrition() {
       water: Math.max(0, Number(targetDraft.water) || 0),
     };
     setSavingTargets(true);
+    ++targetRequestRef.current;
+    setTargetSaveError(null);
     try {
       const res = await apiClient.put("/api/user-profile/nutrition-targets", next);
       const saved = { ...DEFAULT_TARGETS, ...(res.data || next) };
       setTargets(saved);
       setTargetDraft(saved);
-      await AsyncStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(saved));
+      await AsyncStorage.setItem(targetsStorageKey(), JSON.stringify(saved)).catch(() => undefined);
       setShowTargets(false);
+      getActiveNutritionPlan().then(setActivePlan).catch(() => undefined);
     } catch (error) {
       console.error("Error saving nutrition targets:", error);
-      setTargets(next);
-      await AsyncStorage.setItem(TARGETS_STORAGE_KEY, JSON.stringify(next));
-      setShowTargets(false);
+      setTargetSaveError("Targets were not saved. Your changes are still here; check your connection and try again.");
     } finally {
       setSavingTargets(false);
     }
@@ -534,6 +590,8 @@ export default function Nutrition() {
   useEffect(() => {
     setLoggingMeal(null);
     setEditingFood(null);
+    setMovePickerRow(null);
+    setMoveError(null);
   }, [selectedDate]);
 
   const selectedDateObj = new Date(selectedDate + "T00:00:00");
@@ -682,6 +740,8 @@ export default function Nutrition() {
           {showTargets && (
             <View style={styles.targetsCard}>
               <Text style={styles.targetsTitle}>Daily targets</Text>
+              <Text style={{ color: colors.textSecondary }}>Changes apply to Home, Nutrition, and your current nutrition plan.</Text>
+              {targetSaveError ? <Text accessibilityRole="alert" style={{ color: colors.danger }}>{targetSaveError}</Text> : null}
               <Text style={styles.mutedXs}>
                 These are your goals for every day. Rings and remaining calories use them.
               </Text>
@@ -846,7 +906,15 @@ export default function Nutrition() {
             </View>
           </View>
 
-          <Text style={styles.mealsLabel}>Meals</Text>
+          <View style={styles.mealsHead}>
+            <Text style={styles.mealsLabel}>Meals</Text>
+            <Text style={styles.mealsHint}>Drag ⠿ to move a food</Text>
+          </View>
+          {moveError ? (
+            <Text accessibilityRole="alert" style={styles.moveError}>
+              {moveError}
+            </Text>
+          ) : null}
           {mealsToShow.map((meal) => {
             const rows = mealGroups[meal.id] || [];
             const mealTotals = rows.reduce(
@@ -923,7 +991,18 @@ export default function Nutrition() {
                                 <View style={styles.foodRow}>
                                   <View style={{ flex: 1, minWidth: 0 }}>
                                     <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                                      <TouchableOpacity onPress={() => removeFood(row)}>
+                                      <MealDragHandle
+                                        item={row}
+                                        from={meal.id}
+                                        label={row.food.name}
+                                        controller={dragController}
+                                      />
+                                      <TouchableOpacity
+                                        onPress={() => removeFood(row)}
+                                        hitSlop={10}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`Remove ${row.food.name}`}
+                                      >
                                         <MaterialCommunityIcons name="close" size={14} color="#55647A" />
                                       </TouchableOpacity>
                                       <TouchableOpacity
@@ -933,6 +1012,9 @@ export default function Nutrition() {
                                             indexInEntry: row.indexInEntry,
                                           })
                                         }
+                                        hitSlop={10}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`Edit ${row.food.name}`}
                                       >
                                         <MaterialCommunityIcons name="pencil" size={14} color="#55647A" />
                                       </TouchableOpacity>
@@ -942,10 +1024,29 @@ export default function Nutrition() {
                                             {row.food.name}
                                           </Text>
                                           <FitBadge fit={row.food.fit} compact />
+                                          {isMoved(row.food) ? (
+                                            <MaterialCommunityIcons
+                                              name="swap-horizontal"
+                                              size={12}
+                                              color="#55647A"
+                                              accessibilityLabel={`Moved from ${displayMealLabel(
+                                                row.food.moved_from || ""
+                                              )}`}
+                                            />
+                                          ) : null}
                                         </View>
-                                        {row.food.amount ? (
-                                          <Text style={styles.mutedXs}>{row.food.amount}</Text>
-                                        ) : null}
+                                        {(() => {
+                                          // Amount and clock share one line; the
+                                          // clock is absent whenever the log time
+                                          // is not evidence of when this was eaten.
+                                          const clock = foodClockLabel(row.food, selectedDate);
+                                          const meta = [row.food.amount, clock]
+                                            .filter(Boolean)
+                                            .join(" · ");
+                                          return meta ? (
+                                            <Text style={styles.mutedXs}>{meta}</Text>
+                                          ) : null;
+                                        })()}
                                         <FitReason fit={row.food.fit} />
                                       </View>
                                     </View>
@@ -1020,15 +1121,64 @@ export default function Nutrition() {
               ))}
             </View>
           )}
+
+          <View style={{ marginTop: 8 }}>
+            <MealTimingCard refreshKey={timingKey} />
+          </View>
         </ScrollView>
       )}
 
-      {hubTab === "today" && !loggingMeal ? (
+      {hubTab === "today" ? dragLayer : null}
+
+      {hubTab === "today" && !loggingMeal && !dragging ? (
         <TouchableOpacity style={styles.fab} onPress={() => openLogFood()}>
           <MaterialCommunityIcons name="plus" size={20} color="#fff" />
           <Text style={styles.fabText}>Log Food</Text>
         </TouchableOpacity>
       ) : null}
+
+      <Modal
+        visible={movePickerRow !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMovePickerRow(null)}
+      >
+        <TouchableOpacity
+          style={styles.pickerScrim}
+          activeOpacity={1}
+          onPress={() => setMovePickerRow(null)}
+          accessibilityRole="button"
+          accessibilityLabel="Cancel move"
+        >
+          <View style={styles.pickerCard}>
+            <Text style={styles.pickerTitle} numberOfLines={1}>
+              Move {movePickerRow?.food.name}
+            </Text>
+            <Text style={styles.pickerSub}>Pick the meal it belongs to.</Text>
+            {MEALS.map((meal) => {
+              const current =
+                normalizeMealLabel(movePickerRow?.food.meal) ===
+                normalizeMealLabel(meal.id);
+              return (
+                <TouchableOpacity
+                  key={meal.id}
+                  style={[styles.pickerRow, current && styles.pickerRowOn]}
+                  disabled={current}
+                  onPress={() => {
+                    if (movePickerRow) void moveFood(movePickerRow, meal.id);
+                  }}
+                >
+                  <Text style={{ fontSize: 16 }}>{meal.icon}</Text>
+                  <Text style={[styles.pickerRowText, current && styles.pickerRowTextOn]}>
+                    {meal.label}
+                  </Text>
+                  {current ? <Text style={styles.pickerHere}>Here now</Text> : null}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <Modal
         visible={loggingMeal !== null}
@@ -1404,4 +1554,54 @@ const styles = StyleSheet.create({
     backgroundColor: "#9CC0E8",
   },
   fabText: { color: colors.onAccent, fontWeight: "700", fontSize: 16 },
+  mealsHead: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+  },
+  mealsHint: { color: colors.textFaintCool, fontSize: typography.caption },
+  moveError: { color: colors.danger, fontSize: typography.caption, marginTop: 4 },
+  pickerScrim: {
+    flex: 1,
+    backgroundColor: "rgba(5, 8, 15, 0.72)",
+    justifyContent: "center",
+    padding: spacing.xl,
+  },
+  pickerCard: {
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderCool,
+    padding: spacing.lg,
+    gap: spacing.xs,
+  },
+  pickerTitle: {
+    color: colors.textPrimary,
+    fontSize: typography.title,
+    fontWeight: weight.bold,
+  },
+  pickerSub: {
+    color: colors.textMutedCool,
+    fontSize: typography.caption,
+    marginBottom: spacing.sm,
+  },
+  pickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surfaceSunken,
+  },
+  pickerRowOn: { opacity: 0.5 },
+  pickerRowText: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: typography.body,
+    fontWeight: weight.medium,
+  },
+  pickerRowTextOn: { color: colors.textMutedCool },
+  pickerHere: { color: colors.textFaintCool, fontSize: typography.micro },
 });

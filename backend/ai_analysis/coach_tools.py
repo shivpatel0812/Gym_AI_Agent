@@ -104,6 +104,7 @@ def _exercise_history_context(
             ]
             history.append({
                 "date": session.get("date"),
+                "session_id": session.get("id"),
                 "sets": normalized_sets,
                 "top_set": _top_set(normalized_sets),
             })
@@ -213,11 +214,13 @@ class CoachToolbox:
                 sets = ex.get("sets", []) or []
                 exercises.append({
                     "name": ex.get("exercise_name", "Unknown"),
+                    "exercise_id": ex.get("exercise_id"),
                     "sets_completed": len(sets),
                     "top_set": _top_set(sets),
                 })
             entry = {
                 "date": session.get("date"),
+                "session_id": session.get("id"),
                 "split": session.get("split_name") or session.get("workout_name"),
                 "day": session.get("split_day"),
                 "exercises": exercises,
@@ -233,6 +236,76 @@ class CoachToolbox:
             result.append(entry)
 
         return {"days": days, "session_count": len(result), "sessions": result}
+
+    def session_digest(self, days: int = 14) -> str:
+        """
+        Compact day-by-day workout lines for the system prompt.
+
+        Averages alone made the coach sound informed without naming any session.
+        This is the antidote: short enough to always inject, concrete enough to
+        cite ("Tuesday Push had incline…").
+        """
+        data = self.get_recent_sessions(days=days)
+        sessions = data.get("sessions") or []
+        if not sessions:
+            return (
+                f"RECENT WORKOUTS (last {days} days): none logged. "
+                "Say so rather than inventing a routine."
+            )
+
+        lines = [f"RECENT WORKOUTS (last {days} days, {len(sessions)} sessions):"]
+        for session in sessions[-12:]:
+            day_label = session.get("day") or session.get("split") or "workout"
+            names = []
+            for ex in (session.get("exercises") or [])[:8]:
+                top = ex.get("top_set") or {}
+                bit = ex.get("name") or "lift"
+                if top.get("weight") and top.get("reps"):
+                    bit = f"{bit} {top['weight']}x{top['reps']}"
+                elif top.get("reps"):
+                    bit = f"{bit} x{top['reps']}"
+                names.append(bit)
+            detail = ", ".join(names) if names else "no exercises recorded"
+            lines.append(f"- {session.get('date')}: {day_label} — {detail}")
+        lines.append(
+            "When the user wants to base a plan day on a real workout, cite a "
+            "date above and call get_workout_session for the full set list."
+        )
+        return "\n".join(lines)
+
+    def compact_active_plan(self) -> str:
+        """Day → exercise snapshot so plan edits target exact names."""
+        try:
+            from ai_analysis.plan_store import PlanStore
+            plan = PlanStore(self.db, self.user_id).get_active()
+        except Exception:
+            return ""
+        if not plan:
+            return "ACTIVE TRAINING PLAN: none. Create one before proposing edits."
+
+        lines = [
+            f"ACTIVE TRAINING PLAN ({plan.get('plan_name') or plan.get('id')}):",
+            "Use these exact day_name and exercise_name values in propose_plan_edits.",
+        ]
+        for day in plan.get("days") or []:
+            lifts = []
+            for ex in day.get("exercises") or []:
+                band = ex.get("target_rep_range")
+                band_s = (
+                    f" {band[0]}-{band[1]}r"
+                    if isinstance(band, (list, tuple)) and len(band) == 2
+                    else ""
+                )
+                pri = ex.get("priority") or "normal"
+                lifts.append(
+                    f"{ex.get('exercise_name')} [{pri}{band_s}, "
+                    f"{ex.get('sets') or '?'} sets]"
+                )
+            lines.append(
+                f"- {day.get('day_name')}: "
+                + (", ".join(lifts) if lifts else "(empty — fill from logged workouts)")
+            )
+        return "\n".join(lines)
 
     def get_recent_activity(
         self, days: int = 7, include_foods: bool = True
@@ -509,15 +582,48 @@ class CoachToolbox:
         return guidance
 
     def get_training_plan(self) -> Dict[str, Any]:
-        """Active workout/training plan so nutrition advice can support the lifts."""
+        """Active training plan with exact day/exercise names for edits."""
         try:
-            from nutrition.training_context import load_training_context
-            context = load_training_context(self.db, self.user_id)
+            from ai_analysis.plan_store import PlanStore
+            plan = PlanStore(self.db, self.user_id).get_active()
         except Exception as e:
             return {"error": f"Could not load training plan: {e}"}
-        if not context.get("has_plan"):
+        if not plan:
             return {"status": "no_plan", "message": "No active training plan."}
-        return {"status": "active", **context}
+
+        days = []
+        for day in plan.get("days") or []:
+            exercises = []
+            for ex in day.get("exercises") or []:
+                exercises.append({
+                    "exercise_id": ex.get("exercise_id"),
+                    "exercise_name": ex.get("exercise_name") or ex.get("name"),
+                    "sets": ex.get("sets"),
+                    "reps": ex.get("reps"),
+                    "target_rep_range": ex.get("target_rep_range"),
+                    "priority": ex.get("priority") or "normal",
+                    "goal": ex.get("goal"),
+                    "notes": ex.get("notes"),
+                })
+            days.append({
+                "day_name": day.get("day_name"),
+                "focus": day.get("focus"),
+                "exercises": exercises,
+            })
+        return {
+            "status": "active",
+            "plan_id": plan.get("id"),
+            "plan_name": plan.get("plan_name"),
+            "primary_goal": plan.get("primary_goal"),
+            "duration_weeks": plan.get("duration_weeks"),
+            "weekly_schedule": plan.get("weekly_schedule") or {},
+            "days": days,
+            "hint": (
+                "Use these exact day_name and exercise_name values in "
+                "propose_plan_edits. To fill a sparse day, call get_workout_session "
+                "for a logged date then replace_day_exercises."
+            ),
+        }
 
     def get_nutrition_plan(self) -> Dict[str, Any]:
         """The user's active nutrition strategy: targets, anchors, flexible meals."""
@@ -679,12 +785,11 @@ class CoachToolbox:
         self, summary: str = "", edits: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
-        Stage per-exercise plan changes for review. Never writes the live plan.
+        Stage plan changes for review. Never writes the live plan.
 
-        Scoped on purpose: this can retarget a lift the plan already contains
-        and nothing else. Restructuring — adding exercises, removing them,
-        changing which days exist — belongs to Plan Mode, where the user is
-        answering guided questions rather than chatting mid-workout.
+        Supports field retargets (reps/sets/priority/goal/notes) and structure
+        ops (add/remove exercise or day, replace a day's exercise list from a
+        logged session). Accept on Plan Hub is the only write path.
         """
         try:
             from ai_analysis.plan_store import PlanStore
@@ -1258,11 +1363,15 @@ READ_TOOL_SCHEMAS = TOOL_SCHEMAS
 
 
 
-# Training-plan micro-patches. Offered only in plan mode: the coach may retune
-# a lift the plan already contains, never restructure the program.
+# Training-plan patches. Offered in plan mode and coach mode: every write is
+# staged for Accept on Plan Hub, so coach can improve a plan without a silent
+# overwrite. Nutrition writes stay nutrition-mode-only.
 
 PLAN_EDIT_OPS = [
     "set_rep_range", "set_sets", "set_priority", "set_goal", "set_notes",
+    "set_destination", "clear_destination",
+    "add_exercise", "remove_exercise", "add_day", "remove_day",
+    "replace_day_exercises",
 ]
 
 PLAN_WRITE_SCHEMAS = [
@@ -1271,13 +1380,14 @@ PLAN_WRITE_SCHEMAS = [
         "function": {
             "name": "propose_plan_edits",
             "description": (
-                "Stage per-exercise changes to the user's ACTIVE training plan for them "
-                "to accept or discard on the Plan tab. This does NOT change the plan. "
-                "Use it when a lift's target should move based on how sessions have "
-                "actually gone. It can only retarget exercises already in the plan — it "
-                "cannot add or remove exercises or training days, so do not promise "
-                "that. Call get_training_plan first so you use exact day and exercise "
-                "names."
+                "Stage changes to the user's ACTIVE training plan for them to accept or "
+                "discard on the Plan tab. This does NOT change the plan until they accept. "
+                "Use for retargeting a lift AND for structure: add/remove exercises or "
+                "days, or replace_day_exercises with a full list pulled from "
+                "get_workout_session / get_recent_sessions. Call get_training_plan (or use "
+                "the ACTIVE TRAINING PLAN snapshot) so day and exercise names match exactly. "
+                "Prefer replace_day_exercises when filling an under-filled day from a real "
+                "logged workout instead of inventing lifts."
             ),
             "parameters": {
                 "type": "object",
@@ -1288,7 +1398,7 @@ PLAN_WRITE_SCHEMAS = [
                     },
                     "edits": {
                         "type": "array",
-                        "description": "Up to 6 scoped edits.",
+                        "description": "Up to 16 reviewable edits.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -1299,14 +1409,24 @@ PLAN_WRITE_SCHEMAS = [
                                 },
                                 "exercise_name": {
                                     "type": "string",
-                                    "description": "Exact exercise name from that day.",
+                                    "description": (
+                                        "Exercise name for field/add/remove ops. "
+                                        "For day-level ops, may match the day."
+                                    ),
                                 },
                                 "value": {
                                     "description": (
                                         "set_rep_range: [low, high]. set_sets: integer. "
                                         "set_priority: high|supporting|normal. "
                                         "set_goal: strength|hypertrophy|fat_loss|general. "
-                                        "set_notes: short coaching cue."
+                                        "set_notes: short coaching cue. "
+                                        "set_destination: {weight, reps, weeks?} finish line "
+                                        "(e.g. 85 lb × 8 in 10 weeks). clear_destination: true. "
+                                        "add_exercise: {exercise_name, sets?, target_rep_range?, "
+                                        "priority?, goal?, notes?} or just rely on exercise_name. "
+                                        "add_day: day name string. "
+                                        "replace_day_exercises: [{exercise_name, sets, "
+                                        "target_rep_range?, priority?, goal?}]."
                                     ),
                                 },
                                 "rationale": {
@@ -1314,7 +1434,7 @@ PLAN_WRITE_SCHEMAS = [
                                     "description": "Why, in one sentence, from their data.",
                                 },
                             },
-                            "required": ["op", "exercise_name", "value"],
+                            "required": ["op"],
                         },
                     },
                 },
@@ -1329,13 +1449,12 @@ def tools_for_mode(mode: str = "coach") -> List[Dict[str, Any]]:
     """
     The toolset a chat turn may use.
 
-    Write tools are offered only in the mode whose plan they touch: the user
-    has explicitly opened a conversation about that plan, so a proposal is
-    expected rather than a surprise. Plain coach chat can read everything and
-    stage nothing.
+    Nutrition writes stay in nutrition mode. Training-plan writes are available
+    in plan mode and coach mode because every proposal is staged for review —
+    "improve my plan" must be able to stage patches without a mode toggle.
     """
     if mode == "nutrition":
         return READ_TOOL_SCHEMAS + NUTRITION_WRITE_SCHEMAS
     if mode == "plan":
         return READ_TOOL_SCHEMAS + PLAN_WRITE_SCHEMAS
-    return READ_TOOL_SCHEMAS
+    return READ_TOOL_SCHEMAS + PLAN_WRITE_SCHEMAS

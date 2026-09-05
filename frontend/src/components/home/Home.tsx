@@ -22,7 +22,7 @@ import { colors, spacing } from "../../theme";
 import { todayKey } from "../wellness/types";
 import { LevelSlider } from "../wellness/ui";
 import LogFoodForm, { PlanMealPick } from "../nutrition/LogFoodForm";
-import { DEFAULT_TARGETS, FoodItem } from "../nutrition/types";
+import { DEFAULT_TARGETS, FoodItem, NutritionTargets } from "../nutrition/types";
 import { TodaysWorkout } from "../workouts/types";
 import { getActiveNutritionPlan, mealAnchorKind, daysLabel } from "../../api/nutritionPlan";
 import type { NutritionPlan } from "../../api/nutritionPlan";
@@ -128,6 +128,12 @@ export default function Home() {
   const [waterCups, setWaterCups] = useState(0);
   const [waterId, setWaterId] = useState<string | null>(null);
   const [waterTarget, setWaterTarget] = useState(DEFAULT_TARGETS.water);
+  const [targets, setTargets] = useState<NutritionTargets>({ ...DEFAULT_TARGETS });
+  const [loadStates, setLoadStates] = useState<Record<string, { date: string; loaded: boolean; error: boolean; loading: boolean }>>({});
+  const loadGeneration = useRef<Record<string, number>>({});
+  const currentDateRef = useRef(date);
+  currentDateRef.current = date;
+  const available = (key: string) => loadStates[key]?.date === date && loadStates[key]?.loaded;
   const [logMeal, setLogMeal] = useState("Lunch");
   const [logUncertain, setLogUncertain] = useState(false);
   const [loggingId, setLoggingId] = useState<string | null>(null);
@@ -233,91 +239,120 @@ export default function Home() {
       }
     });
 
-  const load = useCallback(async () => {
-    try {
-      const [
-        sleepRes,
-        stressRes,
-        surveyRes,
-        bodyRes,
-        routineRes,
-        planRes,
-        macrosRes,
-        nutritionPlan,
-        hydrationRes,
-        targetsRes,
-      ] = await Promise.all([
-        apiClient.get("/api/sleep"),
-        apiClient.get("/api/stress"),
-        apiClient.get("/api/wellness-survey"),
-        apiClient.get("/api/body-feelings"),
-        apiClient.get("/api/daily-routines"),
-        apiClient.get("/api/workout-plan/today").catch(() => ({ data: null })),
-        apiClient.get("/api/macros").catch(() => ({ data: [] })),
-        getActiveNutritionPlan().catch(() => null),
-        apiClient.get("/api/hydration").catch(() => ({ data: [] })),
-        apiClient.get("/api/user-profile/nutrition-targets").catch(() => ({ data: null })),
-      ]);
-      const sleeps = Array.isArray(sleepRes.data) ? sleepRes.data : [];
-      const stresses = Array.isArray(stressRes.data) ? stressRes.data : [];
-      const surveys = Array.isArray(surveyRes.data) ? surveyRes.data : [];
-      const sleep = todayEntry(sleeps);
-      const stress = todayEntry(stresses);
-      const survey = todayEntry(surveys);
-      const body = todayEntry(Array.isArray(bodyRes.data) ? bodyRes.data : []);
-      const hydration = todayEntry(Array.isArray(hydrationRes.data) ? hydrationRes.data : []);
-      setSleepRows(sleeps);
-      setStressRows(stresses);
-      setWaterCups(Math.max(0, Math.round(Number(hydration?.amount_cups) || 0)));
-      setWaterId(hydration?.id || null);
-      setWaterTarget(
-        Math.max(
-          1,
-          Math.round(Number(targetsRes.data?.water) || DEFAULT_TARGETS.water)
-        )
-      );
-      setSleepHours(sleep?.hours_slept != null ? Number(sleep.hours_slept) : null);
-      setSleepId(sleep?.id || null);
-      setSleepQuality(sleep?.quality != null ? Number(sleep.quality) : null);
-      setDraftSleep(sleep?.hours_slept != null ? Number(sleep.hours_slept) : 7.5);
-      setDraftSleepQuality(sleep?.quality != null ? Number(sleep.quality) : 5);
-      setStressLevel(stress?.level != null ? Number(stress.level) : null);
-      setStressId(stress?.id || null);
-      setDraftStress(stress?.level != null ? Number(stress.level) : 5);
-      setDraftStressNote(stress?.description || "");
-      setSurveyId(survey?.id || null);
-      setBodyId(body?.id || null);
-      setDraftBody(body?.description || "");
-      if (survey) {
-        setDraftFatigue(survey.fatigue ?? 5);
-        setDraftAches(survey.body_aches ?? 5);
-        setDraftEnergy(survey.energy ?? 5);
-        setDraftMood(survey.mood ?? 5);
+  const load = useCallback(async (only?: string) => {
+    const generations: Record<string, number> = {};
+    const isCurrent = (key: string) => currentDateRef.current === date && loadGeneration.current[key] === generations[key];
+    const jobs: Record<string, () => Promise<void>> = {
+      Sleep: async () => {
+        const { data } = await apiClient.get("/api/sleep");
+        if (!isCurrent("Sleep")) return;
+        const rows = Array.isArray(data) ? data : [];
+        const entry = todayEntry(rows);
+        setSleepRows(rows);
+        setSleepHours(entry?.hours_slept != null ? Number(entry.hours_slept) : null);
+        setSleepId(entry?.id || null);
+        setSleepQuality(entry?.quality != null ? Number(entry.quality) : null);
+      },
+      Stress: async () => {
+        const { data } = await apiClient.get("/api/stress");
+        if (!isCurrent("Stress")) return;
+        const rows = Array.isArray(data) ? data : [];
+        const entry = todayEntry(rows);
+        setStressRows(rows);
+        setStressLevel(entry?.level != null ? Number(entry.level) : null);
+        setStressId(entry?.id || null);
+        setDraftStressNote(entry?.description || "");
+      },
+      Wellness: async () => {
+        const { data } = await apiClient.get("/api/wellness-survey");
+        if (!isCurrent("Wellness")) return;
+        const entry = todayEntry(Array.isArray(data) ? data : []);
+        setSurveyId(entry?.id || null);
+        setDraftFatigue(entry?.fatigue ?? 5);
+        setDraftAches(entry?.body_aches ?? 5);
+        setDraftEnergy(entry?.energy ?? 5);
+        setDraftMood(entry?.mood ?? 5);
+      },
+      "Body feelings": async () => {
+        const { data } = await apiClient.get("/api/body-feelings");
+        if (!isCurrent("Body feelings")) return;
+        const entry = todayEntry(Array.isArray(data) ? data : []);
+        setBodyId(entry?.id || null);
+        setDraftBody(entry?.description || "");
+      },
+      Routines: async () => {
+        const { data } = await apiClient.get("/api/daily-routines");
+        if (isCurrent("Routines")) setRoutines(Array.isArray(data) ? data : []);
+      },
+      Workout: async () => {
+        const { data } = await apiClient.get("/api/workout-plan/today");
+        if (isCurrent("Workout")) setTodayWorkout(data || null);
+      },
+      Food: async () => {
+        // Finish local writes before reading. Never reset an unsaved local edit.
+        await macrosWriteChain.current;
+        const pendingAtRead = todayFoodsPendingRef.current;
+        const { data } = await apiClient.get("/api/macros");
+        if (!isCurrent("Food") || todayFoodsPendingRef.current !== pendingAtRead) return;
+        const rows = Array.isArray(data) ? data : [];
+        setMacroRows(rows);
+        const entry = todayEntry(rows);
+        todayMacroIdRef.current = entry?.id ? String(entry.id) : null;
+        todayFoodsPendingRef.current = null;
+      },
+      Plan: async () => {
+        const next = await getActiveNutritionPlan();
+        if (isCurrent("Plan")) setPlan(next);
+      },
+      Water: async () => {
+        const { data } = await apiClient.get("/api/hydration");
+        if (!isCurrent("Water")) return;
+        const entry = todayEntry(Array.isArray(data) ? data : []);
+        setWaterCups(Math.max(0, Math.round(Number(entry?.amount_cups) || 0)));
+        setWaterId(entry?.id || null);
+      },
+      Targets: async () => {
+        const { data } = await apiClient.get("/api/user-profile/nutrition-targets");
+        if (!isCurrent("Targets")) return;
+        const next = { ...DEFAULT_TARGETS, ...(data || {}) };
+        setTargets(next);
+        setWaterTarget(next.water);
+      },
+    };
+    await Promise.all(Object.entries(jobs).filter(([key]) => !only || key === only).map(async ([key, job]) => {
+      const generation = (loadGeneration.current[key] || 0) + 1;
+      loadGeneration.current[key] = generation;
+      generations[key] = generation;
+      setLoadStates(prev => ({ ...prev, [key]: {
+        date, loaded: prev[key]?.date === date && prev[key]?.loaded,
+        error: false, loading: true,
+      } }));
+      try {
+        await job();
+        if (currentDateRef.current !== date || loadGeneration.current[key] !== generation) return;
+        setLoadStates(prev => ({ ...prev, [key]: { date, loaded: true, error: false, loading: false } }));
+      } catch (error) {
+        if (currentDateRef.current !== date || loadGeneration.current[key] !== generation) return;
+        console.error(`Could not load ${key}:`, error);
+        setLoadStates(prev => ({ ...prev, [key]: {
+          date, loaded: prev[key]?.date === date && prev[key]?.loaded,
+          error: true, loading: false,
+        } }));
       }
-      setRoutines(Array.isArray(routineRes.data) ? routineRes.data : []);
-      setTodayWorkout(planRes.data || null);
-      setMacroRows(Array.isArray(macrosRes.data) ? macrosRes.data : []);
-      const todayMacro = todayEntry(Array.isArray(macrosRes.data) ? macrosRes.data : []);
-      todayMacroIdRef.current =
-        todayMacro?.id && !String(todayMacro.id).startsWith("local-")
-          ? String(todayMacro.id)
-          : null;
-      todayFoodsPendingRef.current = null;
-      setPlan(nutritionPlan);
-      void (async () => {
-        try {
-          const mealSettings = await loadMealReminderSettings();
-          if (!mealSettings.enabled) return;
-          const foods = (todayMacro?.food_items || []) as FoodItem[];
-          await syncMealReminders(mealSettings, nutritionPlan, { [date]: foods });
-        } catch {
-          // Non-fatal.
-        }
-      })();
-    } catch (error) {
-      console.error("Error loading home:", error);
-    }
+    }));
   }, [date]);
+
+  useEffect(() => {
+    if (!available("Food") || !available("Plan")) return;
+    void (async () => {
+      try {
+        const settings = await loadMealReminderSettings();
+        if (settings.enabled) await syncMealReminders(settings, plan, {
+          [date]: (todayEntry(macroRows)?.food_items || []) as FoodItem[],
+        });
+      } catch { /* Reminder scheduling must not block the log. */ }
+    })();
+  }, [date, macroRows, plan, loadStates.Food?.loaded, loadStates.Plan?.loaded]);
 
   useFocusEffect(
     useCallback(() => {
@@ -531,16 +566,6 @@ export default function Home() {
 
     try {
       await flushTodayMacros();
-      void (async () => {
-        try {
-          const mealSettings = await loadMealReminderSettings();
-          if (!mealSettings.enabled) return;
-          const foods = todayFoodsPendingRef.current || [];
-          await syncMealReminders(mealSettings, plan, { [date]: foods });
-        } catch {
-          // Non-fatal.
-        }
-      })();
     } catch {
       setMacroRows(snapshot);
       const existing = todayEntry(snapshot);
@@ -800,7 +825,19 @@ export default function Home() {
         <Text style={styles.dateLine}>{dateLabel}</Text>
       </View>
 
+      {Object.entries(loadStates).filter(([, state]) => state.date === date && (state.error || (state.loading && !state.loaded))).map(([key, state]) => (
+        <View key={key} style={{ padding: 12, gap: 6 }}>
+          <Text style={{ color: colors.textSecondary }}>
+            {state.loading ? `Loading ${key.toLowerCase()}…` : `${key}: ${state.loaded ? "showing the last loaded data; it may be out of date." : "could not load data."}`}
+          </Text>
+          {state.error ? <TouchableOpacity onPress={() => void load(key)} accessibilityLabel={`Retry ${key}`}><Text style={{ color: colors.accentPrimary }}>Retry {key.toLowerCase()}</Text></TouchableOpacity> : null}
+        </View>
+      ))}
+
       <QuickLogBars
+        available={{ sleep: Boolean(available("Sleep")), stress: Boolean(available("Stress")),
+          wellness: Boolean(available("Wellness") && available("Body feelings")),
+          water: Boolean(available("Water") && available("Targets")) }}
         sleepHours={sleepHours}
         sleepQuality={sleepQuality}
         stressLevel={stressLevel}
@@ -819,8 +856,9 @@ export default function Home() {
         onLockScroll={setLockScroll}
       />
 
-      <TodayFoodLog
+      {["Food", "Plan", "Targets"].every(available) ? <TodayFoodLog
         plan={plan}
+        targets={targets}
         todayFoods={todayFoods}
         loggingId={loggingId}
         onLogMeal={(meal, uncertain) => openFood(meal, uncertain)}
@@ -828,8 +866,9 @@ export default function Home() {
         onRepeatFoods={repeatFoods}
         onRemoveTag={removeByTag}
         onBumpFood={bumpFoodQuantity}
-      />
+      /> : null}
 
+      {available("Routines") ? <>
       <View style={styles.routinesHead}>
         <Text style={styles.sectionLabel}>Routines</Text>
         <View style={styles.routinesHeadRight}>
@@ -878,8 +917,9 @@ export default function Home() {
       <View style={styles.progressTrack}>
         <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
       </View>
+      </> : null}
 
-      {showWorkout ? (
+      {available("Workout") && showWorkout ? (
         <View style={styles.workoutCard}>
           <Text style={styles.todayLabel}>Today's workout</Text>
           <View style={styles.workoutRow}>

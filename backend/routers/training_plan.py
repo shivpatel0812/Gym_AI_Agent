@@ -34,6 +34,7 @@ from ai_analysis.plan_projection import (
     DEFAULT_PROJECTION_WEEKS,
     MAX_PROJECTION_WEEKS,
     PlanProjector,
+    exercise_sessions_per_week,
     measure_adherence,
 )
 from ai_analysis.coach_tools import _exercise_history_context
@@ -121,6 +122,7 @@ def _muscle_group_history(sessions: List[dict]) -> dict:
             day["sessions"].append({
                 "exercise_id": exercise.get("exercise_id") or "",
                 "exercise_name": name or "Exercise",
+                "session_id": session.get("id"),
                 "sets": sets,
             })
 
@@ -163,6 +165,11 @@ class ExerciseGoalRequest(BaseModel):
     target_rep_range: Optional[List[int]] = None
     sets: Optional[int] = None
     notes: Optional[str] = None
+    # Destination finish line (weight × reps). Clear with clear_destination=True.
+    target_weight: Optional[float] = None
+    target_reps: Optional[int] = None
+    target_weeks: Optional[int] = None
+    clear_destination: Optional[bool] = None
 
 
 class SuggestionActionRequest(BaseModel):
@@ -689,8 +696,10 @@ async def get_plan_projection(
     all_workout_sessions = recommender.data_fetcher.get_all_workout_sessions()
     user_goal = profile.get("primary_goal") or "Build Muscle"
 
-    # How often each plan day comes round, so a lift trained twice a week
-    # projects twice as fast as one trained once.
+    # How often each lift is trained this week. Counted per exercise across the
+    # days that carry it — Push A + Push B both once still means incline is
+    # twice, which is what fills the Workout 1 / Workout 2 columns.
+    exercise_frequency = exercise_sessions_per_week(plan)
     day_frequency: dict = {}
     for day_name in (plan.get("weekly_schedule") or {}).values():
         if day_name and str(day_name).strip().lower() != "rest":
@@ -709,12 +718,15 @@ async def get_plan_projection(
     days_out = []
     for day in plan.get("days") or []:
         day_name = day.get("day_name") or "Workout"
-        per_week = day_frequency.get(day_name, 1)
         exercises = []
         for exercise in day.get("exercises") or []:
             ex_id = exercise.get("exercise_id")
             if not ex_id:
                 continue
+            per_week = max(
+                1,
+                exercise_frequency.get(ex_id) or day_frequency.get(day_name, 1),
+            )
             rep_range = exercise.get("target_rep_range")
             history_context = _exercise_history_context(
                 all_workout_sessions,
@@ -743,6 +755,9 @@ async def get_plan_projection(
                 ),
                 adherence=adherence.rate,
                 top_lifts=profile.get("top_lifts"),
+                target_weight=exercise.get("target_weight"),
+                target_reps=exercise.get("target_reps"),
+                target_weeks=exercise.get("target_weeks"),
             )
             # The chart's backward axis and the engine's input are different
             # questions. `projection_history` is what the engine may reason from:
@@ -762,6 +777,9 @@ async def get_plan_projection(
                 "goal": exercise.get("goal"),
                 "sets": exercise.get("sets"),
                 "target_rep_range": rep_range,
+                "target_weight": exercise.get("target_weight"),
+                "target_reps": exercise.get("target_reps"),
+                "target_weeks": exercise.get("target_weeks"),
                 "notes": exercise.get("notes"),
                 "recent_sessions": logged_sessions,
                 "last_trained": (
@@ -775,7 +793,7 @@ async def get_plan_projection(
             "day_goal": day.get("day_goal"),
             "day_type": day.get("day_type"),
             "goal": day.get("goal"),
-            "sessions_per_week": per_week,
+            "sessions_per_week": day_frequency.get(day_name, 1),
             "exercises": exercises,
         })
 
@@ -864,6 +882,17 @@ async def set_exercise_goal(
         add("set_sets", request.sets)
     if request.notes is not None:
         add("set_notes", request.notes)
+    if request.clear_destination:
+        add("clear_destination", True)
+    elif request.target_weight is not None or request.target_reps is not None:
+        dest: dict = {}
+        if request.target_weight is not None:
+            dest["weight"] = request.target_weight
+        if request.target_reps is not None:
+            dest["reps"] = request.target_reps
+        if request.target_weeks is not None:
+            dest["weeks"] = request.target_weeks
+        add("set_destination", dest)
 
     if not edits:
         raise HTTPException(status_code=400, detail="Nothing to change")

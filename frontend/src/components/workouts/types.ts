@@ -26,6 +26,7 @@ export interface WorkoutSet {
 }
 
 export interface ExerciseAiRecommendation {
+  algorithm_version?: number;
   sets?: { set_number?: number; reps?: number; weight?: number; rep_low?: number; rep_high?: number; preferred_reps?: number; role?: string }[];
   reasoning?: string;
   progression_type?: string;
@@ -59,6 +60,7 @@ export interface ExerciseAiRecommendation {
   next_set_reasoning?: string;
   next_set_action?: string;
   next_set_request_id?: string;
+  plan_context?: PlanContextInfo;
 }
 
 export interface SessionExercise {
@@ -84,6 +86,8 @@ export interface PlanContextInfo {
   source?: string;
   priority?: "high" | "supporting" | "normal";
   target_rep_range?: [number, number];
+  target_sets?: number;
+  day_specific_progression?: boolean;
   day_type?: string;
   day_goal?: string;
   plan_name?: string;

@@ -30,6 +30,11 @@ from .exercise_metadata import resolve_exercise_metadata, is_bodyweight
 from .personalization import learn_position_factor, apply_position_factor
 
 
+# Persisted recommendations live inside draft workout sessions. Increment this
+# whenever old numeric prescriptions must be recomputed rather than reused.
+RECOMMENDATION_ALGORITHM_VERSION = 1
+
+
 class WorkoutRecommender:
     """AI-powered workout recommender for progressive overload suggestions."""
 
@@ -161,6 +166,12 @@ class WorkoutRecommender:
                 performed = sets or self._normalize_exercise_sets(ex)
                 result.append({
                     "date": session.get("date"),
+                    # A lift can intentionally use different prescriptions on
+                    # Push A and Push B (for example, Heavy vs Volume). Keep the
+                    # session identity so those progressions can be separated.
+                    "split_day": session.get("split_day"),
+                    "split_name": session.get("split_name"),
+                    "workout_name": session.get("workout_name"),
                     "sets": performed,
                     # Charts fall back to this when every set in a session is
                     # unticked, which older logs commonly are. Without it those
@@ -175,6 +186,19 @@ class WorkoutRecommender:
                 })
         result.sort(key=lambda item: item.get("date") or "", reverse=True)
         return result
+
+    @staticmethod
+    def _history_for_plan_day(history: List[Dict], day_name: Optional[str]) -> List[Dict]:
+        """History logged against exactly one plan day, newest first."""
+        wanted = " ".join(str(day_name or "").strip().lower().split())
+        if not wanted:
+            return []
+        return [
+            session
+            for session in history
+            if " ".join(str(session.get("split_day") or "").strip().lower().split())
+            == wanted
+        ]
 
     @staticmethod
     def _last_session_summary(session: Optional[Dict]) -> Optional[Dict]:
@@ -200,6 +224,8 @@ class WorkoutRecommender:
             return None
 
         summary = {"date": session.get("date"), "sets": sets}
+        if session.get("split_day"):
+            summary["split_day"] = session.get("split_day")
         if session.get("time") is not None:
             summary["time"] = session.get("time")
         if session.get("speed") is not None:
@@ -294,12 +320,6 @@ class WorkoutRecommender:
         recent_exercise_data = self._get_exercise_history(
             exercise_id, days=30, exclude_session_id=exclude_session_id
         )
-        stale_last_session = None
-        if not recent_exercise_data:
-            all_history = self._get_exercise_history(
-                exercise_id, days=None, exclude_session_id=exclude_session_id
-            )
-            stale_last_session = all_history[0] if all_history else None
 
         # Get user profile for goals
         profile = self.data_fetcher.get_user_profile()
@@ -333,6 +353,50 @@ class WorkoutRecommender:
             split_day=split_day,
             profile_goal=user_goal,
         )
+
+        metadata = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
+
+        stale_last_session = None
+        alternate_day_reference = None
+        # When a plan intentionally repeats a loaded lift across days, Heavy
+        # and Volume are separate progressions. A 4-6-rep Heavy exposure is
+        # not a failed 10-rep Volume exposure (and vice versa).
+        if (
+            plan_context.day_specific_progression
+            and plan_context.day_name
+            and metadata.min_increment_lb > 0
+            and metadata.muscle_group != "cardio"
+        ):
+            all_recent_for_exercise = recent_exercise_data
+            same_day_recent = self._history_for_plan_day(
+                all_recent_for_exercise, plan_context.day_name
+            )
+            if same_day_recent:
+                recent_exercise_data = same_day_recent
+            else:
+                recent_exercise_data = []
+                all_history = self._get_exercise_history(
+                    exercise_id, days=None, exclude_session_id=exclude_session_id
+                )
+                same_day_history = self._history_for_plan_day(
+                    all_history, plan_context.day_name
+                )
+                if same_day_history:
+                    stale_last_session = same_day_history[0]
+                else:
+                    # First exposure on this plan day: translate the closest
+                    # recent exposure into the requested rep band instead of
+                    # copying its unlike load/reps verbatim.
+                    alternate_day_reference = (
+                        all_recent_for_exercise[0]
+                        if all_recent_for_exercise
+                        else (all_history[0] if all_history else None)
+                    )
+        elif not recent_exercise_data:
+            all_history = self._get_exercise_history(
+                exercise_id, days=None, exclude_session_id=exclude_session_id
+            )
+            stale_last_session = all_history[0] if all_history else None
 
         # An explicit request value always wins over the resolved plan; the
         # plan fills in whatever the caller left unspecified.
@@ -383,6 +447,7 @@ class WorkoutRecommender:
             exercise_record=exercise_record,
             top_lifts=top_lifts,
             stale_last_session=stale_last_session,
+            alternate_day_reference=alternate_day_reference,
             readiness=readiness,
         )
         position_context = learn_position_factor(
@@ -392,7 +457,6 @@ class WorkoutRecommender:
             position_in_workout,
             exercise_records,
         )
-        metadata = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
         progression_result = apply_position_factor(
             progression_result, position_context, metadata.min_increment_lb
         )
@@ -475,11 +539,15 @@ class WorkoutRecommender:
         if progression_result.reasoning_context.get("has_implausible_data"):
             recommendation["has_implausible_data"] = True
 
+        recommendation["algorithm_version"] = RECOMMENDATION_ALGORITHM_VERSION
+
         # What the recommendation is measured against. A prescription shown on
         # its own is a number with no reference point; the session it is a
         # response to belongs next to it.
         last_session = self._last_session_summary(
-            recent_exercise_data[0] if recent_exercise_data else stale_last_session
+            recent_exercise_data[0]
+            if recent_exercise_data
+            else (stale_last_session or alternate_day_reference)
         )
         if last_session:
             recommendation["last_session"] = last_session

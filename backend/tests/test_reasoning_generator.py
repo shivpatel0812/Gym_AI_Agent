@@ -121,6 +121,18 @@ class TestTemplateReasoning:
         )
         assert "rep" in reasoning.lower()
 
+    def test_weighted_bodyweight_progress_names_the_added_load(self, generator_no_llm):
+        reasoning = generator_no_llm.generate_reasoning(
+            decision=Decision.BODYWEIGHT_PROGRESS,
+            reasoning_context={
+                "reason": "bodyweight_rep_increase",
+                "weighted_bodyweight": True,
+                "added_loads": [50, 89, 40],
+            },
+            exercise_name="Parallel Bar Dips",
+        )
+        assert "added load" in reasoning.lower()
+
 
 class TestLLMFallback:
     def test_no_client_uses_template(self):

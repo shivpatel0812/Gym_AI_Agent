@@ -113,16 +113,25 @@ def test_a_reversed_rep_range_is_normalised_rather_than_stored_backwards():
     assert accepted[0]["value"] == [6, 10]
 
 
-def test_the_guided_flow_cannot_restructure_the_plan():
+def test_structure_ops_can_fill_or_trim_a_day_when_staged():
     """
-    The whole point of the split: Plan Mode edits intent on lifts that exist.
-    Adding or removing exercises stays with full plan generation.
+    Structure patches are allowed but still reviewable — they never write live
+    until Accept. That is how "improve my plan" fills under-filled days.
     """
     accepted, rejected = normalize_edits(PLAN, [
         {"op": "remove_exercise", "day_name": "Push A",
-         "exercise_name": "Incline Dumbbell Press", "value": True},
+         "exercise_name": "Incline Dumbbell Press"},
         {"op": "add_exercise", "day_name": "Push A",
-         "exercise_name": "Weighted Dips", "value": True},
+         "exercise_name": "Weighted Dips",
+         "value": {"sets": 3, "target_rep_range": [6, 10], "priority": "high"}},
     ])
-    assert accepted == []
-    assert all("not a supported edit" in r["reason"] for r in rejected)
+    assert not rejected
+    assert {e["op"] for e in accepted} == {"remove_exercise", "add_exercise"}
+    days, applied = apply_edits(PLAN, accepted)
+    push = next(d for d in days if d["day_name"] == "Push A")
+    names = [ex["exercise_name"] for ex in push["exercises"]]
+    assert "Incline Dumbbell Press" not in names
+    assert "Weighted Dips" in names
+    assert len(applied) == 2
+    # Live plan untouched until Accept
+    assert PLAN["days"][0]["exercises"][0]["exercise_name"] == "Incline Dumbbell Press"

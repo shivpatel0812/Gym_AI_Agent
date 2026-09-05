@@ -12,6 +12,8 @@ export type WorkoutLiveSnapshot = {
   weight?: number;
   reps?: number;
   elapsedSeconds: number;
+  /** mm:ss or h:mm:ss for lock-screen text (widget + notification). */
+  elapsedLabel: string;
   isRunning: boolean;
   /** Epoch ms = now - elapsed when running (or when last paused). */
   timerBaseEpochMs: number;
@@ -65,6 +67,15 @@ function resolvePrescribed(
   const repLow = Number(recSet?.rep_low) || undefined;
   const repHigh = Number(recSet?.rep_high) || undefined;
   return { reps, weight, repLow, repHigh };
+}
+
+function formatElapsed(elapsedSeconds: number) {
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 /**
@@ -135,6 +146,7 @@ export function buildWorkoutLiveSnapshot(
     weight: prescribed.weight,
     reps: prescribed.reps,
     elapsedSeconds,
+    elapsedLabel: formatElapsed(elapsedSeconds),
     isRunning: Boolean(opts.isRunning),
     timerBaseEpochMs,
     pauseTimeEpochMs: opts.isRunning ? 0 : now,

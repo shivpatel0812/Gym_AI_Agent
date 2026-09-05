@@ -36,6 +36,7 @@ describe("buildWorkoutLiveSnapshot", () => {
       exerciseIdx: 0,
       setIdx: 1,
       isRunning: true,
+      elapsedLabel: "02:05",
     });
   });
 

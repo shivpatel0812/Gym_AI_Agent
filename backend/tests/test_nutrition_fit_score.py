@@ -150,3 +150,34 @@ def test_serving_count_changes_the_fit():
 
     assert tripled["score"] < single["score"]
     assert tripled["slot_share"] > single["slot_share"]
+
+
+def test_pre_workout_never_says_low_protein():
+    """A carb snack before training is doing its job — do not ding it for protein."""
+    banana = {"name": "Banana", "calories": 105, "protein": 1.3, "carbs": 27, "fats": 0.4}
+    pre = {"calorie_min": 120, "calorie_max": 220, "slot": "pre_workout"}
+
+    as_dinner = score_food(banana, slot_target=DINNER, slot="dinner", **CUT)
+    as_pre = score_food(banana, slot_target=pre, slot="pre_workout", **CUT)
+
+    assert "protein" in as_dinner["reason"].lower() or as_dinner["band"] in ("poor", "fair")
+    assert as_pre["reason"] == "Solid training fuel"
+    assert "protein" not in as_pre["reason"].lower()
+    assert as_pre["score"] > as_dinner["score"]
+
+
+def test_pre_workout_label_aliases_resolve():
+    banana = {
+        "name": "Banana",
+        "calories": 105,
+        "protein": 1,
+        "carbs": 27,
+        "fats": 0,
+        "meal": "pre-workout",
+    }
+    result = score_day(
+        [banana],
+        slot_targets={"pre_workout": {"calorie_min": 120, "calorie_max": 220}},
+        **CUT,
+    )
+    assert result["items"][0]["reason"] == "Solid training fuel"

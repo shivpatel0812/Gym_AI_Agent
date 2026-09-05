@@ -89,7 +89,8 @@ def plan_facts(plan: Dict[str, Any], recent: Optional[Dict[str, Any]] = None) ->
     low_protein_slots = [
         slot
         for slot, row in by_slot.items()
-        if row["protein"] and row["protein"] < LOW_PROTEIN_MEAL and slot != "snack"
+        if row["protein"] and row["protein"] < LOW_PROTEIN_MEAL
+        and slot not in ("snack", "pre_workout")
     ]
     no_macro_anchors = [
         anchor.get("label")

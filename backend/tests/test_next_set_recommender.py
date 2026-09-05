@@ -126,3 +126,35 @@ def test_learned_misses_block_model_weight_increase():
         learned_context={"observations": 4, "average_rep_error": -1.5},
     )
     assert result["next_set"]["weight"] == 50
+
+
+def test_weighted_dips_are_identified_as_added_load_in_the_model_context():
+    completions = FakeCompletions({
+        "next_set": {"weight": 50, "rep_low": 8, "rep_high": 10, "preferred_reps": 9},
+        "reasoning": "Keep the added load and add a controlled rep.",
+        "action": "repeat",
+    })
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    # Capture the actual prompt rather than testing only the post-processing
+    # boundary: the model used to be told this was simply "Bodyweight" even
+    # while the session contained weighted dips.
+    original_create = completions.create
+
+    def capture_create(**kwargs):
+        completions.last_kwargs = kwargs
+        return original_create(**kwargs)
+
+    completions.create = capture_create
+    result = NextSetRecommender(client).recommend(
+        exercise_id="default-triceps-bw-parallel-dips",
+        exercise_name="Parallel Bar Dips",
+        completed_sets=[{"set_number": 1, "weight": 50, "reps": 8, "rpe": 8}],
+        remaining_sets=[{"set_number": 2, "weight": 89, "reps": 7}],
+        base_recommendation={"sets": [{"weight": 50, "reps": 9}]},
+    )
+
+    prompt = json.loads(completions.last_kwargs["messages"][1]["content"])
+    assert prompt["load_mode"] == "weighted_bodyweight"
+    assert prompt["equipment"] == "Bodyweight with external added load"
+    assert result["next_set"]["weight"] == 50

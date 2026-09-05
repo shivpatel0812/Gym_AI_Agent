@@ -1,13 +1,17 @@
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { colors } from "../../theme";
 import { formatSetLine, formatShortDate, type LoggedSession } from "./chartUtils";
 
 export default function WorkoutDetailCallout({
   sessions,
   title,
+  onOpenSession,
 }: {
   sessions: LoggedSession[];
   title?: string;
+  /** Opens the logged workout when the server attached a session id. */
+  onOpenSession?: (sessionId: string) => void;
 }) {
   if (!sessions.length) return null;
 
@@ -28,6 +32,16 @@ export default function WorkoutDetailCallout({
           ) : (
             <Text style={styles.setLine}>Session logged — no set detail saved</Text>
           )}
+          {session.sessionId && onOpenSession ? (
+            <TouchableOpacity
+              style={styles.openBtn}
+              onPress={() => onOpenSession(session.sessionId!)}
+              hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+            >
+              <MaterialCommunityIcons name="open-in-new" size={14} color={colors.accentPrimary} />
+              <Text style={styles.openText}>Open workout</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       ))}
     </View>
@@ -54,4 +68,12 @@ const styles = StyleSheet.create({
   session: { gap: 3 },
   headline: { fontSize: 12, fontWeight: "800", color: colors.textPrimary },
   setLine: { fontSize: 11, color: colors.textSecondary, lineHeight: 16 },
+  openBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginTop: 4,
+    alignSelf: "flex-start",
+  },
+  openText: { fontSize: 12, fontWeight: "700", color: colors.accentPrimary },
 });

@@ -21,7 +21,6 @@ import Markdown from "./shared/Markdown";
 import ConversationSidebar from "./chat/ConversationSidebar";
 import CreatePlanModal from "./plan/CreatePlanModal";
 import CreateNutritionPlanModal from "./nutrition/plan/CreateNutritionPlanModal";
-import { NutritionSuggestionArtifact } from "../api/nutritionPlan";
 import apiClient from "../api/client";
 import { streamChat, StreamError } from "../api/streamChat";
 import RequestAiAccessModal from "./ai/RequestAiAccessModal";
@@ -45,31 +44,60 @@ import {
   normalizeAiModel,
 } from "../lib/aiModels";
 
+type SuggestionArtifact = {
+  type: string;
+  count: number;
+  titles: string[];
+  summary?: string;
+  suggestion_set_id?: string;
+};
+
 interface Message {
   role: "user" | "assistant";
   content: string;
   /** Plan edits this turn staged for review. Chat never writes the plan. */
-  suggestions?: NutritionSuggestionArtifact;
+  suggestions?: SuggestionArtifact;
   /** Coach-mode message that sounds like a durable program decision. */
   planIntent?: boolean;
 }
 
 const PLAN_INTENT_PATTERNS = [
   /\b(add|remove|replace|swap|change)\b.{0,35}\b(exercise|lift|movement|workout|day)\b/i,
-  /\b(change|switch|update|redo|edit|adjust)\b.{0,30}\b(plan|split|program|routine|goal)\b/i,
+  /\b(change|switch|update|redo|edit|adjust|improve|fix|fill|complete)\b.{0,30}\b(plan|split|program|routine|goal)\b/i,
   /\b(push\s*pull\s*legs|upper\s*lower|full[ -]?body|training split)\b/i,
   /\b(build|building|maintain|maintaining)\b.{0,35}\b(bench|press|squat|deadlift|row|lift|strength|muscle)\b/i,
   /\b(goal|target)\b.{0,45}\b(by|within|for my|on my plan|this block)\b/i,
   /\b(make|set)\b.{0,25}\b(my )?(goal|target)\b/i,
   /\bput\b.{0,25}\b(in|into|on)\b.{0,15}\b(my )?plan\b/i,
+  /\b(use|pull|base)\b.{0,30}\b(previous|past|logged|old)\b.{0,20}\b(workout|session|day)\b/i,
+];
+
+/** Strong enough to open Plan Mode automatically (not just show a handoff card). */
+const STRONG_PLAN_EDIT_PATTERNS = [
+  /\b(improve|update|edit|fix|fill|complete|rebuild)\b.{0,40}\b(my |the )?(plan|program|split|routine)\b/i,
+  /\b(add|remove|replace)\b.{0,35}\b(exercise|lift|day)\b.{0,20}\b(to |on |from )?(my )?(plan|push|pull|legs)\b/i,
 ];
 
 function looksLikePlanIntent(message: string): boolean {
   return PLAN_INTENT_PATTERNS.some((pattern) => pattern.test(message));
 }
 
-function suggestionArtifact(artifacts?: any[]): NutritionSuggestionArtifact | undefined {
-  return (artifacts || []).find((a) => a?.type === "nutrition_suggestions");
+function looksLikeStrongPlanEdit(message: string): boolean {
+  return STRONG_PLAN_EDIT_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function suggestionArtifact(artifacts?: any[]): SuggestionArtifact | undefined {
+  const hit = (artifacts || []).find(
+    (a) => a?.type === "nutrition_suggestions" || a?.type === "plan_suggestions"
+  );
+  if (!hit) return undefined;
+  return {
+    type: hit.type,
+    count: hit.count || (hit.titles || []).length || 0,
+    titles: hit.titles || [],
+    summary: hit.summary,
+    suggestion_set_id: hit.suggestion_set_id,
+  };
 }
 
 // Shown while the coach is pulling data mid-answer
@@ -84,6 +112,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_nutrition_plan: "Checking your nutrition plan...",
   propose_nutrition_edits: "Drafting plan updates...",
   get_training_plan: "Looking at your training plan...",
+  propose_plan_edits: "Drafting plan updates...",
   get_wellness_log: "Reviewing your sleep and recovery...",
   get_personal_records: "Looking up your personal bests...",
 };
@@ -99,6 +128,8 @@ interface AIChatProps {
   onModeConsumed?: () => void;
   /** Jumps to the Nutrition Plan tab to review coach-staged plan edits. */
   onOpenNutritionPlan?: () => void;
+  /** Jumps to the Plan Hub to review training-plan suggestions. */
+  onOpenTrainingPlan?: () => void;
 }
 
 export default function AIChat({
@@ -107,6 +138,7 @@ export default function AIChat({
   initialMode,
   onModeConsumed,
   onOpenNutritionPlan,
+  onOpenTrainingPlan,
 }: AIChatProps = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
@@ -306,7 +338,11 @@ export default function AIChat({
 
   // Falls back to the buffered endpoint when streaming fails before any text
   // has arrived, so a proxy that won't pass SSE through still gets an answer
-  const sendBuffered = async (messageToSend: string, baseMessages: Message[]) => {
+  const sendBuffered = async (
+    messageToSend: string,
+    baseMessages: Message[],
+    modeForSend: ChatMode = chatMode
+  ) => {
     try {
       const res = await apiClient.post(
         "/api/ai-analysis/chat",
@@ -314,11 +350,11 @@ export default function AIChat({
           message: messageToSend,
           conversation_id: conversationId,
           conversation_history: conversationHistory,
-          mode: chatMode,
+          mode: modeForSend,
           model: aiModel,
         },
         // GPT-4o responses regularly run past the default 30s client timeout
-        { timeout: chatMode === "coach" && aiModel !== "gpt-5.6-sol" ? 90000 : 120000 }
+        { timeout: modeForSend === "coach" && aiModel !== "gpt-5.6-sol" ? 90000 : 120000 }
       );
 
       if (res.data.status !== "success") throw new Error("Chat failed");
@@ -372,12 +408,18 @@ export default function AIChat({
     }
 
     const messageToSend = inputMessage.trim();
+    const forcePlanMode =
+      chatMode === "coach" && looksLikeStrongPlanEdit(messageToSend);
+    const modeForSend: ChatMode = forcePlanMode ? "plan" : chatMode;
+    if (forcePlanMode) setChatMode("plan");
+
     const updatedMessages: Message[] = [
       ...messages,
       {
         role: "user",
         content: messageToSend,
-        planIntent: chatMode === "coach" && looksLikePlanIntent(messageToSend),
+        planIntent:
+          modeForSend === "coach" && looksLikePlanIntent(messageToSend),
       },
     ];
     setMessages(updatedMessages);
@@ -392,7 +434,7 @@ export default function AIChat({
         message: messageToSend,
         conversationId,
         conversationHistory,
-        mode: chatMode,
+        mode: modeForSend,
         model: aiModel,
       },
       {
@@ -446,7 +488,7 @@ export default function AIChat({
           }
 
           console.warn("Streaming unavailable, falling back:", error.message);
-          sendBuffered(messageToSend, updatedMessages);
+          sendBuffered(messageToSend, updatedMessages, modeForSend);
         },
       }
     );
@@ -495,7 +537,11 @@ export default function AIChat({
             {item.suggestions ? (
               <TouchableOpacity
                 style={styles.suggestionCard}
-                onPress={() => onOpenNutritionPlan?.()}
+                onPress={() =>
+                  item.suggestions?.type === "plan_suggestions"
+                    ? onOpenTrainingPlan?.()
+                    : onOpenNutritionPlan?.()
+                }
                 activeOpacity={0.85}
               >
                 <View style={styles.suggestionCardHeader}>
@@ -514,7 +560,11 @@ export default function AIChat({
                     · {title}
                   </Text>
                 ))}
-                <Text style={styles.suggestionCardCta}>Review updates →</Text>
+                <Text style={styles.suggestionCardCta}>
+                  {item.suggestions.type === "plan_suggestions"
+                    ? "Review on Plan →"
+                    : "Review updates →"}
+                </Text>
               </TouchableOpacity>
             ) : null}
             {/* Guideline 1.2: every AI response must be reportable */}

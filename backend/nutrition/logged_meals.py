@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from nutrition.slot_targets import is_fuel_slot
+
 MACRO_KEYS = ("calories", "protein", "carbs", "fats", "fiber")
 
 # Logged foods carry a free-text meal label; map it to a blueprint slot.
@@ -122,13 +124,20 @@ def group_logged_by_slot(
     return out
 
 
-def fits_target(meal: Dict[str, Any], target: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def fits_target(
+    meal: Dict[str, Any],
+    target: Optional[Dict[str, Any]],
+    slot: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     How a logged meal measures up against the slot's calorie and protein target.
 
     Returned rather than filtered on: a meal that runs hot is still worth
     offering as an option with the reason attached, which is more useful than
     quietly dropping the thing the user eats most.
+
+    Fuel slots (pre-workout) are judged on calories only — protein is not
+    their job, and flagging a banana as low_protein is what this skips.
     """
     if not target:
         return {"verdict": "unknown", "reason": None}
@@ -138,6 +147,7 @@ def fits_target(meal: Dict[str, Any], target: Optional[Dict[str, Any]]) -> Dict[
     protein_floor = _num(target.get("protein_min"))
     calories = _num(meal.get("calories"))
     protein = _num(meal.get("protein"))
+    fuel = is_fuel_slot(slot or target.get("slot"))
 
     if high and calories > high * 1.15:
         return {
@@ -149,11 +159,13 @@ def fits_target(meal: Dict[str, Any], target: Optional[Dict[str, Any]]) -> Dict[
             "verdict": "light",
             "reason": f"light for this slot — leaves about {int(low - calories)} kcal open",
         }
-    if protein_floor and protein < protein_floor * 0.75:
+    if not fuel and protein_floor and protein < protein_floor * 0.75:
         return {
             "verdict": "low_protein",
             "reason": f"only {int(protein)}g protein against a {int(protein_floor)}g floor",
         }
+    if fuel:
+        return {"verdict": "fits", "reason": "sits inside this slot's calorie range for training fuel"}
     return {"verdict": "fits", "reason": "sits inside this slot's calorie and protein range"}
 
 
@@ -168,7 +180,7 @@ def slot_log_facts(
     meals = grouped.get(slot) or []
     scored = []
     for meal in meals:
-        fit = fits_target(meal, target)
+        fit = fits_target(meal, target, slot=slot)
         scored.append({**meal, "fit": fit["verdict"], "fit_reason": fit["reason"]})
 
     days = {

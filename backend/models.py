@@ -94,6 +94,19 @@ class FoodItem(BaseModel):
     # rather than the generic automatic library hook.
     log_source: Optional[str] = None
     was_adjusted: Optional[bool] = None
+    # When this row was written, on the user's clock (ISO 8601 with offset).
+    # Server-stamped on every write, so meal timing accrues without each client
+    # having to know about it. See nutrition/meal_timing.py.
+    logged_at: Optional[str] = None
+    # When the food was actually eaten, when that differs from when it was
+    # logged. The user's own statement; it wins over `logged_at` for timing.
+    eaten_at: Optional[str] = None
+    # "auto" when the slot came from the log form or the time window, "user"
+    # once the user has moved the row to a different meal by hand.
+    slot_source: Optional[str] = None
+    # The slot the app originally filed this row under, kept only while the row
+    # sits somewhere else. Moving a food out and back clears it.
+    moved_from: Optional[str] = None
 
 class SavedFood(BaseModel):
     id: Optional[str] = None
@@ -285,6 +298,11 @@ class PlanExercise(BaseModel):
     goal: Optional[str] = None  # "strength", "hypertrophy", "fat_loss", "general"
     priority: Optional[str] = None  # "high", "supporting", "normal"
     target_rep_range: Optional[List[int]] = None  # [low, high]
+    # Destination finish line (e.g. 85 lb × 8 in 10 weeks). Optional; when set,
+    # weight and reps travel together. Distinct from target_rep_range (session band).
+    target_weight: Optional[float] = None
+    target_reps: Optional[int] = None
+    target_weeks: Optional[int] = None
 
 class WorkoutPlanDay(BaseModel):
     day_name: str

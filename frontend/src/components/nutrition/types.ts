@@ -38,6 +38,17 @@ export interface FoodItem {
   /** Internal hints for correction-aware photo personalization. */
   log_source?: "photo";
   was_adjusted?: boolean;
+  /**
+   * When the row was written, on the user's clock. Server-stamped on every
+   * write; round-trips on updates, so never strip it when re-saving a day.
+   */
+  logged_at?: string;
+  /** When the food was eaten, when the user says it differs from the log time. */
+  eaten_at?: string;
+  /** "user" once the row has been moved to another meal by hand. */
+  slot_source?: "auto" | "user";
+  /** The slot the app first filed this row under. Cleared if it moves back. */
+  moved_from?: string;
   /** Server-computed goal fit. Read-only; never sent back on a write. */
   fit?: FoodFit | null;
 }

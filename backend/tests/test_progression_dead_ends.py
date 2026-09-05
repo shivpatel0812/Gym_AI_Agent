@@ -127,6 +127,46 @@ class TestBodyweightHistorySurvives:
         assert out["progression_type"] == "bodyweight_progress"
         assert [s["reps"] for s in out["sets"]] == [12, 11, 11]
 
+    def test_weighted_dips_keep_the_logged_added_loads(self):
+        """A bodyweight-capable movement is not a bodyweight-only session.
+
+        This is the exact mixed weighted-dip shape that exposed the bug: the
+        engine copied 8/6/7 to 9/7/8, but changed every positive load to zero.
+        The bodyweight finisher can stay unloaded; the three weighted sets
+        must remain weighted.
+        """
+        rec = recommender_with_sessions(
+            [{
+                "date": "2026-08-14",
+                "exercises": [{
+                    "exercise_id": "default-triceps-bw-parallel-dips",
+                    "exercise_name": "Parallel Bar Dips",
+                    "sets": [
+                        {"set_number": 1, "reps": 8, "weight": 50},
+                        {"set_number": 2, "reps": 6, "weight": 89},
+                        {"set_number": 3, "reps": 7, "weight": 40},
+                        {"set_number": 4, "reps": 16},
+                    ],
+                }],
+            }],
+            plan_context=PlanContext(
+                goal="hypertrophy",
+                source="plan_exercise",
+                target_sets=5,
+                target_rep_range=(8, 10),
+            ),
+        )
+
+        out = rec.get_exercise_recommendation(
+            "default-triceps-bw-parallel-dips", "Parallel Bar Dips"
+        )["recommendation"]
+
+        assert out["progression_type"] == "bodyweight_progress"
+        assert [
+            (item["reps"], item["weight"]) for item in out["sets"][:4]
+        ] == [(9, 50), (7, 89), (8, 40), (17, 0)]
+        assert "added load" in out["reasoning"].lower()
+
 
 # === 2. The rep step never hands back fewer reps ===
 

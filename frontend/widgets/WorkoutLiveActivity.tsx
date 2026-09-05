@@ -1,4 +1,4 @@
-import { HStack, Image, Link, Spacer, Text, VStack } from "@expo/ui/swift-ui";
+import { HStack, Image, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
   clipShape,
   containerBackground,
@@ -15,22 +15,22 @@ export type WorkoutLiveProps = {
   exerciseName: string;
   setLabel: string;
   prescription: string;
-  /** Epoch ms such that `dateStyle: 'timer'` shows current elapsed. */
-  timerBaseEpochMs: number;
+  /** Preformatted mm:ss / h:mm:ss — prefer plain text over timer Text APIs. */
+  elapsedLabel: string;
   isRunning: boolean;
-  /** When paused, freeze the timer at this instant. */
-  pauseTimeEpochMs: number;
-  logSetUrl: string;
 };
 
 const ACCENT = "#FF6B35";
 const TEAL = "#5EEAD4";
+const BG = "#161A22";
 
 /**
  * Lock Screen / Dynamic Island card while a session is in progress.
  *
- * Layout helpers stay inside this function: the `'widget'` directive serializes
- * only the body into the widget extension's separate JS runtime.
+ * Keep this layout simple: blank Live Activity shells are a known
+ * expo-widgets failure mode when the widget JS tree is heavy or uses
+ * APIs the extension runtime fails to evaluate (native timer Text,
+ * Links, etc.). Plain Text + Image is the reliable path.
  */
 const WorkoutLiveActivity = (
   props: WorkoutLiveProps,
@@ -38,33 +38,18 @@ const WorkoutLiveActivity = (
 ) => {
   "widget";
   const dim = environment.colorScheme === "dark" ? "#FFFFFF99" : "#FFFFFFAA";
-
-  const Elapsed = ({ size, color, width }: { size: number; color: string; width: number }) => (
-    <Text
-      date={new Date(props.timerBaseEpochMs)}
-      dateStyle="timer"
-      pauseTime={
-        props.isRunning ? undefined : new Date(props.pauseTimeEpochMs || Date.now())
-      }
-      modifiers={[
-        font({ weight: "semibold", size }),
-        monospacedDigit(),
-        foregroundStyle(color),
-        frame({ width, alignment: "trailing" }),
-      ]}
-    />
-  );
-
   const title = props.exerciseName || "Workout";
+  const day = props.dayLabel || "GymAI";
   const setLine = [props.setLabel, props.prescription].filter(Boolean).join(" · ");
+  const elapsed = props.elapsedLabel || "00:00";
 
   return {
     banner: (
       <VStack
         alignment="leading"
-        spacing={8}
+        spacing={6}
         modifiers={[
-          containerBackground("#161A22", "widget"),
+          containerBackground(BG, "widget"),
           clipShape("containerRelativeShape"),
           padding({ all: 14 }),
           frame({ maxWidth: Infinity, alignment: "leading" }),
@@ -73,10 +58,18 @@ const WorkoutLiveActivity = (
         <HStack spacing={8}>
           <Image systemName="dumbbell.fill" size={14} color={ACCENT} />
           <Text modifiers={[font({ weight: "medium", size: 13 }), foregroundStyle(dim)]}>
-            {props.dayLabel || "GymAI"}
+            {day}
           </Text>
           <Spacer />
-          <Elapsed size={13} color={TEAL} width={56} />
+          <Text
+            modifiers={[
+              font({ weight: "semibold", size: 13 }),
+              monospacedDigit(),
+              foregroundStyle(TEAL),
+            ]}
+          >
+            {elapsed}
+          </Text>
         </HStack>
         <Text
           modifiers={[
@@ -88,39 +81,44 @@ const WorkoutLiveActivity = (
           {title}
         </Text>
         {setLine ? (
-          <HStack spacing={10}>
-            <Text modifiers={[font({ weight: "medium", size: 14 }), foregroundStyle(dim)]}>
-              {setLine}
-            </Text>
-            <Spacer />
-            <Link
-              label="Log set"
-              destination={props.logSetUrl || "gymai://workout/log-set"}
-              modifiers={[font({ weight: "semibold", size: 13 }), foregroundStyle(ACCENT)]}
-            />
-          </HStack>
+          <Text modifiers={[font({ weight: "medium", size: 14 }), foregroundStyle(dim)]}>
+            {setLine}
+          </Text>
         ) : null}
       </VStack>
     ),
     compactLeading: <Image systemName="dumbbell.fill" size={14} color={ACCENT} />,
-    compactTrailing: <Elapsed size={13} color="#FFFFFF" width={48} />,
+    compactTrailing: (
+      <Text
+        modifiers={[
+          font({ weight: "semibold", size: 13 }),
+          monospacedDigit(),
+          foregroundStyle("#FFFFFF"),
+        ]}
+      >
+        {elapsed}
+      </Text>
+    ),
     minimal: <Image systemName="dumbbell.fill" size={16} color={ACCENT} />,
     expandedLeading: (
       <HStack spacing={6} modifiers={[padding({ leading: 6 })]}>
         <Image systemName="dumbbell.fill" size={14} color={ACCENT} />
-        <Text
-          modifiers={[
-            font({ weight: "semibold", size: 13 }),
-            foregroundStyle("#FFFFFF"),
-          ]}
-        >
+        <Text modifiers={[font({ weight: "semibold", size: 13 }), foregroundStyle("#FFFFFF")]}>
           GymAI
         </Text>
       </HStack>
     ),
     expandedTrailing: (
       <HStack modifiers={[padding({ trailing: 6 })]}>
-        <Elapsed size={14} color={TEAL} width={52} />
+        <Text
+          modifiers={[
+            font({ weight: "semibold", size: 14 }),
+            monospacedDigit(),
+            foregroundStyle(TEAL),
+          ]}
+        >
+          {elapsed}
+        </Text>
       </HStack>
     ),
     expandedBottom: (
@@ -135,11 +133,6 @@ const WorkoutLiveActivity = (
         {setLine ? (
           <Text modifiers={[font({ size: 13 }), foregroundStyle(dim)]}>{setLine}</Text>
         ) : null}
-        <Link
-          label="Log prescribed set"
-          destination={props.logSetUrl || "gymai://workout/log-set"}
-          modifiers={[font({ weight: "semibold", size: 13 }), foregroundStyle(ACCENT)]}
-        />
       </VStack>
     ),
   };

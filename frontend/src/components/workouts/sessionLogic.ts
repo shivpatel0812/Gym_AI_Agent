@@ -7,6 +7,9 @@ import {
   SessionFormData,
 } from "./types";
 
+/** Bump with the backend whenever persisted prescriptions must be recomputed. */
+export const CURRENT_RECOMMENDATION_ALGORITHM_VERSION = 1;
+
 export function isCardioExercise(ex: SessionExercise) {
   return (
     Boolean(ex.exercise_id?.startsWith("default-cardio")) ||
@@ -415,6 +418,17 @@ export function recHasWeightedSets(rec: any): boolean {
   return Array.isArray(rec?.sets) && rec.sets.some((s: any) => Number(s.weight) > 0);
 }
 
+/** A cached prescription lost a load that was present in the source workout. */
+export function recDropsLastWorkoutLoad(rec: any, lastData: any): boolean {
+  return lastWorkoutHasWeight(lastData) && !recHasWeightedSets(rec);
+}
+
+/** Cached workout drafts can outlive recommendation-logic fixes. */
+export function recNeedsAlgorithmRefresh(rec: any): boolean {
+  const version = Number(rec?.algorithm_version) || 0;
+  return version < CURRENT_RECOMMENDATION_ALGORITHM_VERSION;
+}
+
 /**
  * Whether a recommendation has anything to apply to the set rows.
  *
@@ -447,6 +461,7 @@ export function mapRecSets(rec: any): WorkoutSet[] {
 export function toStoredRecommendation(rec: any) {
   if (!rec || typeof rec !== "object") return undefined;
   return {
+    algorithm_version: rec.algorithm_version,
     sets: rec.sets,
     reasoning: rec.reasoning,
     progression_type: rec.progression_type,
@@ -471,6 +486,7 @@ export function toStoredRecommendation(rec: any) {
     cardio_modality: rec.cardio_modality,
     target_intensity: rec.target_intensity,
     guidance: rec.guidance,
+    plan_context: rec.plan_context,
     generated_at: rec.generated_at || new Date().toISOString(),
   };
 }
@@ -544,11 +560,18 @@ export function buildSessionPayload(
     accumulatedMs: number;
     runningSince: number | null;
     firstStartedAt: number | null;
-  } | null
+  } | null,
+  options: { preserveUnloggedExercises?: boolean } = {}
 ) {
   const filteredExercises = formData.exercises
     .map((ex) => {
       if (ex.sets && Array.isArray(ex.sets)) {
+        // Auto-save is also the draft store. Keep the whole imported layout in
+        // that path, including exercises the user has not reached yet and the
+        // remaining blank set rows on a partially completed exercise. The
+        // completed-workout path still falls through to the valid-set filter
+        // below, so skipped work does not become training history.
+        if (options.preserveUnloggedExercises) return ex;
         const validSets = ex.sets.filter(isValidSet);
         if (
           validSets.length > 0 ||

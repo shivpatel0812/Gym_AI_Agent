@@ -14,6 +14,10 @@ export interface PlanExercise {
   priority?: "high" | "supporting" | "normal";
   target_rep_range?: [number, number];
   intensity?: string;
+  /** Destination finish line (e.g. 85 lb × 8). Travels with target_reps. */
+  target_weight?: number | null;
+  target_reps?: number | null;
+  target_weeks?: number | null;
 }
 
 export interface PlanDay {
@@ -60,6 +64,10 @@ export interface WeekPoint {
   reps: number;
   e1rm: number;
   decision?: string;
+  /** Which workout within the week (1-based). */
+  session?: number;
+  /** Every prescribed set, so "80×6, 80×4" can be rendered in full. */
+  sets?: Array<{ set_number?: number; weight: number; reps: number }>;
 }
 
 export interface ProjectedExercise {
@@ -72,6 +80,8 @@ export interface ProjectedExercise {
   current: WeekPoint | null;
   best_case: WeekPoint[];
   realistic: WeekPoint[];
+  /** One entry per workout: week 1 workout 1, week 1 workout 2, week 2… */
+  schedule?: WeekPoint[];
   gain: {
     best_case_e1rm: number;
     realistic_e1rm: number;
@@ -83,10 +93,24 @@ export interface ProjectedExercise {
   sets?: number;
   target_rep_range?: [number, number];
   notes?: string;
+  target_weight?: number | null;
+  target_reps?: number | null;
+  target_weeks?: number | null;
+  /** User-stated finish line when set on the plan exercise. */
+  destination?: { weight: number; reps: number; weeks?: number } | null;
+  arrived_week?: number | null;
+  reachable?: boolean | null;
   last_trained?: string | null;
   recent_sessions?: Array<{
     date?: string;
-    sets?: Array<{ weight?: number; reps?: number; completed?: boolean }>;
+    session_id?: string;
+    sets?: Array<{
+      set_number?: number;
+      weight?: number;
+      reps?: number;
+      completed?: boolean;
+    }>;
+    top_set?: { weight?: number; reps?: number } | null;
   }>;
 }
 
@@ -100,22 +124,25 @@ export interface ProjectedDay {
   exercises: ProjectedExercise[];
 }
 
-export interface NutritionWeek {
+export interface NutritionWeekPoint {
   week: number;
-  calories: number;
-  protein: number;
-  expected_weight_change_lb?: number;
-  expected_weight_lb?: number;
+  calories?: number | null;
+  protein?: number | null;
+  bodyweight?: number | null;
+  maintenance_calories?: number | null;
+  /** Backend legacy alias for bodyweight. */
+  expected_weight_lb?: number | null;
+  expected_weight_change_lb?: number | null;
 }
 
 export interface NutritionTrajectory {
-  goal: string;
-  weekly_step: number;
-  maintenance_calories: number | null;
-  rationale: string;
+  goal?: string;
+  weekly_step?: number;
+  maintenance_calories?: number | null;
+  rationale?: string;
   /** Where the plan's own numbers contradict its stated goal. */
-  warnings: string[];
-  weeks: NutritionWeek[];
+  warnings?: string[];
+  weeks: NutritionWeekPoint[];
   plan_id?: string;
   plan_name?: string;
   pacing?: {
@@ -153,9 +180,9 @@ export interface PlanProjection {
   guidelines?: string[];
   weekly_schedule?: Record<string, string>;
   progress: PlanProgress;
-  adherence: Adherence;
+  adherence?: Adherence;
   days: ProjectedDay[];
-  nutrition: NutritionTrajectory | null;
+  nutrition?: NutritionTrajectory | null;
 }
 
 // === Requests =============================================================
