@@ -81,6 +81,88 @@ def normalize_components(value: Any) -> List[Dict[str, Any]]:
     return components
 
 
+# Words that carry no identity, so an overlap on one of them is not evidence
+# that a seen item made it into the ledger. "side of yogurt" must not match
+# "side of rice" on the word "side".
+_STOPWORDS = {
+    "a", "an", "and", "of", "the", "with", "plain", "small", "large", "medium",
+    "side", "bowl", "cup", "glass", "plate", "katori", "serving", "portion",
+    "some", "fresh", "cooked", "homemade", "piece", "pieces", "dish", "extra",
+}
+MAX_SCENE_ITEMS = 15
+
+
+def _identity_words(text: str) -> set:
+    """
+    The words in a food name that actually identify it.
+
+    A trailing "s" is dropped so "lentils" in the inventory matches "lentil" in
+    the ledger. Crude, but the alternative is escalating a photo because the
+    model pluralised one word out of two.
+    """
+    cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in str(text or "").lower())
+    words = set()
+    for word in cleaned.split():
+        if len(word) <= 2 or word in _STOPWORDS:
+            continue
+        words.add(word[:-1] if len(word) > 3 and word.endswith("s") else word)
+    return words
+
+
+def _is_accounted(item: str, ledger: List[str]) -> bool:
+    """Whether a seen item shares an identifying word with anything counted."""
+    words = _identity_words(item)
+    if not words:
+        # Nothing identifiable to match on — assume it was counted rather than
+        # firing an escalation on a word like "side".
+        return True
+    return any(words & _identity_words(entry) for entry in ledger)
+
+
+def normalize_scene(parsed: Dict[str, Any], components: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    What the model says it saw, against what it actually costed.
+
+    Only the v3 prompt asks for this block; for v1 and v2 every field comes
+    back empty and `uncounted` is empty too, which is what keeps the variants
+    comparable and the new escalation trigger inert for them.
+
+    Matching is by identifying word rather than by count: a model that folds
+    rice and dal into one "khichdi" component has accounted for both, while a
+    yogurt that shares no word with anything in the ledger has not. Counting
+    rows would call the first case a miss and the second case fine.
+    """
+    raw = parsed.get("scene") if isinstance(parsed.get("scene"), dict) else {}
+
+    items_seen: List[str] = []
+    for value in (raw.get("items_seen") if isinstance(raw.get("items_seen"), list) else [])[:MAX_SCENE_ITEMS]:
+        text = _short_text(value, 80)
+        if text and text not in items_seen:
+            items_seen.append(text)
+
+    excluded: List[Dict[str, str]] = []
+    for value in (raw.get("excluded") if isinstance(raw.get("excluded"), list) else [])[:MAX_SCENE_ITEMS]:
+        if isinstance(value, dict):
+            name = _short_text(value.get("item") or value.get("name"), 80)
+            reason = _short_text(value.get("reason"), 120)
+        else:
+            name, reason = _short_text(value, 80), ""
+        if name:
+            excluded.append({"item": name, "reason": reason or "no reason given"})
+
+    ledger = [str(component.get("name") or "") for component in components]
+    ledger += [entry["item"] for entry in excluded]
+    uncounted = [item for item in items_seen if not _is_accounted(item, ledger)]
+
+    return {
+        "items_seen": items_seen,
+        "excluded": excluded,
+        # Food the model listed and then neither costed nor explained. The
+        # omission this whole block exists to catch.
+        "uncounted": uncounted,
+    }
+
+
 def _normalize_portion(parsed: Dict[str, Any]) -> Dict[str, float]:
     raw = parsed.get("portion") if isinstance(parsed.get("portion"), dict) else {}
     estimated = _number(
@@ -148,6 +230,7 @@ def build_photo_analysis(
     portion = _normalize_portion(parsed)
     references = _normalize_references(parsed.get("scale_references"))
     components = normalize_components(parsed.get("components"))
+    scene = normalize_scene(parsed, components)
 
     fat_raw = parsed.get("cooking_fat") if isinstance(parsed.get("cooking_fat"), dict) else {}
     normalized_style = normalize_cooking_style(cooking_style)
@@ -216,10 +299,19 @@ def build_photo_analysis(
         spread = 999.0
         reasons.append("The portion size could not be estimated")
 
-    if 1 <= len(components) <= 3:
-        score += 5
-    elif len(components) > 3:
+    # A short ledger used to earn points here, which meant MISSING a component
+    # raised confidence — the same inversion `should_escalate` had. Simplicity
+    # is only reassuring once the frame is known to be simple, so the credit
+    # now requires the inventory to agree with the ledger.
+    if len(components) > 3:
         reasons.append("Several overlapping foods increase uncertainty")
+    elif 1 <= len(components) <= 3 and not scene["uncounted"]:
+        score += 5
+
+    if scene["uncounted"]:
+        reasons.append(
+            "Not counted: " + ", ".join(scene["uncounted"][:3])
+        )
 
     if has_user_hint:
         score += 5
@@ -257,6 +349,7 @@ def build_photo_analysis(
         "scale_references": references,
         "cooking": cooking,
         "components": components,
+        "scene": scene,
         "assumptions": _text_list(parsed.get("assumptions")),
         "uncertainties": _text_list(parsed.get("uncertainties")),
         "matched_saved_food": bool(has_saved_prior),
@@ -269,9 +362,34 @@ def build_photo_analysis(
 # compartments down at once. Legibility is not accuracy, and no amount of
 # reasoning un-blurs a photo, so routing on image quality escalates exactly the
 # wrong set.
-COMPLEX_MEAL_COMPONENTS = 4
+# Complexity cuts both ways. A long ledger is where the cheap model shades each
+# component low; an inventory longer than the ledger is where it dropped one
+# outright. Only the first was routed on until Sep 2026.
+#
+# Three, not four. Measured against the archived photos in Sep 2026 -- the
+# first time the replay harness was run on real logs. Every Indian meal plate
+# in the archive came back from gpt-4o with exactly THREE components, one under
+# the old threshold, and every one of them was 22-61% low on protein against
+# gpt-5.6-sol on the same image:
+#
+#     Indian breakfast platter   -15% kcal   -22% protein   (3 components)
+#     Sabudana khichdi + yogurt  -36% kcal   -61% protein   (3 components)
+#     Sabudana khichdi + upma    -26% kcal   -52% protein   (3 components)
+#
+# The threshold was set one notch above where the degradation actually starts,
+# so the plates that needed the second pass were precisely the ones that never
+# got it. Note the protein gap runs about TWICE the calorie gap: the cheap
+# model shrinks the side dishes, and the side dish is usually where the protein
+# is. Two prompt variants failed to move this; the model is stable and
+# confidently wrong (50g for a katori of dahi, 3 runs out of 3), so routing is
+# the lever, not wording.
+COMPLEX_MEAL_COMPONENTS = 3
 INCOHERENCE_GAP_RATIO = 0.08
 WIDE_SPREAD_RATIO = 0.9
+# A protein disagreement has to be worth a paid second vision call. 8% of a
+# 20g estimate is 1.6g, which a model reaches by rounding its own line items;
+# nothing about a user's day changes at that size.
+MIN_PROTEIN_GAP_GRAMS = 5.0
 
 
 def should_escalate(
@@ -297,6 +415,27 @@ def should_escalate(
             triggers.append(
                 f"stated calories missed its own parts by {round(gap * 100)}%"
             )
+        # A plate can be right on calories and badly wrong on protein — one
+        # forgotten side of yogurt or dal moves protein far more than kcal, and
+        # a calories-only gap never sees it.
+        protein_gap = float(coherence.get("protein_gap_ratio") or 0.0)
+        protein_grams = abs(
+            float(coherence.get("protein") or 0.0)
+            - float(coherence.get("reported_protein") or 0.0)
+        )
+        if protein_gap >= INCOHERENCE_GAP_RATIO and protein_grams >= MIN_PROTEIN_GAP_GRAMS:
+            triggers.append(
+                f"stated protein missed its own parts by {round(protein_gap * 100)}%"
+            )
+
+    # The other direction, and the one component COUNT alone can never see: the
+    # model listed food it then neither costed nor explained. An omission makes
+    # a plate look simpler, so without this the miss reads as an easy photo.
+    uncounted = (analysis.get("scene") or {}).get("uncounted") or []
+    if uncounted:
+        triggers.append(
+            f"{', '.join(uncounted[:3])} seen in the frame but not counted"
+        )
 
     confidence = analysis.get("confidence") or {}
     if confidence.get("level") == "low":

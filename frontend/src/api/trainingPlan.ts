@@ -99,7 +99,18 @@ export interface PlanSuggestionSet {
   created_at?: string;
 }
 
+export interface NutritionCompanion {
+  status: "ready" | "needs_profile";
+  source: "estimate" | "nutrition_plan";
+  goal?: string;
+  targets: { calories: number; protein: number; carbs: number; fats: number } | null;
+  missing_fields?: string[];
+  assumptions?: string[];
+  guidelines: string[];
+}
+
 export interface TrainingPlan {
+  nutrition_companion?: NutritionCompanion;
   id: string;
   plan_name: string;
   primary_goal?: string;
@@ -252,6 +263,7 @@ export interface NutritionTrajectory {
 }
 
 export interface PlanProjection {
+  nutrition_companion?: NutritionCompanion;
   weeks: number;
   plan_id: string;
   plan_name: string;
@@ -279,7 +291,7 @@ export async function getActivePlan(): Promise<PlanEnvelope | null> {
   return { plan: res.data.plan, progress: res.data.progress };
 }
 
-export async function getPlanProjection(weeks = 12): Promise<PlanProjection | null> {
+export async function getPlanProjection(weeks?: number): Promise<PlanProjection | null> {
   const res = await apiClient.get("/api/training-plan/projection", { params: { weeks } });
   if (res.data?.status !== "success" || !res.data?.projection) return null;
   return res.data.projection;
@@ -292,6 +304,9 @@ export async function proposePlan(params: {
    *  honours what they told the coach in the interview instead. */
   planMode: PlanMode | null;
   goalStatement?: string;
+  durationWeeks?: number | null;
+  weeklySchedule?: Record<string, string> | null;
+  nutritionGoal?: string | null;
 }): Promise<PlanEnvelope> {
   const res = await apiClient.post(
     "/api/training-plan/propose",
@@ -300,6 +315,9 @@ export async function proposePlan(params: {
       split_id: params.splitId ?? null,
       plan_mode: params.planMode ?? null,
       goal_statement: params.goalStatement ?? null,
+      duration_weeks: params.durationWeeks ?? null,
+      weekly_schedule: params.weeklySchedule ?? null,
+      nutrition_goal: params.nutritionGoal ?? null,
     },
     // Plan generation is a large GPT-4o call
     { timeout: 120000 }

@@ -38,6 +38,7 @@ import Wellness from "./src/components/wellness";
 import MoreHome from "./src/components/MoreHome";
 import Settings from "./src/components/Settings";
 import BodyScanScreen from "./src/components/bodyScan/BodyScanScreen";
+import ProgressHub from "./src/components/progress/ProgressHub";
 import AIChat from "./src/components/AIChat";
 import AIAnalysis from "./src/components/AIAnalysis";
 import UserProfile from "./src/components/UserProfile";
@@ -341,9 +342,15 @@ export default function App() {
         {!user ? (
           <Stack.Screen name="Login" component={Login} />
         ) : (
-          <Stack.Screen name="Main">
-            {(props) => <MainTabs {...props} onLogout={handleLogout} />}
-          </Stack.Screen>
+          <>
+            <Stack.Screen name="Main">
+              {(props) => <MainTabs {...props} onLogout={handleLogout} />}
+            </Stack.Screen>
+            {/* Pushed over the tabs rather than living in one: the hub spans
+                workouts, nutrition and body, so it does not belong under any
+                single tab. */}
+            <Stack.Screen name="ProgressHub" component={ProgressHub} />
+          </>
         )}
       </Stack.Navigator>
     </NavigationContainer>

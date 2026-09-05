@@ -32,6 +32,37 @@ two and lets the cooking-style hint modulate the amount rather than zero it.
 the component calorie sum." A model that quietly reconciles the two removes the
 disagreement that `assess_macro_coherence` reads as an escalation signal. v2
 asks for both numbers honestly and for the difference to be explained.
+
+Why v3 exists
+-------------
+v1 and v2 both tune how big the estimate is. Neither can catch a component
+that was never estimated at all.
+
+Khichdi photographed with a katori of dahi came back as khichdi. Every guard
+downstream passed it, because every one of them tests for *inconsistency* and
+an omission is perfectly consistent: the missing yogurt is absent from the
+components, from the total, and from the macro arithmetic alike, so
+`assess_macro_coherence` finds nothing to repair. Worse, `should_escalate`
+routes on component COUNT, so dropping an item makes the plate look simpler and
+makes the stronger second pass *less* likely -- the case that needed it most was
+the one structurally guaranteed not to get it. The confidence score has the same
+inversion, awarding points for a short component list.
+
+v3 is v2 plus a step that runs BEFORE estimating: enumerate every edible thing
+in the frame, then estimate. Anything enumerated and then left out has to be
+named in `scene.excluded` with a reason. That turns a silent omission into
+either a line the user can see or a mismatch `should_escalate` can route on.
+
+It does not fix "the model never noticed the yogurt" -- nothing in a text
+prompt can guarantee attention. It fixes "the model noticed and dropped it
+silently", and it makes the enumeration itself the thing being asked for,
+which is a materially easier task than remembering to count a side dish while
+also estimating grams.
+
+A protein-plausibility check was considered and rejected: plain khichdi really
+is low in protein, so a rule firing on low protein-per-kcal would punish
+correct estimates of the dish alone. The error only exists relative to what was
+on the table, which is exactly what the inventory step is for.
 """
 
 from typing import Dict
@@ -58,9 +89,34 @@ V2_RULES = """- Treat the title and description as strong identity and quantity 
 - Report the component figures you actually derived. Do not quietly adjust individual components to make them add up. If your plate-level total differs from the component sum, keep both honest and explain the gap in assumptions.
 - Calories should be arithmetically compatible with protein, carbs, and fat."""
 
-PROMPT_VARIANTS: Dict[str, str] = {"v1": V1_RULES, "v2": V2_RULES}
+# v3 is v2 with the inventory step in front, and the title rule reworded so a
+# single-dish name cannot cap the meal. Built by extension rather than rewritten
+# so the delta against v2 stays reviewable and v2's compounding fix cannot be
+# lost by accident.
+_V3_INVENTORY = """- FIRST, before estimating anything, inventory the frame: list every distinct edible item you can see, including items in separate bowls, katoris, side plates, cups and glasses. A side of yogurt, raita, chutney, pickle or a drink is part of the meal and each is its own item. Do this as a list, then estimate.
+- Every item in that inventory must end up either in `components` or in `scene.excluded` with a reason. Never drop one silently. If you are unsure what a side dish is, include it with your best guess and say so in uncertainties — an item counted approximately is far closer to the truth than an item left out.
+- The user's title usually names the MAIN dish, not the whole meal. Take it as strong evidence of what the main dish is, and as no evidence at all about what else is on the table."""
 
-DEFAULT_VARIANT = "v2"
+# The title rule v3 replaces — restated in _V3_INVENTORY so the two cannot
+# contradict each other in the same prompt.
+_V2_TITLE_RULE = "- Treat the title and description as strong identity and quantity hints, but flag conflicts with the image.\n"
+
+V3_RULES = _V3_INVENTORY + "\n" + V2_RULES.replace(_V2_TITLE_RULE, "", 1)
+
+PROMPT_VARIANTS: Dict[str, str] = {"v1": V1_RULES, "v2": V2_RULES, "v3": V3_RULES}
+
+DEFAULT_VARIANT = "v3"
+
+# The JSON block each variant adds to the response shape. v1 and v2 add
+# nothing: asking them for an inventory would make them into v3 and there would
+# be nothing left to compare.
+_V3_SCHEMA = """  "scene": {
+    "items_seen": ["every distinct edible item visible, side bowls and drinks included"],
+    "excluded": [{"item": "an item you chose not to count", "reason": "why"}]
+  },
+"""
+
+SCHEMA_EXTRAS: Dict[str, str] = {"v1": "", "v2": "", "v3": _V3_SCHEMA}
 
 
 def resolve_variant(name: str = None) -> str:
@@ -71,3 +127,8 @@ def resolve_variant(name: str = None) -> str:
 
 def rules_for(name: str = None) -> str:
     return PROMPT_VARIANTS[resolve_variant(name)]
+
+
+def schema_extra_for(name: str = None) -> str:
+    """Extra JSON fields this variant asks for, or "" when it asks for none."""
+    return SCHEMA_EXTRAS.get(resolve_variant(name), "")

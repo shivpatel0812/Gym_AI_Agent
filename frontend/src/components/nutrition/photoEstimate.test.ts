@@ -26,6 +26,7 @@ const estimate: PhotoEstimate = {
     assumptions: [],
     uncertainties: [],
     matchedSavedFood: false,
+    uncounted: [],
     components: [
       { name: "Rice", amount: "1 cup", calories: 400, protein: 8, carbs: 70, fats: 8, fiber: 2 },
       { name: "Chicken", amount: "100g", calories: 200, protein: 17, carbs: 10, fats: 12, fiber: 6 },
@@ -174,5 +175,28 @@ describe("serving multiples", () => {
   it("ignores a nonsense serving count", () => {
     expect(scalePhotoEstimate(estimate, 0)).toBe(estimate);
     expect(scalePhotoEstimate(estimate, NaN)).toBe(estimate);
+  });
+});
+
+describe("uncounted items", () => {
+  it("carries the model's own list of food it saw and did not cost", () => {
+    const parsed = toPhotoEstimate({
+      food: { name: "Khichdi", calories: 600, protein: 14 },
+      analysis: {
+        scene: {
+          items_seen: ["khichdi", "katori of yogurt"],
+          uncounted: ["katori of yogurt"],
+        },
+      },
+    });
+    expect(parsed?.analysis.uncounted).toEqual(["katori of yogurt"]);
+  });
+
+  it("is empty for the older prompts, which are never asked for an inventory", () => {
+    const parsed = toPhotoEstimate({
+      food: { name: "Khichdi", calories: 600, protein: 14 },
+      analysis: { components: [] },
+    });
+    expect(parsed?.analysis.uncounted).toEqual([]);
   });
 });

@@ -13,7 +13,7 @@ run 4% low instead of 26% low across 30 photos" is a fact.
 
     python scripts/replay_photo_estimates.py you@example.com --dry-run
     python scripts/replay_photo_estimates.py you@example.com --limit 20
-    python scripts/replay_photo_estimates.py you@example.com --variants v1,v2 --model gpt-4o
+    python scripts/replay_photo_estimates.py you@example.com --variants v2,v3 --model gpt-4o
 
 Read-only against Firestore. It DOES spend OpenAI credit: one vision call per
 photo per variant (more if escalation is on). --dry-run shows the plan and the
@@ -57,7 +57,20 @@ def _label_for(log: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             except (TypeError, ValueError):
                 continue
             if calories > 0:
-                return {"calories": calories, "source": name, "strong": strong}
+                try:
+                    protein = float(candidate.get("protein") or 0)
+                except (TypeError, ValueError):
+                    protein = 0.0
+                return {
+                    "calories": calories,
+                    # Scored separately: a forgotten side of yogurt moves
+                    # protein far more than calories, so a calories-only score
+                    # can call an estimate good while the number the user
+                    # actually tracks is 40% low.
+                    "protein": protein or None,
+                    "source": name,
+                    "strong": strong,
+                }
     return None
 
 
@@ -86,8 +99,10 @@ def load_cases(uid: str, limit: int, strong_only: bool) -> List[Dict[str, Any]]:
     return cases[:limit]
 
 
-def run_variant(case: Dict[str, Any], variant: str, model: str, escalate: bool) -> Optional[float]:
-    """Replay one photo through one prompt variant. Returns estimated calories."""
+def run_variant(
+    case: Dict[str, Any], variant: str, model: str, escalate: bool
+) -> Optional[Dict[str, Any]]:
+    """Replay one photo through one prompt variant. Returns the estimate."""
     handle, path = tempfile.mkstemp(suffix=".jpg")
     try:
         with os.fdopen(handle, "wb") as out:
@@ -102,7 +117,16 @@ def run_variant(case: Dict[str, Any], variant: str, model: str, escalate: bool) 
             prompt_variant=variant,
         )
         food = (result or {}).get("food")
-        return float(food["calories"]) if food else None
+        if not food:
+            return None
+        analysis = (result or {}).get("analysis") or {}
+        return {
+            "calories": float(food["calories"]),
+            "protein": float(food.get("protein") or 0),
+            "uncounted": (analysis.get("scene") or {}).get("uncounted") or [],
+            "triggers": (analysis.get("routing") or {}).get("triggers") or [],
+            "model": (result or {}).get("model"),
+        }
     except Exception as exc:
         print(f"    ! {variant} failed: {exc}")
         return None
@@ -111,9 +135,9 @@ def run_variant(case: Dict[str, Any], variant: str, model: str, escalate: bool) 
             os.unlink(path)
 
 
-def summarize(name: str, errors: List[float]) -> None:
+def summarize(name: str, errors: List[float], label: str = "kcal") -> None:
     if not errors:
-        print(f"  {name:<6} no scored photos")
+        print(f"  {name:<6} {label:<7} no scored photos")
         return
     signed = statistics.mean(errors)
     absolute = statistics.median(abs(e) for e in errors)
@@ -121,7 +145,7 @@ def summarize(name: str, errors: List[float]) -> None:
     # Mean SIGNED error is the number that matters here: a systematic low bias
     # is the thing being fixed, and it hides inside an absolute-error average.
     print(
-        f"  {name:<6} n={len(errors):<3} "
+        f"  {name:<6} {label:<7} n={len(errors):<3} "
         f"mean signed {signed:+.1f}%   median abs {absolute:.1f}%   within 15%: {within:.0f}%"
     )
 
@@ -130,7 +154,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("email")
     parser.add_argument("--limit", type=int, default=15, help="photos to replay (default 15)")
-    parser.add_argument("--variants", default="v1,v2", help="comma-separated prompt variants")
+    parser.add_argument("--variants", default="v2,v3", help="comma-separated prompt variants")
     parser.add_argument("--model", default="gpt-4o", help="first-pass model")
     parser.add_argument(
         "--escalate",
@@ -174,20 +198,37 @@ def main() -> None:
         return
 
     errors: Dict[str, List[float]] = {v: [] for v in variants}
+    protein_errors: Dict[str, List[float]] = {v: [] for v in variants}
     for case in cases:
         truth = case["label"]["calories"]
-        print(f"  {case['title'][:44]:<44} truth {truth:>5.0f} ({case['label']['source']})")
+        truth_protein = case["label"].get("protein")
+        header = f"  {case['title'][:44]:<44} truth {truth:>5.0f} kcal"
+        if truth_protein:
+            header += f" / {truth_protein:>4.0f}g P"
+        print(f"{header} ({case['label']['source']})")
         for variant in variants:
-            estimated = run_variant(case, variant, args.model, args.escalate)
-            if estimated is None:
+            estimate = run_variant(case, variant, args.model, args.escalate)
+            if estimate is None:
                 continue
-            error = (estimated - truth) / truth * 100
+            error = (estimate["calories"] - truth) / truth * 100
             errors[variant].append(error)
-            print(f"    {variant:<4} {estimated:>5.0f} kcal   {error:+6.1f}%")
+            line = f"    {variant:<4} {estimate['calories']:>5.0f} kcal {error:+6.1f}%"
+            if truth_protein:
+                protein_error = (estimate["protein"] - truth_protein) / truth_protein * 100
+                protein_errors[variant].append(protein_error)
+                line += f"   {estimate['protein']:>5.1f}g P {protein_error:+6.1f}%"
+            print(line)
+            # The whole point of v3: name what it saw and did not cost.
+            if estimate["uncounted"]:
+                print(f"         not counted: {', '.join(estimate['uncounted'])}")
+            if estimate["triggers"]:
+                print(f"         would escalate: {'; '.join(estimate['triggers'])}")
 
     print("\nSummary")
     for variant in variants:
         summarize(variant, errors[variant])
+    for variant in variants:
+        summarize(variant, protein_errors[variant], label="protein")
 
 
 if __name__ == "__main__":

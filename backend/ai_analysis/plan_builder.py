@@ -54,7 +54,7 @@ VALID_DAY_TYPES = {"heavy", "volume", "light", "normal", "deload"}
 DAYS_OF_WEEK = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 MAX_DURATION_WEEKS = 24
-DEFAULT_DURATION_WEEKS = 6
+DEFAULT_DURATION_WEEKS = 12
 
 
 class PlanBuilder:
@@ -179,8 +179,9 @@ Produce a training plan as JSON with exactly this shape:
 {
   "plan_name": "short memorable name",
   "primary_goal": "one sentence stating the goal in the user's terms",
-  "duration_weeks": 6,
+  "duration_weeks": 12,
   "split_type": "Push/Pull/Legs",
+  "nutrition_goal": "maintain",
   "strategy": ["3-5 short bullets describing how the program attacks the goal"],
   "guidelines": ["3-5 short bullets on how to progress week to week"],
   "weekly_schedule": {
@@ -190,6 +191,7 @@ Produce a training plan as JSON with exactly this shape:
   "days": [
     {
       "day_name": "Push A",
+      "source_day": "exact source day name when adapting an existing workout",
       "focus": "Chest / Shoulders / Triceps",
       "day_goal": "Incline strength",
       "day_type": "heavy",
@@ -218,6 +220,25 @@ Produce a training plan as JSON with exactly this shape:
 }
 
 RULES:
+- nutrition_goal is maintain, gain or lose: use the user's explicit bodyweight
+  preference, otherwise maintain. A strength goal alone never implies a bulk.
+- If CURRENT SPLIT includes confirmed_schedule, use exactly its day names and
+  assignments; these are direct user choices and override the example schema.
+- Default to a 12-week block unless the user chose a different duration.
+- The example names and schedule above are illustrative, never defaults. Use
+  the user's actual weekday assignments, workout order and exercise order.
+- A focused lift goal still requires a COMPLETE program for every training day
+  and every exercise. Other body parts should progress too, unless the user
+  explicitly wants maintenance. Never return just the priority movement.
+- For repeated workouts, individualize each occurrence when useful (for example
+  heavy and volume exposures). Do not force that strategy on every user.
+  Set source_day to the original workout name for each adapted occurrence.
+- Include every exercise from the user's source workouts. Preserve the exact
+  IDs and source order when they ask to copy a session. Explain deliberate swaps.
+- Every training day must appear in weekly_schedule, including non-priority days.
+- Give ALL exercises sets, reps, target_rep_range, goal and progression notes.
+  Rep targets express what to work toward; increase load only after targets are
+  achieved, and hold or reduce work when performance or recovery calls for it.
 - "goal" must be one of: strength, hypertrophy, fat_loss, general
 - "priority" must be one of: high, supporting, normal
 - "day_type" must be one of: heavy, volume, light, normal, deload
@@ -284,6 +305,7 @@ Return only the JSON object."""
         existing_plan: Optional[Dict] = None,
         adjustment_request: Optional[str] = None,
         history_context: Optional[Dict] = None,
+        _repair: bool = False,
     ) -> Dict[str, Any]:
         """Generate a plan. Returns {status, plan} or {status, error}."""
         if plan_mode not in PLAN_MODES:
@@ -311,7 +333,7 @@ Return only the JSON object."""
                 temperature=0.4,
                 # Revisions must re-emit the days they are carrying over, so a
                 # five-day plan needs more room than a fresh two-day proposal.
-                max_tokens=4000,
+                max_tokens=12000,
                 response_format={"type": "json_object"},
             )
             raw = json.loads(response.choices[0].message.content)
@@ -320,6 +342,8 @@ Return only the JSON object."""
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
+        if split_context.get("confirmed_schedule"):
+            raw["weekly_schedule"] = split_context["confirmed_schedule"]
         strict = plan_mode == "follow_split"
         plan = PlanBuilder.validate_plan(
             raw,
@@ -351,8 +375,30 @@ Return only the JSON object."""
                 ),
             }
 
-        # The prompt asks for untouched days back; this guarantees it.
-        plan = PlanBuilder.carry_forward_days(plan, existing_plan)
+        # Preserve the entire baseline even for a user's first plan.
+        from .plan_completeness import complete_routine, completeness_errors
+        source = existing_plan or (split_context if plan_mode != "build_for_me" else None)
+        plan = complete_routine(plan, source, strict=strict)
+        references = split_context.get("referenced_workouts") or []
+        referenced_days = {ref.get("target_day") for ref in references if ref.get("found")}
+        if referenced_days:
+            plan = complete_routine(plan, {"days": [d for d in split_context.get("days", [])
+                                                    if d.get("day_name") in referenced_days]},
+                                    strict=strict, preserve_order=True)
+        errors = completeness_errors(plan)
+        confirmed = split_context.get("confirmed_schedule") or {}
+        for weekday, name in confirmed.items():
+            if str(plan["weekly_schedule"].get(weekday, "Rest")).lower() != name.lower():
+                errors.append(f"Use {name} on {weekday}, exactly as requested.")
+        if errors:
+            if not _repair:
+                return self.build_plan(
+                    conversation, split_context, profile, history_summary, plan_mode,
+                    existing_plan, (adjustment_request or "") +
+                    "\nThe previous draft was incomplete. Correct all of these: " +
+                    " ".join(errors), history_context, _repair=True,
+                )
+            return {"status": "error", "error": " ".join(errors)}
 
         return {
             "status": "success",
@@ -534,6 +580,9 @@ Return only the JSON object."""
             weeks = DEFAULT_DURATION_WEEKS
         plan["duration_weeks"] = max(1, min(MAX_DURATION_WEEKS, weeks))
 
+        plan["nutrition_goal"] = (plan.get("nutrition_goal")
+                                  if plan.get("nutrition_goal") in ("maintain", "gain", "lose")
+                                  else "maintain")
         plan["strategy"] = PlanBuilder._string_list(plan.get("strategy"))
         plan["guidelines"] = PlanBuilder._string_list(plan.get("guidelines"))
 
@@ -644,6 +693,8 @@ Return only the JSON object."""
                     day.get("estimated_duration_minutes"), 15, 180, max(30, len(exercises) * 8)
                 ),
             }
+            if day.get("source_day"):
+                clean_day["source_day"] = str(day["source_day"])[:40]
             if day.get("day_goal"):
                 clean_day["day_goal"] = str(day["day_goal"])[:80]
             if day.get("day_type") in VALID_DAY_TYPES:

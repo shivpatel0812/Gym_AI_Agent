@@ -53,6 +53,13 @@ export const colors = {
   /** Ink on the light cards (photo results). Not for dark surfaces. */
   onLight: "#111111",
   onLightMuted: "#6B6B70",
+  /**
+   * Soft warning ON the light photo-results card. `attention` above is tuned
+   * for dark surfaces and drops below 4.5:1 on white, so it cannot be reused
+   * here. Role: something the user should act on, short of an error.
+   */
+  attentionOnLight: "#9A4318",
+  attentionOnLightSoft: "#FDF0E7",
 };
 
 /**
@@ -69,6 +76,47 @@ export const macro = {
   fats: "#C4B5FD",
   fiber: "#4ADE80",
   sleep: "#A78BFA",
+};
+
+/**
+ * Chart marks.
+ *
+ * One mark color, used by every frame — the index line and each domain
+ * sparkline alike. The domains are not competing series; they are separate
+ * frames of the same 0-100 quantity, so four categorical hues would imply a
+ * relationship that does not exist and would fail an all-pairs CVD check
+ * inside the narrow lightness band that reads as a data mark on these
+ * surfaces. Identity comes from the label beside the frame.
+ *
+ * Not brand accents: `accentPrimary` sits above the band that reads as a mark
+ * on `cardBackground`. Same values as web `ProjectionChart.SERIES_COLORS`.
+ * Validated for contrast against #111113.
+ */
+export const series = {
+  /** Measured data — what actually happened. The composite index line. */
+  mark: "#0D9488",
+  /** Projected, never measured. Always drawn dashed and always in a pair. */
+  projected: "#E2622B",
+};
+
+/**
+ * Per-domain marks.
+ *
+ * Found by sweeping the hue wheel at fixed lightness/chroma and validating
+ * every pair, not by picking four colours that looked distinct. Worst
+ * all-pairs CVD separation is ΔE 7.9 (deutan), which sits in the 6–8 floor
+ * band — legal **only** because secondary encoding is always present: each
+ * domain draws in its own titled card and no two ever share a plot frame, so
+ * colour never carries identity alone. Do not put two of these in one chart.
+ *
+ * Validated dark against #111113: lightness band, chroma floor, normal-vision
+ * separation (ΔE 16.9) and 3:1 contrast all pass.
+ */
+export const domainSeries: Record<string, string> = {
+  strength: "#009D9E",
+  consistency: "#7F79D1",
+  nutrition: "#928A07",
+  body: "#C8626D",
 };
 
 /**

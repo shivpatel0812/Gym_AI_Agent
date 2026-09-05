@@ -35,6 +35,8 @@ interface Props {
   onAdjustWithCoach?: (prompt: string) => void;
 }
 
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
 type Step = "setup" | "generating" | "review";
 
 const FALLBACK_MODES: PlanModeOption[] = [
@@ -65,6 +67,9 @@ export default function CreatePlanModal({
   conversationId,
   onAdjustWithCoach,
 }: Props) {
+  const [durationWeeks, setDurationWeeks] = useState<number | null>(null);
+  const [nutritionGoal, setNutritionGoal] = useState<string | null>(null);
+  const [schedule, setSchedule] = useState<Record<string, string> | null>(null);
   const [step, setStep] = useState<Step>("setup");
   const [modes, setModes] = useState<PlanModeOption[]>(FALLBACK_MODES);
   const [mode, setMode] = useState<PlanMode>("adapt_split");
@@ -84,6 +89,12 @@ export default function CreatePlanModal({
   useEffect(() => {
     if (!visible) return;
     setStep("setup");
+    setDurationWeeks(null);
+    setNutritionGoal(null);
+    setSchedule(null);
+    setModeChosen(false);
+    setMode("adapt_split");
+    setConversationTitle(null);
     setDraft(null);
     setGoalText("");
     setSelectedConversation(conversationId ?? null);
@@ -126,6 +137,11 @@ export default function CreatePlanModal({
       );
       return;
     }
+    if (schedule && (!Object.values(schedule).every(value => value.trim()) ||
+        Object.values(schedule).every(value => value.trim().toLowerCase() === "rest"))) {
+      Alert.alert("Complete your week", "Name each workout and use Rest for days off. Choose at least one workout day.");
+      return;
+    }
     setStep("generating");
     try {
       const { plan } = await proposePlan({
@@ -133,6 +149,9 @@ export default function CreatePlanModal({
         splitId: mode === "build_for_me" ? null : splitId,
         planMode: modeChosen ? mode : null,
         goalStatement: goalText.trim() || undefined,
+        durationWeeks,
+        weeklySchedule: schedule,
+        nutritionGoal,
       });
       setDraft(plan);
       setStep("review");
@@ -264,6 +283,39 @@ export default function CreatePlanModal({
           ) : (
             <>
               <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+                <Text style={styles.subheading}>Program length</Text>
+                <Text style={styles.sourceNote}>Use the timeline discussed with Coach, or choose one here. New plans default to 12 weeks.</Text>
+                <View style={styles.splitRow}>
+                  {[null, 8, 12, 16].map(weeks => (
+                    <TouchableOpacity key={weeks ?? "coach"} onPress={() => setDurationWeeks(weeks)}
+                      style={[styles.splitChip, durationWeeks === weeks && styles.splitChipActive]}>
+                      <Text style={styles.splitChipText}>{weeks ? `${weeks} weeks` : "From Coach"}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={styles.subheading}>Nutrition alongside training</Text>
+                <Text style={styles.sourceNote}>Starting calories and macros. Your existing nutrition plan takes priority.</Text>
+                <View style={styles.splitRow}>
+                  {[[null, "From Coach"], ["maintain", "Maintain"], ["gain", "Gain"], ["lose", "Lose"]].map(([value, label]) => (
+                    <TouchableOpacity key={label} onPress={() => setNutritionGoal(value)}
+                      style={[styles.splitChip, nutritionGoal === value && styles.splitChipActive]}>
+                      <Text style={styles.splitChipText}>{label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={styles.subheading}>Your training week</Text>
+                <TouchableOpacity style={styles.splitChip} onPress={() => setSchedule(schedule ? null : Object.fromEntries(WEEKDAYS.map(day => [day, "Rest"])))}>
+                  <Text style={styles.splitChipText}>{schedule ? "Use schedule discussed with Coach" : "Choose my exact weekdays"}</Text>
+                </TouchableOpacity>
+                {schedule ? <>
+                  <Text style={styles.sourceNote}>Name the workout for each day. Use distinct names for different versions of a workout, and Rest for days off.</Text>
+                  {WEEKDAYS.map(day => <View key={day}>
+                    <Text style={styles.sourceNote}>{day.charAt(0).toUpperCase() + day.slice(1)}</Text>
+                    <TextInput accessibilityLabel={`${day} workout`} style={styles.input} value={schedule[day]}
+                      onChangeText={value => setSchedule(current => ({...current, [day]: value}))}
+                      placeholder="Workout name or Rest" placeholderTextColor={colors.textMuted} maxLength={40} />
+                  </View>)}
+                </> : <Text style={styles.sourceNote}>The coach will use your agreed weekdays, workout order and exercise order.</Text>}
                 <Text style={styles.subheading}>How much can the coach change?</Text>
                 {!hasSplit ? (
                   <Text style={styles.warningNote}>
@@ -357,7 +409,7 @@ export default function CreatePlanModal({
                   }
                   placeholderTextColor={colors.textMuted}
                   multiline
-                  maxLength={400}
+                  maxLength={2000}
                 />
               </ScrollView>
 

@@ -14,6 +14,7 @@ import {
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import Svg, { Circle, Line, Polyline, Text as SvgText } from "react-native-svg";
+import ProgramOverview from "./ProgramOverview";
 import Ring from "../nutrition/Ring";
 import ReviseGoalSheet from "./ReviseGoalSheet";
 import {
@@ -87,7 +88,7 @@ export default function PlanHub({
 
   const loadProjection = useCallback(
     () =>
-      getPlanProjection(PROJECTION_WEEKS)
+      getPlanProjection()
         .then((next) => {
           setProjection(next);
           setLoadError(false);
@@ -206,6 +207,8 @@ export default function PlanHub({
           onDiscard={() => resolveSuggestions(false)}
         />
       ) : null}
+
+      {projection ? <ProgramOverview projection={projection} /> : null}
 
       <View style={styles.pager}>
         <TouchableOpacity onPress={() => move(-1)} style={styles.arrow}>

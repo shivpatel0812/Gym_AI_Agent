@@ -113,7 +113,11 @@ def test_vision_uses_high_detail_and_passes_user_calibration(monkeypatch, tmp_pa
 
 def test_default_prompt_supplies_anchors_instead_of_prohibitions(monkeypatch, tmp_path):
     """v1 told the model what not to assume and gave it nothing to assume
-    instead, which is how five compartments each land low at once."""
+    instead, which is how five compartments each land low at once.
+
+    v3 is the default now and is built by extending v2, so every anchor below
+    must still be in the prompt — this is what catches v3 dropping one.
+    """
     client = _Client({"name": "Thali", "calories": 650, "protein": 22, "carbs": 100, "fats": 17})
     monkeypatch.setattr(gpt_vision, "get_openai_client", lambda: client)
     image_path = tmp_path / "meal.jpg"
@@ -122,7 +126,10 @@ def test_default_prompt_supplies_anchors_instead_of_prohibitions(monkeypatch, tm
     result = gpt_vision.gpt_vision_estimate(str(image_path), model="gpt-4o")
     prompt = client.chat.completions.kwargs["messages"][0]["content"][0]["text"]
 
-    assert result["prompt_variant"] == "v2"
+    assert result["prompt_variant"] == "v3"
+    # v3's own addition: enumerate the frame before costing anything.
+    assert "inventory the frame" in prompt
+    assert '"items_seen"' in prompt
     # A default anchor plus a wider range, rather than a smaller central guess.
     assert "dinner plate ~26cm" in prompt
     assert "Uncertainty belongs in the range" in prompt
@@ -148,6 +155,8 @@ def test_old_prompt_stays_selectable_for_comparison(monkeypatch, tmp_path):
     assert result["prompt_variant"] == "v1"
     assert "Do not infer oil merely because food is homemade" in prompt
     assert "dinner plate ~26cm" not in prompt
+    # Asking v1 for an inventory would make it v3 and leave nothing to compare.
+    assert "items_seen" not in prompt
 
 
 def test_unknown_variant_falls_back_to_the_default(monkeypatch, tmp_path):
@@ -157,7 +166,7 @@ def test_unknown_variant_falls_back_to_the_default(monkeypatch, tmp_path):
     image_path.write_bytes(b"test-image")
 
     result = gpt_vision.gpt_vision_estimate(str(image_path), model="gpt-4o", prompt_variant="v99")
-    assert result["prompt_variant"] == "v2"
+    assert result["prompt_variant"] == "v3"
 
 
 

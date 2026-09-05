@@ -1,4 +1,4 @@
-import { localDateKey } from "../lib/localDate";
+import { formatDateKey, localDateKey } from "../lib/localDate";
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import apiClient from '../lib/api-client';
@@ -227,7 +227,7 @@ export default function ActivityPage() {
                     <h3 className="text-lg font-semibold text-[#FFFFFF]">
                       {activity.activity_type || 'Activity'}
                     </h3>
-                    <p className="text-sm text-[#8E8E93]">{activity.date}</p>
+                    <p className="text-sm text-[#8E8E93]">{formatDateKey(activity.date)}</p>
                   </div>
                   <div className="flex gap-2">
                     <button onClick={() => handleEdit(activity)} className="text-[#FF6B35] hover:text-[#E85A2A]">
@@ -248,7 +248,7 @@ export default function ActivityPage() {
                   {activity.is_whole_day && (
                     <p className="text-sm text-[#FFFFFF]">Whole Day Activity</p>
                   )}
-                  {activity.intensity_level !== undefined && (
+                  {activity.intensity_level != null && (
                     <div>
                       <p className="text-sm text-[#8E8E93] mb-1">Intensity: {activity.intensity_level}/10</p>
                       <div className="w-full bg-[#2A2D35] rounded-full h-2">

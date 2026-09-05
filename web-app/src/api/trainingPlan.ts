@@ -29,7 +29,18 @@ export interface PlanDay {
   exercises: PlanExercise[];
 }
 
+export interface NutritionCompanion {
+  status: "ready" | "needs_profile";
+  source: "estimate" | "nutrition_plan";
+  goal?: string;
+  targets: { calories: number; protein: number; carbs: number; fats: number } | null;
+  missing_fields?: string[];
+  assumptions?: string[];
+  guidelines: string[];
+}
+
 export interface TrainingPlan {
+  nutrition_companion?: NutritionCompanion;
   id: string;
   plan_name: string;
   primary_goal?: string;
@@ -91,6 +102,10 @@ export interface ProjectedExercise {
   priority?: string;
   goal?: string;
   sets?: number;
+  reps?: number;
+  order?: number;
+  is_cardio?: boolean;
+  cardio_realistic?: Array<{ week: number; minutes: number }>;
   target_rep_range?: [number, number];
   notes?: string;
   target_weight?: number | null;
@@ -172,6 +187,7 @@ export interface Adherence {
 }
 
 export interface PlanProjection {
+  nutrition_companion?: NutritionCompanion;
   weeks: number;
   plan_id: string;
   plan_name: string;

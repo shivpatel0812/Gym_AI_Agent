@@ -15,7 +15,7 @@ from .gpt_food_lookup import (
     finalize_estimated_macros,
 )
 from .photo_estimate import build_photo_analysis, normalize_cooking_style
-from .vision_prompt import resolve_variant, rules_for
+from .vision_prompt import resolve_variant, rules_for, schema_extra_for
 
 
 def gpt_vision_estimate(
@@ -74,6 +74,9 @@ def gpt_vision_estimate(
         prior_context = json.dumps(safe_priors, separators=(",", ":")) if safe_priors else "[]"
 
         rules = rules_for(variant)
+        # v3 asks for an inventory block; v1 and v2 get "" so that asking them
+        # for one cannot quietly turn them into v3.
+        schema_extra = schema_extra_for(variant)
         prompt = f"""Analyze this food photo for a nutrition log. Return the most likely CENTRAL estimate for the full portion shown or described. Do not intentionally bias high or low.
 
 Food title supplied by the user: {log_title if log_title else "(none)"}
@@ -96,6 +99,7 @@ Return JSON only in this shape:
     "view_angle": "top_down|angled|side|unknown"
   }},
   "scale_references": [{{"type": "plate|bowl|utensil|hand|known_package|other", "reliability": "weak|medium|strong"}}],
+{schema_extra}
   "identity_confidence": "low|medium|high",
   "cooking_fat": {{
     "estimated_grams": number,

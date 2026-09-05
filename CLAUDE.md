@@ -235,8 +235,65 @@ v2 also drops v1's "calories should match the component calorie sum" — that
 instruction told the model to hide the exact disagreement
 `assess_macro_coherence` reads as an escalation signal.
 
-**v2 is the default on argument, not evidence.** The replay harness exists to
-settle it and has not been run against a populated archive yet.
+### v3: the omission case
+v1 and v2 both tune how *big* the estimate is. Neither can catch a component
+that was never estimated at all.
+
+Khichdi photographed with a katori of dahi came back as khichdi, and every
+guard passed it — because every guard tests for *inconsistency*, and an
+omission is perfectly consistent. The missing yogurt is absent from the
+components, the total and the macro arithmetic alike, so
+`assess_macro_coherence` has nothing to repair. Protein takes the damage, not
+calories: the dahi was the meal's largest protein contributor.
+
+Two inversions made it worse, both now fixed and pinned in
+`tests/test_nutrition_uncounted_items.py`. `should_escalate` routed on
+component **count**, so dropping an item made the plate look simpler and the
+stronger second pass *less* likely — the case that needed it most was
+structurally guaranteed not to get it. The confidence score paid +5 for a short
+ledger, so missing the yogurt raised confidence.
+
+v3 is v2 plus a step that runs **before** estimating: enumerate every edible
+thing in the frame, then estimate. Anything enumerated and left out must be
+named in `scene.excluded` with a reason. `normalize_scene` matches the
+inventory against the ledger by *identifying word* — count comparison would
+call a model that folds rice and dal into one "khichdi" row a miss — and
+whatever matches nothing becomes `scene.uncounted`, which both escalates and
+renders on the results card as "Not counted: …".
+
+It does not fix "never noticed the yogurt"; no text prompt can guarantee
+attention. It fixes "noticed it and dropped it silently".
+
+A protein-plausibility check was **rejected**: plain khichdi really is low in
+protein, so a rule firing on low protein-per-kcal would punish correct
+estimates of the dish alone. The error exists only relative to what was on the
+table, which is what the inventory step is for.
+
+### Every macro reconciles, not just calories
+A second, independent cause of the same complaint. `assess_macro_coherence`
+took the max of stated calories, the component sum, and the macro arithmetic —
+but `finalize_estimated_macros` then read protein, carbs and fats straight off
+the top level. A ledger reading 41g protein under a stated 25g **logged 25g**,
+and rendered the disagreeing ledger directly underneath the number.
+
+Protein is the macro users track most closely and the one a forgotten side of
+dahi or dal costs the most, so it had the least protection and the most to
+lose. Every macro now takes the same max-with-the-ledger treatment.
+
+The repair only ever **raises**. A model that itemises four components and
+fills protein in on two would otherwise drag the total down to a fragment.
+
+`protein_gap_ratio` is tracked separately from `gap_ratio` and escalates on the
+same 8% threshold: a plate can be exactly right on calories and badly wrong on
+protein, and calories-only routing never sees it.
+
+`SCHEMA_EXTRAS` keeps the `scene` block out of the v1/v2 prompts. Asking them
+for an inventory would turn them into v3 and leave nothing to compare.
+
+**v3 is the default on argument, not evidence — the same footing v2 had.** The
+replay harness (`--variants v2,v3`) still has not been run against a populated
+archive. `photo_log_store.py` was untracked until Sep 2026, so there is little
+history to replay; the archive only starts accumulating now.
 
 ### Corrections carry the photo and the ledger
 The upload is deleted after the first estimate, so `/adjust-estimate` reloads
@@ -280,6 +337,167 @@ with, and neither is evidence the user agreed.
 `photo_log_store.py` was untracked in git until Sep 2026, so nothing was ever
 archived and the harness has no history to replay. Prompt and model changes
 before that point were never measured.
+
+## Meal Timing (Sep 2026)
+
+A logged food used to carry a slot and no clock. `FoodItem` now has
+`logged_at` (server-stamped on write, on the user's clock), `eaten_at` (the
+user's own statement, which wins), `slot_source` and `moved_from`.
+
+**A log time is only evidence when it lands on the day being logged.** Filling
+in yesterday's dinner at 11pm tonight would otherwise report an 11pm dinner and
+drag every average with it, so `meal_time_minutes` returns None for those rows.
+A slot under three timed days shows its range and no "typical" time.
+
+Food rows are dragged between meals by a grip handle (`MealDrag.tsx`, core
+`PanResponder` — the app has neither gesture-handler nor reanimated). The drop
+targets are a fixed tray in screen space, not the meal cards, which move with
+the scroll. `moveFoodToMeal` records the slot the **app** chose, not the last
+stop on a tour of the meal list, and clears the marks when a food goes back
+where it started — fidgeting is not evidence.
+
+`GET /api/macros/meal-timing` returns per-slot clock habits, daily eating
+windows, and `corrections` — the moves the user keeps making, which is the app
+filing a food wrong rather than the user changing their mind.
+
+`user_time` caches the timezone per process (5 min TTL, invalidated on write)
+because every food write stamps a log time through `now()`, and that was a
+Firestore round trip per tap on the quick-log bar.
+
+## Progress Hub (Sep 2026)
+
+A stock-profile view of training: one weekly index, four domains under it, the
+lifts as positions, and a feed of what happened. Route: a top bar on Home
+(`ProgressTopBar.tsx`) pushing `ProgressHub` on the root stack — it spans
+workouts, nutrition and body, so it belongs under no single tab.
+
+| File | Purpose |
+|------|---------|
+| `/backend/progress/weeks.py` | Week bucketing. Everything is weekly |
+| `/backend/progress/domains.py` | The four domains, each a level plus a fast signal |
+| `/backend/progress/index.py` | Composite, noise band, **state machine** |
+| `/backend/progress/hub.py` | One read per collection, one payload |
+| `/backend/routers/progress.py` | `GET /api/progress/hub`, `/summary` |
+| `/frontend/src/components/progress/ProgressHub.tsx` | The screen |
+| `/frontend/src/components/progress/IndexChart.tsx` | Index line + scrub layer |
+
+### Level vs. trend
+A bad week is three different things that look identical on a chart: **no
+evidence** (nothing logged — nothing new is known), **expected low** (a deload
+or diet break the plan asked for), and **real decline**. Only the third is
+information, so only the third may move a level.
+
+    level    what the user has demonstrated. Peak-anchored, so a bad week is
+             structurally incapable of lowering it. Falls only by detraining
+             decay, and says so when it does.
+    current  the fast signal. A bad week lands here and in the trend arrow.
+
+**The classifier must see `current`.** Because the level cannot fall on a bad
+week, a hard week is otherwise *invisible* to the state machine and reads as an
+absence of progress — which got called "stalled — worth changing something"
+after a week the user simply had a rough time. Pinned in
+`TestABadWeekReachesTheClassifier`.
+
+### Why the index is not a ratchet
+`declining` requires sustained, outside-band movement with good coverage — or
+four straight weeks working under the demonstrated peak. Four, not three:
+accumulation blocks train under peak on purpose, and calling that a decline
+would have the hub arguing against normal periodisation.
+
+### The noise band
+Measured as mean absolute deviation of weekly deltas **around their mean**, not
+around zero. A user climbing a steady half point a week is not bouncing around;
+scored against zero their steadiness inflates the band by exactly the trend
+being looked for, and the band grows itself out of ever detecting it.
+`MIN_BAND` is 0.8 — a floor of 1.5 swallowed real progress whole, because that
+is larger than a strongly progressing user's weekly gain.
+
+Building and stalling are judged over a window against `band / sqrt(k)`, never
+on one week's delta. `stalled` additionally requires the window to have gone
+nowhere *in total*: three weeks of small honest gains are each inside the band.
+
+### Coverage is reported, never scored
+If missing logs lowered the number it would measure app engagement, not
+training; if they cost nothing, the way to a perfect score is to stop logging.
+So coverage is its own stat row, outside the math. The one ambiguity — someone
+who trains without logging is indistinguishable from someone who does not train
+— is resolved by `_weeks_with_data`: a week with *no data of any kind* is no
+evidence, but a week with food logs and no workouts is real evidence of missed
+sessions.
+
+### Domains
+Every level is an index where 100 is the user's own starting point or their own
+plan's expectation, never a population norm — a cut and a bulk must both be able
+to score 100, same stance as `fit_score`.
+
+- **Strength.** Lifts as positions, peak e1RM as the price, computed **within one
+  set** and skipping reps past 12 (Epley reports double the load at 30 reps). A
+  lift enters the index on its *second* week — its first week is its own baseline
+  and would dilute every real gain with a flat 100. Silence decays it after 3
+  weeks and drops it after 8.
+- **Consistency.** `measure_adherence`-shaped: sessions against what the plan
+  expected.
+- **Nutrition.** Share of *logged* days on target. Unlogged days move coverage.
+- **Body.** A rolling **least-squares slope**, not an EMA — an exponential filter
+  needs ~1/alpha samples to converge, so at one weigh-in a week the first month
+  understated a real cut and drew a fake dip then a fake recovery on every chart.
+  Faster than planned is not a better score (`_rate_score` is a tent function):
+  a cut at triple the planned rate is losing tissue the plan meant to keep.
+
+`FORMULA_VERSION` is stamped on every point. Recomputing history under new
+weights would silently rewrite a user's past and read as an overnight drop, so
+changing the weights is a new version, not an edit.
+
+### Forward projection
+`GET /api/progress/projection` is **separate from `/hub` on purpose** — it runs
+the live `ProgressionEngine` forward once per planned lift, far too expensive
+to pay for on every open of the tab. The client renders the hub, then lays this
+over it, once: the horizon is fixed, so changing the *history* range cannot
+change its answer.
+
+Two lines, never one, same as the Roadmap. `progress/projection.py` only
+re-expresses the engine's walk in index units; the peak-to-date rule is
+reapplied forward, because e1RM dips on the session a weight jump lands and
+reading each projected week directly would draw a saw-toothed line implying
+losses the plan never prescribes.
+
+**Only strength is projected.** Consistency, nutrition and body are carried
+forward flat and labelled as held — the plan can say what it will prescribe, it
+cannot say whether someone will log their food. The consequence is an honest,
+modest forward slope, and the caption says why. Ramping them would invent the
+most flattering part of the picture.
+
+### Body scan: observations, never photos
+`body_scan/store.py` writes `photos_retained: False` and the router calls
+`images.clear()` the moment the vision pass returns. Uploads are ephemeral by
+design and the user-facing disclaimer says so, so a photo before/after is not
+available to this screen — building one would mean reversing that privacy
+decision, which is a deliberate product call and not a side effect of a
+progress screen.
+
+`progress/scan_compare.py` compares what scans *do* retain: per-region
+development, posture and asymmetries, in the qualitative vocabulary they were
+recorded in. Development is ordinal upward, posture ordinal *downward* — one
+shared ordering would report a worsening slouch as progress. `uncertain` at
+either end is never a change, or a scan that could not read someone's back and
+a later one that could would manufacture an improvement out of better lighting.
+Still no body-fat figure; the scan schema refuses one on purpose.
+
+### Domain colours
+`theme.domainSeries` was found by sweeping the hue wheel at fixed
+lightness/chroma and validating every pair, not by picking four that looked
+distinct. Worst all-pairs CVD separation is ΔE 7.9 (deutan) — the 6-8 floor
+band, legal **only** because secondary encoding is always present: every domain
+draws in its own titled card beside a swatch, and no two ever share a plot
+frame. **Do not put two of them in one chart.** The composite index line keeps
+`series.mark`; the forward pair shares `series.projected` and is separated by
+dash pattern, because they are one quantity under two assumptions rather than
+two series.
+
+### Not built
+Planned-low weeks are sourced only from the live pacing style, which has no
+start date, so only the current week can be attributed — back-dating a diet
+break would invent history.
 
 ## Other Key Files
 - `/web-app/src/data/defaultExercises.ts` — Frontend exercise catalog (142 exercises)

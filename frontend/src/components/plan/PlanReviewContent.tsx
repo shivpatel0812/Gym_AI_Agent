@@ -1,3 +1,4 @@
+import { MacroSummary } from "./ProgramOverview";
 import { useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -175,6 +176,7 @@ export default function PlanReviewContent({
   return (
     <View>
       <Text style={styles.planName}>{plan.plan_name}</Text>
+      <MacroSummary value={plan.nutrition_companion} />
 
       <View style={styles.pillRow}>
         {plan.duration_weeks ? (

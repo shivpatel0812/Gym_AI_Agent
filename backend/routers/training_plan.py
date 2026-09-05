@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List
 from datetime import datetime, timedelta
 import re
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 import os
 
 from auth import get_user_id
@@ -34,13 +34,13 @@ from ai_analysis.plan_projection import (
     DEFAULT_PROJECTION_WEEKS,
     MAX_PROJECTION_WEEKS,
     PlanProjector,
-    exercise_sessions_per_week,
     measure_adherence,
 )
 from ai_analysis.coach_tools import _exercise_history_context
 from ai_analysis.workout_recommender.exercise_metadata import resolve_exercise_metadata
 from nutrition.plan_store import NutritionPlanStore
 from nutrition.pacing import build_paced_trajectory
+from nutrition.training_macros import build_training_macros
 
 router = APIRouter(prefix="/api/training-plan", tags=["training-plan"])
 
@@ -139,6 +139,29 @@ class ProposePlanRequest(BaseModel):
     # signal to honour what they told the coach instead of a UI default.
     plan_mode: Optional[str] = None
     goal_statement: Optional[str] = None
+    duration_weeks: Optional[int] = Field(None, ge=1, le=24)
+    weekly_schedule: Optional[dict[str, str]] = None
+    nutrition_goal: Optional[str] = None
+
+    @field_validator("nutrition_goal")
+    @classmethod
+    def valid_nutrition_goal(cls, value):
+        if value is not None and value not in ("maintain", "gain", "lose"):
+            raise ValueError("Choose maintain, gain or lose")
+        return value
+
+    @field_validator("weekly_schedule")
+    @classmethod
+    def valid_schedule(cls, value):
+        if value is None:
+            return value
+        weekdays = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+        if set(value) != weekdays or not all(v.strip() and len(v.strip()) <= 40 for v in value.values()):
+            raise ValueError("Provide all seven weekdays, using Rest for rest days")
+        if all(v.strip().lower() == "rest" for v in value.values()):
+            raise ValueError("Choose at least one training day")
+        return {k: "Rest" if v.strip().lower() == "rest" else v.strip() for k, v in value.items()}
+
 
 
 class AdjustPlanRequest(BaseModel):
@@ -241,6 +264,13 @@ def _load_current_split(user_id: str, split_id: Optional[str]) -> dict:
             return context
 
     return fallback or {"split_id": None, "split_name": None, "days": []}
+
+
+def _nutrition_companion(user_id: str, plan: dict) -> dict:
+    profile_doc = db.collection("users").document(user_id).collection("user_profile").document("profile").get()
+    profile = profile_doc.to_dict() or {} if profile_doc.exists else {}
+    return build_training_macros(profile, plan.get("nutrition_goal", "maintain"),
+                                 NutritionPlanStore(db, user_id).get_active())
 
 
 def _history_summary(user_id: str) -> dict:
@@ -373,6 +403,10 @@ def _attach_referenced_workout(user_id: str, split_context: dict, conversation: 
         extras = [exercise for exercise in day.get("exercises") or []
                   if exercise.get("exercise_id") not in imported_ids]
         day["exercises"] = imported + extras
+    known = {day.get("day_name") for day in enriched["days"]}
+    for name, exercises in imported_by_day.items():
+        if name and name not in known and exercises:
+            enriched["days"].append({"day_name": name, "focus": name, "exercises": exercises})
     enriched["referenced_workouts"] = references
     enriched["referenced_workout"] = references[0] if references else None
     return enriched
@@ -380,7 +414,7 @@ def _attach_referenced_workout(user_id: str, split_context: dict, conversation: 
 
 REVISION_FIELDS = (
     "plan_name", "primary_goal", "strategy", "guidelines",
-    "weekly_schedule", "days", "duration_weeks",
+    "weekly_schedule", "days", "duration_weeks", "nutrition_goal",
 )
 
 
@@ -463,6 +497,12 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
     split_context = _attach_referenced_workout(
         user_id, _load_current_split(user_id, request.split_id), conversation
     )
+    if request.weekly_schedule:
+        split_context["confirmed_schedule"] = request.weekly_schedule
+    if request.duration_weeks:
+        conversation.append({"role": "user", "content": f"Make this a {request.duration_weeks}-week plan."})
+    if request.nutrition_goal:
+        conversation.append({"role": "user", "content": f"My nutrition bodyweight goal is: {request.nutrition_goal}."})
     # What this proposal is revising. A live plan first; failing that, the draft
     # the user is still deciding on. Consulting only the active plan meant that
     # a user with none — having just ended one — had every regeneration built
@@ -484,6 +524,11 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {result['error']}")
 
     plan = result["plan"]
+    if request.duration_weeks:
+        plan["duration_weeks"] = request.duration_weeks
+    if request.nutrition_goal:
+        plan["nutrition_goal"] = request.nutrition_goal
+    plan["nutrition_companion"] = _nutrition_companion(user_id, plan)
     plan["source_split_id"] = split_context.get("split_id")
     # The Active Plan references the Current Split; it never overwrites it
     plan["owns_linked_split"] = False
@@ -552,6 +597,7 @@ async def adjust_plan(request: AdjustPlanRequest, user_id: str = Depends(get_use
         raise HTTPException(status_code=500, detail=f"Plan adjustment failed: {result['error']}")
 
     plan = result["plan"]
+    plan["nutrition_companion"] = _nutrition_companion(user_id, plan)
     plan["source_split_id"] = active.get("source_split_id")
     plan["owns_linked_split"] = False
     plan["diff"] = diff_plans(active, plan)
@@ -696,10 +742,8 @@ async def get_plan_projection(
     all_workout_sessions = recommender.data_fetcher.get_all_workout_sessions()
     user_goal = profile.get("primary_goal") or "Build Muscle"
 
-    # How often each lift is trained this week. Counted per exercise across the
-    # days that carry it — Push A + Push B both once still means incline is
-    # twice, which is what fills the Workout 1 / Workout 2 columns.
-    exercise_frequency = exercise_sessions_per_week(plan)
+    # Each day is its own exposure: a heavy session and a volume session must
+    # not each simulate both weekly occurrences using the same prescription.
     day_frequency: dict = {}
     for day_name in (plan.get("weekly_schedule") or {}).values():
         if day_name and str(day_name).strip().lower() != "rest":
@@ -725,7 +769,7 @@ async def get_plan_projection(
                 continue
             per_week = max(
                 1,
-                exercise_frequency.get(ex_id) or day_frequency.get(day_name, 1),
+                day_frequency.get(day_name, 1),
             )
             rep_range = exercise.get("target_rep_range")
             history_context = _exercise_history_context(
@@ -748,7 +792,8 @@ async def get_plan_projection(
                 weeks=horizon,
                 sessions_per_week=per_week,
                 num_sets=exercise.get("sets") or 3,
-                focus_goal=exercise.get("goal"),
+                focus_goal=exercise.get("goal") or day.get("goal"),
+                day_intensity=exercise.get("intensity") or day.get("day_type"),
                 rep_range_override=(
                     tuple(rep_range) if isinstance(rep_range, (list, tuple)) and len(rep_range) == 2
                     else None
@@ -776,6 +821,8 @@ async def get_plan_projection(
                 "priority": exercise.get("priority"),
                 "goal": exercise.get("goal"),
                 "sets": exercise.get("sets"),
+                "reps": exercise.get("reps"),
+                "order": exercise.get("order"),
                 "target_rep_range": rep_range,
                 "target_weight": exercise.get("target_weight"),
                 "target_reps": exercise.get("target_reps"),
@@ -827,6 +874,7 @@ async def get_plan_projection(
             "days": days_out,
             "muscle_group_history": _muscle_group_history(all_workout_sessions),
             "nutrition": nutrition,
+            "nutrition_companion": build_training_macros(profile, plan.get("nutrition_goal", "maintain"), nutrition_plan),
         },
     }
 

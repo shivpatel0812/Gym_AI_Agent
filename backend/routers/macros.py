@@ -442,12 +442,15 @@ async def analyze_food_image_endpoint(
     title: Optional[str] = Form(None),
     cooking_style: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
+    prompt_variant: Optional[str] = Form(None),
     user_id: str = Depends(get_user_id)
 ):
     """
     Analyze a meal photo with optional user description.
     GPT vision estimates the portion shown and reports uncertainty metadata.
     model: "gpt-4o" (default) or "gpt-5.6-sol"
+    prompt_variant: "v1" | "v2" | "v3" (default). Unknown names fall back to
+    the default, so this is safe to pass through from a client.
     """
     temp_file = None
     try:
@@ -463,6 +466,7 @@ async def analyze_food_image_endpoint(
             title=title,
             cooking_style=normalize_cooking_style(cooking_style),
             prior_foods=priors,
+            prompt_variant=prompt_variant,
         )
         # Persist every upload + estimate for testing / review. Never fail the
         # user-facing estimate if archival write has a problem.

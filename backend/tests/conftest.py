@@ -17,6 +17,22 @@ from ai_analysis.workout_recommender.progression_engine import ProgressionEngine
 from ai_analysis.workout_recommender.goal_configs import get_goal_config
 
 
+@pytest.fixture(autouse=True)
+def _clear_timezone_cache():
+    """
+    Keep the process-wide timezone cache out of the test suite.
+
+    `user_time` caches by user id so a food write does not cost a Firestore
+    read; tests reuse "u1" across unrelated stub databases, so without this one
+    case's answer leaks into the next.
+    """
+    import user_time
+
+    user_time.clear_timezone_cache()
+    yield
+    user_time.clear_timezone_cache()
+
+
 @pytest.fixture
 def engine():
     """Fresh ProgressionEngine instance."""

@@ -60,6 +60,26 @@ function series(
   }));
 }
 
+/**
+ * Placeholder for a card whose data has not arrived.
+ *
+ * Rendering `null` while loading collapsed the row and let each card pop in
+ * separately as its request resolved, so the screen jumped four times on a
+ * cold start. This holds the space and names the section. It deliberately
+ * shows no number: a placeholder figure reads as data.
+ */
+function PendingCard({ label, wide }: { label: string; wide?: boolean }) {
+  return (
+    <View
+      style={[wide ? styles.wellness : styles.card, styles.pending]}
+      accessibilityLabel={`${label} is still loading`}
+    >
+      <Text style={styles.cardLabel}>{label}</Text>
+      <Text style={styles.pendingDash}>—</Text>
+    </View>
+  );
+}
+
 export default function QuickLogBars({
   available = { sleep: true, stress: true, wellness: true, water: true },
   sleepHours,
@@ -196,7 +216,7 @@ export default function QuickLogBars({
             maximumTrackTintColor="#1E2A38"
             thumbTintColor="#A78BFA"
           />
-        </View> : null}
+        </View> : <PendingCard label="Sleep" />}
 
         {available.stress ? <View style={styles.card}>
           <TouchableOpacity onPress={() => setHistory("stress")} activeOpacity={0.8}>
@@ -222,7 +242,7 @@ export default function QuickLogBars({
             maximumTrackTintColor="#1E2A38"
             thumbTintColor={stressColor}
           />
-        </View> : null}
+        </View> : <PendingCard label="Stress" />}
       </View>
 
       <View style={styles.bottomRow}>
@@ -241,7 +261,7 @@ export default function QuickLogBars({
             </Text>
           </View>
           <MaterialCommunityIcons name="chevron-right" size={16} color="#55647A" />
-        </TouchableOpacity> : null}
+        </TouchableOpacity> : <PendingCard label="Wellness" wide />}
 
         {available.water ? <View style={styles.waterCard}>
           <View style={styles.waterTop}>
@@ -296,7 +316,7 @@ export default function QuickLogBars({
               <MaterialCommunityIcons name="plus" size={13} color={WATER} />
             </TouchableOpacity>
           </View>
-        </View> : null}
+        </View> : <PendingCard label="Water" />}
       </View>
 
       <Modal visible={history != null} transparent animationType="slide" onRequestClose={() => setHistory(null)}>
@@ -390,6 +410,8 @@ const styles = StyleSheet.create({
     minHeight: 96,
   },
   cardLabel: { color: "#7C8CA0", fontSize: 10, fontWeight: "700" },
+  pending: { opacity: 0.5, justifyContent: "flex-start" },
+  pendingDash: { color: "#55647A", fontSize: 15, fontWeight: "800", marginTop: 2 },
   cardValue: { color: "#fff", fontSize: 15, fontWeight: "800", marginTop: 2 },
   meta: { color: "#55647A", fontSize: 10, marginTop: 1, fontWeight: "600" },
   stepper: { flexDirection: "row", gap: 6, marginTop: 8 },

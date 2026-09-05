@@ -515,8 +515,8 @@ function buildSessionPayload(
         const validSets = ex.sets.filter(isValidSet);
         if (
           validSets.length > 0 ||
-          ex.time !== undefined ||
-          ex.speed !== undefined ||
+          ex.time != null ||
+          ex.speed != null ||
           isCardioExercise(ex)
         ) {
           return { ...ex, sets: validSets };

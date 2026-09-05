@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
+  ActivityIndicator,
   View,
   Text,
   TextInput,
@@ -29,6 +30,7 @@ import type { NutritionPlan } from "../../api/nutritionPlan";
 import { normalizeMealLabel } from "../../lib/recentMeals";
 import { foodQuantity, scaleFoodItem } from "../../lib/foodQuantity";
 import { planItemAppliesToday, todayWeekdayKey } from "../../lib/mealSlots";
+import ProgressTopBar from "./ProgressTopBar";
 import QuickLogBars from "./QuickLogBars";
 import TodayFoodLog from "./TodayFoodLog";
 import {
@@ -825,14 +827,53 @@ export default function Home() {
         <Text style={styles.dateLine}>{dateLabel}</Text>
       </View>
 
-      {Object.entries(loadStates).filter(([, state]) => state.date === date && (state.error || (state.loading && !state.loaded))).map(([key, state]) => (
-        <View key={key} style={{ padding: 12, gap: 6 }}>
-          <Text style={{ color: colors.textSecondary }}>
-            {state.loading ? `Loading ${key.toLowerCase()}…` : `${key}: ${state.loaded ? "showing the last loaded data; it may be out of date." : "could not load data."}`}
-          </Text>
-          {state.error ? <TouchableOpacity onPress={() => void load(key)} accessibilityLabel={`Retry ${key}`}><Text style={{ color: colors.accentPrimary }}>Retry {key.toLowerCase()}</Text></TouchableOpacity> : null}
-        </View>
-      ))}
+      <ProgressTopBar />
+
+      {(() => {
+        // Ten sections load in parallel. Rendering one paragraph per section
+        // stacked ten "Loading sleep…/stress…/wellness…" rows above the fold on
+        // every cold start and reflowed the whole screen as each resolved.
+        // Loading is the universal case and collapses to one line; a failure is
+        // rare, names the section, and keeps its own retry.
+        const rows = Object.entries(loadStates).filter(([, state]) => state.date === date);
+        const loading = rows.filter(([, state]) => state.loading && !state.loaded);
+        const failed = rows
+          .filter(([, state]) => state.error)
+          .sort(([a], [b]) => a.localeCompare(b));
+        if (!loading.length && !failed.length) return null;
+        return (
+          <View style={styles.loadStatus}>
+            {loading.length ? (
+              <View style={styles.loadRow}>
+                <ActivityIndicator size="small" color={colors.accentPrimary} />
+                <Text style={styles.loadText}>Loading your day…</Text>
+              </View>
+            ) : null}
+            {failed.map(([key, state]) => (
+              <View key={key} style={styles.loadRow}>
+                <MaterialCommunityIcons
+                  name="alert-circle-outline"
+                  size={15}
+                  color={colors.attention}
+                />
+                <Text style={styles.loadText} accessibilityRole="alert">
+                  {state.loaded
+                    ? `${key} may be out of date.`
+                    : `${key} could not load.`}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => void load(key)}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Retry ${key}`}
+                >
+                  <Text style={styles.loadRetry}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        );
+      })()}
 
       <QuickLogBars
         available={{ sleep: Boolean(available("Sleep")), stress: Boolean(available("Stress")),
@@ -1092,6 +1133,17 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === "ios" ? 60 : StatusBar.currentHeight ? StatusBar.currentHeight + 16 : 16,
   },
   header: { marginBottom: 22 },
+  loadStatus: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 12,
+    backgroundColor: colors.cardBackground,
+    gap: spacing.sm,
+  },
+  loadRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  loadText: { flex: 1, color: colors.textMutedCool, fontSize: 13 },
+  loadRetry: { color: colors.accentPrimary, fontSize: 13, fontWeight: "700" },
   greeting: { color: "#fff", fontSize: 32, fontWeight: "800" },
   dateLine: { color: "#7C8CA0", fontSize: 16, marginTop: 4 },
   sectionLabel: {

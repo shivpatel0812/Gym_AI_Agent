@@ -15,6 +15,7 @@ import {
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import apiClient from "../../api/client";
+import { colors } from "../../theme";
 import type { AiModelId } from "../../lib/aiModels";
 import { BAND_COLORS, BAND_LABELS } from "./FitBadge";
 import type { FoodFit } from "./types";
@@ -149,6 +150,10 @@ export default function PhotoScanResults({
         components: revised.components?.length
           ? revised.components
           : estimate.analysis.components,
+        // The revision IS the user's statement about what is in the meal, so
+        // the "not counted" list is answered whatever they said. Keeping it
+        // would leave the banner naming an item the ledger now contains.
+        uncounted: [],
       },
     });
     setPortion("estimated");
@@ -278,6 +283,26 @@ export default function PhotoScanResults({
               Set a nutrition plan target to see how meals fit your goal.
             </Text>
           )}
+
+          {estimate.analysis.uncounted.length ? (
+            // The omission made visible. Silence here is the exact failure
+            // this list exists to end: a side dish the model saw, did not
+            // cost, and never mentioned.
+            <TouchableOpacity
+              style={styles.uncountedRow}
+              onPress={() => setShowChat(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`Not counted: ${estimate.analysis.uncounted.join(
+                ", "
+              )}. Tap to add it.`}
+            >
+              <MaterialCommunityIcons name="alert-circle-outline" size={15} color={colors.attentionOnLight} />
+              <Text style={styles.uncountedText}>
+                <Text style={styles.uncountedLead}>Not counted: </Text>
+                {estimate.analysis.uncounted.join(", ")} — tap to add it.
+              </Text>
+            </TouchableOpacity>
+          ) : null}
 
           <View style={styles.confidenceRow}>
             <MaterialCommunityIcons
@@ -491,6 +516,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
+  uncountedRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: colors.attentionOnLightSoft,
+  },
+  uncountedText: {
+    flex: 1,
+    color: colors.attentionOnLight,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  uncountedLead: { fontWeight: "700" },
   confidenceRow: {
     flexDirection: "row",
     alignItems: "center",

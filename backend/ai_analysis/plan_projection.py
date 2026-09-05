@@ -429,6 +429,7 @@ class PlanProjector:
         target_weight: Optional[float] = None,
         target_reps: Optional[int] = None,
         target_weeks: Optional[int] = None,
+        day_intensity: Optional[str] = None,
     ) -> ExerciseProjection:
         """
         Walk the real engine forward, assuming every prescription is met.
@@ -544,6 +545,7 @@ class PlanProjector:
                     exercise_name=exercise_name,
                     user_goal=user_goal,
                     focus_goal=focus_goal,
+                    day_intensity=day_intensity,
                     rep_range_override=rep_range_override,
                     recent_sessions=simulated[:6],
                     num_sets=num_sets,

@@ -372,10 +372,22 @@ def build_today_guidance(
                     )
         else:
             leftover = int(round(available))
+            still_left = int(round(remaining_cal))
             if anchor_names and leftover > 0:
                 headline = f"{leftover} calories left after {anchor_names}."
             elif leftover > 0:
                 headline = f"{leftover} calories left today."
+            elif leftover < -50 and still_left > 0 and anchor_names:
+                # `available` has already subtracted meals the user has NOT
+                # eaten yet, so a negative number here is a PROJECTION. Stated
+                # as fact it read "114 calories over target" directly above a
+                # ring saying "66 left", and told a user who was under target
+                # that they had overeaten. The conditional branch above (for
+                # flexible meals) always got this right; this one did not.
+                headline = (
+                    f"{still_left} calories left, but {anchor_names} still to come "
+                    f"would put you {abs(leftover)} over."
+                )
             elif leftover < -50:
                 headline = f"{abs(leftover)} calories over target."
             else:

@@ -44,6 +44,12 @@ export type PhotoEstimate = MacroValues & {
     // Per-item breakdown from the vision pass. Rendering it is what lets the
     // user see a missing item instead of having to guess at it.
     components: PhotoComponent[];
+    /**
+     * Food the model said it could see and then did not cost — the omission
+     * that used to be silent. Empty for the v1/v2 prompts, which are never
+     * asked for an inventory. See backend/nutrition/photo_estimate.py.
+     */
+    uncounted: string[];
   };
 };
 
@@ -135,6 +141,11 @@ export function toPhotoEstimate(raw: any, titleFallback = ""): PhotoEstimate | n
       uncertainties: stringList(analysis.uncertainties),
       matchedSavedFood: Boolean(analysis.matched_saved_food),
       components: componentList(analysis.components),
+      uncounted: stringList(
+        analysis.scene && typeof analysis.scene === "object"
+          ? analysis.scene.uncounted
+          : []
+      ),
     },
   };
 }

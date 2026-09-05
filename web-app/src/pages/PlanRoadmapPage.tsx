@@ -11,6 +11,7 @@ import {
   MdOutlineCalendarToday,
   MdWarningAmber,
 } from "react-icons/md";
+import ProgramOverview from "../components/plan/ProgramOverview";
 import ProjectionChart, {
   ChartLegend,
   SERIES_COLORS,
@@ -45,7 +46,7 @@ export default function PlanRoadmapPage() {
 
   useEffect(() => {
     let live = true;
-    getPlanProjection(PROJECTION_WEEKS)
+    getPlanProjection()
       .then((value) => live && setProjection(value))
       .catch(() => live && setError("Could not load your plan hub."))
       .finally(() => live && setLoading(false));
@@ -82,6 +83,8 @@ export default function PlanRoadmapPage() {
           <MdEdit size={16} /> Edit in Plan Mode
         </Link>
       </header>
+
+      <ProgramOverview projection={projection} />
 
       <nav className="mt-8 flex items-center gap-3" aria-label="Training days">
         <button

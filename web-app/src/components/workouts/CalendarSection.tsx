@@ -569,14 +569,14 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                   </h4>
                   <div className="space-y-2">
                     {dayData.logs.wellness.map((entry: any) => {
-                      const category = entry.level !== undefined ? 'stress' :
+                      const category = entry.level != null ? 'stress' :
                                      entry.description && !entry.fatigue ? 'body-feelings' :
                                      'wellness-survey';
                       return (
                         <Card key={entry.id} className="p-3">
                           <div className="flex items-start justify-between">
                             <div className="flex-1 text-sm">
-                              {entry.level !== undefined && (
+                              {entry.level != null && (
                                 <p className="font-semibold text-white text-xs mb-1">
                                   Stress: {entry.level}/10
                                 </p>
@@ -878,14 +878,14 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                 </h4>
                 <div className="space-y-3">
                     {dayData.logs.wellness.map((entry: any) => {
-                      const category = entry.level !== undefined ? 'stress' :
+                      const category = entry.level != null ? 'stress' :
                                      entry.description && !entry.fatigue ? 'body-feelings' :
                                      'wellness-survey';
                       return (
                         <Card key={entry.id} className="p-4">
                           <div className="flex items-start justify-between">
                             <div className="flex-1">
-                              {entry.level !== undefined && (
+                              {entry.level != null && (
                                 <p className="font-semibold text-white mb-1">
                                   Stress Level: {entry.level}/10
                                 </p>
@@ -893,7 +893,7 @@ function DateDetailPanel({ date, dayData, onClose, onUpdate }: DateDetailPanelPr
                               {entry.description && (
                                 <p className="text-sm text-[#8E8E93]">{entry.description}</p>
                               )}
-                              {entry.fatigue !== undefined && (
+                              {entry.fatigue != null && (
                                 <p className="text-sm text-[#8E8E93]">
                                   Fatigue: {entry.fatigue}/10
                                 </p>

@@ -11,11 +11,45 @@ slot, a lookback window) resolves through the timezone the device reported, and
 only falls back to UTC when we have never heard from that device.
 """
 
+import time
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DEFAULT_TIMEZONE = "UTC"
+
+# A user's timezone changes when they travel, which is rare, but `now()` is
+# called on paths that run per user action -- every food write stamps a log
+# time through it. Re-reading the profile document each time turned a local
+# clock lookup into a Firestore round trip on the hot path. Cached per process
+# with a short TTL, and invalidated outright when the zone is written.
+_TIMEZONE_TTL_SECONDS = 300
+_timezone_cache: Dict[str, Tuple[str, float]] = {}
+
+
+def _cached_timezone(user_id: str) -> Optional[str]:
+    hit = _timezone_cache.get(user_id)
+    if not hit:
+        return None
+    name, cached_at = hit
+    if time.monotonic() - cached_at > _TIMEZONE_TTL_SECONDS:
+        _timezone_cache.pop(user_id, None)
+        return None
+    return name
+
+
+def clear_timezone_cache(user_id: Optional[str] = None) -> None:
+    """
+    Drop cached zones — one user's, or everyone's.
+
+    Tests need this because the cache is keyed on user id alone: two cases that
+    both stub "u1" over different databases would otherwise see each other's
+    answer. `conftest.py` clears it around every test.
+    """
+    if user_id is None:
+        _timezone_cache.clear()
+    else:
+        _timezone_cache.pop(user_id, None)
 
 
 def _profile_ref(db, user_id: str):
@@ -41,14 +75,23 @@ def normalize_timezone(value: Optional[str]) -> Optional[str]:
 
 def get_timezone(db, user_id: str) -> str:
     """The user's IANA timezone, or UTC if their device never reported one."""
+    cached = _cached_timezone(user_id)
+    if cached:
+        return cached
     try:
         doc = _profile_ref(db, user_id).get()
         if doc.exists:
             stored = normalize_timezone((doc.to_dict() or {}).get("timezone"))
             if stored:
+                _timezone_cache[user_id] = (stored, time.monotonic())
                 return stored
     except Exception as e:
         print(f"Warning: could not read user timezone: {e}")
+        # A failed read is not evidence the user is in UTC, so it is answered
+        # but never cached -- otherwise one blip pins them to UTC for 5 minutes.
+        return DEFAULT_TIMEZONE
+    # No zone stored is a durable fact and worth caching like any other.
+    _timezone_cache[user_id] = (DEFAULT_TIMEZONE, time.monotonic())
     return DEFAULT_TIMEZONE
 
 
@@ -61,6 +104,9 @@ def set_timezone(db, user_id: str, value: str) -> Optional[str]:
         {"timezone": name, "timezone_updated_at": datetime.now().isoformat()},
         merge=True,
     )
+    # The client only re-sends on a change, so this is exactly the moment the
+    # cache must not answer with the old zone.
+    _timezone_cache[user_id] = (name, time.monotonic())
     return name
 
 

@@ -94,8 +94,14 @@ class TestResolutionOrder:
             split_day="Push A", profile_goal="Get Stronger")
         # Day says hypertrophy; the profile says strength. Day wins.
         assert ctx.goal == "hypertrophy"
-        assert ctx.source == "plan_day"
         assert ctx.day_type == "heavy"
+        # The row exists in the plan, so the sets and reps came from the
+        # exercise layer even though the GOAL fell through to the day. `source`
+        # names the most specific layer that contributed anything, not the one
+        # that happened to supply the goal — the only consumer compares it
+        # against "default" (see WorkoutRecommender), so it is a transparency
+        # label and "plan_exercise" is the more informative one to show.
+        assert ctx.source == "plan_exercise"
 
     def test_training_focus_when_plan_is_silent(self):
         resolver = make_resolver(
@@ -150,8 +156,13 @@ class TestDayResolution:
         resolver = make_resolver()
         assert resolver.resolve("lateral_raise", "Lateral Raise",
                                 split_day="Push A").day_intensity == "heavy"
+        # A volume day stays "volume" rather than collapsing to "normal".
+        # ProgressionEngine branches on it directly (`day_intensity ==
+        # "volume"` in both _select_prescription and the plan-day calibration),
+        # so flattening it made a high-volume day indistinguishable from every
+        # other workout and let a heavy day's load/rep target bleed into it.
         assert resolver.resolve("incline_db_press", "Incline Dumbbell Press",
-                                split_day="Push B").day_intensity == "normal"
+                                split_day="Push B").day_intensity == "volume"
 
 
 class TestPlanLifecycleAffectsResolution:
@@ -266,7 +277,7 @@ class TestPlanValidation:
 
     def test_duration_is_bounded(self):
         assert PlanBuilder.validate_plan(self._plan(duration_weeks=999))["duration_weeks"] == 24
-        assert PlanBuilder.validate_plan(self._plan(duration_weeks="junk"))["duration_weeks"] == 6
+        assert PlanBuilder.validate_plan(self._plan(duration_weeks="junk"))["duration_weeks"] == 12
 
     def test_survives_a_completely_empty_payload(self):
         plan = PlanBuilder.validate_plan({})

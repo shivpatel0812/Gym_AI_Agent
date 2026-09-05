@@ -58,28 +58,71 @@ def _num(value, default=0):
         return default
 
 
+# Macro fields on a component row, and the key each maps to on the top level.
+_COMPONENT_MACROS = (
+    ("protein", ("protein",)),
+    ("carbs", ("carbs",)),
+    ("fats", ("fats", "fat")),
+    ("fiber", ("fiber",)),
+)
+
+
+def _stated(parsed: Dict, keys) -> float:
+    for key in keys:
+        if key in parsed:
+            return _num(parsed.get(key))
+    return 0.0
+
+
+def _component_macro_sums(components) -> Dict[str, float]:
+    """What the model's own line items add up to, per macro."""
+    sums = {name: 0.0 for name, _ in _COMPONENT_MACROS}
+    sums["calories"] = 0.0
+    if not isinstance(components, list):
+        return sums
+    for part in components:
+        if not isinstance(part, dict):
+            continue
+        sums["calories"] += _num(part.get("calories"))
+        for name, keys in _COMPONENT_MACROS:
+            sums[name] += _stated(part, keys)
+    return sums
+
+
 def assess_macro_coherence(parsed: Dict) -> Dict:
-    """Compare a model's stated calories against what its own parts imply.
+    """Compare a model's stated totals against what its own parts imply.
 
     A model that reports 440 kcal under components summing to 560, or macros
     justifying 600, is telling you it is out of its depth on this photo. The
     repair below is still worth applying — but discarding the fact that a
     repair was needed throws away the best available signal that the estimate
     deserves a second, stronger pass.
+
+    **Every macro is reconciled, not only calories.** Calories were protected
+    from the start and protein was not, so a ledger reading 41g protein under a
+    stated 25g logged 25g — and rendered the disagreeing ledger underneath it.
+    Protein is the macro users track most closely and the one a forgotten side
+    of yogurt or dal costs the most.
+
+    The repair only ever raises a figure. A model that itemises four components
+    and fills protein in on two of them would otherwise drag the total DOWN to
+    a partial sum, which is a worse answer than the one it replaced.
     """
-    protein = round(_num(parsed.get("protein")), 1)
-    carbs = round(_num(parsed.get("carbs")), 1)
-    fats = round(_num(parsed.get("fats", parsed.get("fat"))), 1)
     reported = int(round(_num(parsed.get("calories"))))
+    sums = _component_macro_sums(parsed.get("components"))
+    component_sum = sums["calories"]
 
-    component_sum = 0.0
-    components = parsed.get("components")
-    if isinstance(components, list):
-        for part in components:
-            if isinstance(part, dict):
-                component_sum += _num(part.get("calories"))
+    macros = {}
+    macro_repaired = False
+    for name, keys in _COMPONENT_MACROS:
+        stated = round(_stated(parsed, keys), 1)
+        from_parts = round(sums[name], 1)
+        resolved_macro = max(stated, from_parts)
+        macros[name] = resolved_macro
+        if resolved_macro != stated:
+            macro_repaired = True
 
-    macro_kcal = 4 * protein + 4 * carbs + 9 * fats
+    macro_kcal = 4 * macros["protein"] + 4 * macros["carbs"] + 9 * macros["fats"]
 
     resolved = reported
     if component_sum > resolved:
@@ -89,26 +132,39 @@ def assess_macro_coherence(parsed: Dict) -> Dict:
         resolved = int(round(macro_kcal))
 
     gap = abs(resolved - reported)
+    stated_protein = round(_stated(parsed, ("protein",)), 1)
+    protein_gap = abs(macros["protein"] - stated_protein)
     return {
         "reported_calories": reported,
         "component_sum": int(round(component_sum)),
         "macro_kcal": int(round(macro_kcal)),
         "calories": resolved,
-        "repaired": resolved != reported,
+        "protein": macros["protein"],
+        "carbs": macros["carbs"],
+        "fats": macros["fats"],
+        "fiber": macros["fiber"],
+        "reported_protein": stated_protein,
+        "component_protein": round(sums["protein"], 1),
+        "repaired": resolved != reported or macro_repaired,
         # Share of the final number that the model did not account for.
         "gap_ratio": round(gap / resolved, 3) if resolved > 0 else 0.0,
+        # Tracked separately: a plate can be right on calories and badly wrong
+        # on protein, and calories-only routing never sees it.
+        "protein_gap_ratio": (
+            round(protein_gap / macros["protein"], 3) if macros["protein"] > 0 else 0.0
+        ),
     }
 
 
 def finalize_estimated_macros(parsed: Dict, query: str = "") -> Tuple[int, float, float, float, float]:
-    """Apply arithmetic consistency without inventing an upward calorie bias."""
+    """Apply arithmetic consistency without inventing an upward bias."""
     coherence = assess_macro_coherence(parsed)
     return (
         coherence["calories"],
-        round(_num(parsed.get("protein")), 1),
-        round(_num(parsed.get("carbs")), 1),
-        round(_num(parsed.get("fats", parsed.get("fat"))), 1),
-        round(_num(parsed.get("fiber")), 1),
+        coherence["protein"],
+        coherence["carbs"],
+        coherence["fats"],
+        coherence["fiber"],
     )
 
 
