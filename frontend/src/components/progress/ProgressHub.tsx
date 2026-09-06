@@ -20,11 +20,22 @@ import {
   weight,
 } from "../../theme";
 import Sparkline from "../home/Sparkline";
+import GoalsSection from "./GoalsSection";
 import IndexChart from "./IndexChart";
-import { getProgressHub, getProgressProjection } from "../../api/progress";
+import PhotoStrip from "./PhotoStrip";
+import {
+  getGoals,
+  getPhotoHub,
+  getProgressHub,
+  getProgressProjection,
+} from "../../api/progress";
 import type {
   Domain,
   ForwardProjection,
+  Goal,
+  IndexPoint,
+  PhotoHub,
+  Position,
   ProgressEvent,
   ProgressHub as Hub,
   ProgressState,
@@ -90,13 +101,25 @@ export default function ProgressHub() {
   const [error, setError] = useState<string | null>(null);
   const [scrub, setScrub] = useState<number | null>(null);
   const [projection, setProjection] = useState<ForwardProjection | null>(null);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [photos, setPhotos] = useState<PhotoHub | null>(null);
 
   const load = useCallback(
     async (nextWeeks: number) => {
       setLoading(true);
       setError(null);
       try {
-        setHub(await getProgressHub(nextWeeks));
+        const [next, photoHub] = await Promise.all([
+          getProgressHub(nextWeeks),
+          // A failure here must not blank the whole screen — the index is the
+          // point, the strip around it is not.
+          getPhotoHub(nextWeeks).catch(() => null),
+        ]);
+        setHub(next);
+        // Goals ride along on the hub payload; evaluating them needs a built
+        // hub, so asking for them separately would rebuild it.
+        setGoals(next.goals ?? []);
+        setPhotos(photoHub);
       } catch {
         // Visible, retryable. A swallowed failure renders as an empty hub and
         // reads to the user as "I have made no progress".
@@ -141,6 +164,18 @@ export default function ProgressHub() {
   }, [hub, selectedPoint]);
 
   const stateStyle = hub ? STATE_STYLE[hub.index.state] : STATE_STYLE.unknown;
+
+  const positions: Position[] = useMemo(
+    () =>
+      hub?.domains.find((d) => d.key === "strength")?.detail.positions ?? [],
+    [hub]
+  );
+
+  const refreshGoals = useCallback(() => {
+    void getGoals()
+      .then(setGoals)
+      .catch(() => undefined);
+  }, []);
 
   return (
     <View style={styles.root}>
@@ -267,11 +302,18 @@ export default function ProgressHub() {
             />
             <Text style={styles.scrubHint}>
               {selectedPoint
-                ? eventsForSelected.length
-                  ? eventsForSelected.map((e) => e.title).join(" · ")
-                  : "No events that week."
-                : "Drag across the chart to read a week."}
+                ? "Tap another point, or Clear below."
+                : "Tap a point to see that week's numbers."}
             </Text>
+
+            {selectedPoint ? (
+              <WeekDetailCard
+                point={selectedPoint}
+                domains={hub.domains}
+                events={eventsForSelected}
+                onClear={() => setScrub(null)}
+              />
+            ) : null}
 
             {/* Coverage — reported, never folded into the number. */}
             <View style={styles.statGrid}>
@@ -294,6 +336,14 @@ export default function ProgressHub() {
             {projection?.available && projection.assumption ? (
               <Text style={styles.footnote}>{projection.assumption}</Text>
             ) : null}
+
+            <GoalsSection
+              goals={goals}
+              positions={positions}
+              onChanged={refreshGoals}
+            />
+
+            <PhotoStrip hub={photos} />
 
             <ScanCompareCard compare={hub.scan_compare} />
 
@@ -339,6 +389,116 @@ function Stat({ label, value }: { label: string; value: string }) {
     <View style={styles.stat}>
       <Text style={styles.statValue}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+}
+
+const DOMAIN_ORDER = ["strength", "consistency", "nutrition", "body"] as const;
+
+/**
+ * What one week of the index is made of — domain levels that week, plus any
+ * events tagged to it. Lives under the chart so a tap has somewhere to land.
+ */
+function WeekDetailCard({
+  point,
+  domains,
+  events,
+  onClear,
+}: {
+  point: IndexPoint;
+  domains: Domain[];
+  events: ProgressEvent[];
+  onClear: () => void;
+}) {
+  const labels = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const d of domains) map[d.key] = d.label;
+    return map;
+  }, [domains]);
+
+  const rows = DOMAIN_ORDER.map((key) => ({
+    key,
+    label: labels[key] ?? key,
+    value: point.contributions?.[key] ?? null,
+  }));
+
+  return (
+    <View style={styles.weekCard}>
+      <View style={styles.cardHead}>
+        <View>
+          <Text style={styles.weekEyebrow}>WEEK OF</Text>
+          <Text style={styles.cardTitle}>{point.label}</Text>
+        </View>
+        <TouchableOpacity
+          onPress={onClear}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Clear week selection"
+        >
+          <Text style={styles.clearWeek}>Clear</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.weekHeroRow}>
+        <View>
+          <Text style={styles.weekHeroValue}>{fmt(point.level, 1)}</Text>
+          <Text style={styles.cardMeta}>Index that week</Text>
+        </View>
+        <View style={styles.weekMetaCol}>
+          <Text style={styles.weekMetaValue}>
+            {Math.round((point.confidence ?? 0) * 100)}%
+          </Text>
+          <Text style={styles.cardMeta}>Coverage</Text>
+        </View>
+      </View>
+
+      {point.planned_low ? (
+        <Text style={styles.weekFlag}>Planned light week</Text>
+      ) : null}
+      {point.level == null ? (
+        <Text style={styles.weekFlag}>Nothing logged this week</Text>
+      ) : null}
+      {point.estimated && point.level != null ? (
+        <Text style={styles.weekFlag}>Estimate softening — thin coverage</Text>
+      ) : null}
+
+      <Text style={styles.weekSection}>IN THIS NUMBER</Text>
+      {rows.map((row) => (
+        <View key={row.key} style={styles.contribRow}>
+          <View style={styles.titleRow}>
+            <View
+              style={[
+                styles.swatch,
+                { backgroundColor: domainSeries[row.key] ?? series.mark },
+              ]}
+            />
+            <Text style={styles.contribLabel}>{row.label}</Text>
+          </View>
+          <Text style={styles.contribValue}>{fmt(row.value, 0)}</Text>
+        </View>
+      ))}
+
+      <Text style={styles.weekSection}>THAT WEEK</Text>
+      {events.length ? (
+        events.map((event, i) => (
+          <View
+            key={`${event.week_start}-${event.kind}-${i}`}
+            style={styles.eventRow}
+          >
+            <MaterialCommunityIcons
+              name={EVENT_ICON[event.kind]}
+              size={16}
+              color={colors.textMutedCool}
+            />
+            <View style={styles.eventBody}>
+              <Text style={styles.eventTitle}>{event.title}</Text>
+              <Text style={styles.eventDetail}>{event.detail}</Text>
+            </View>
+          </View>
+        ))
+      ) : (
+        <Text style={styles.cardEmpty}>No PRs, scans, or flags that week.</Text>
+      )}
     </View>
   );
 }
@@ -527,6 +687,7 @@ function domainDetail(domain: Domain): string {
 function PositionsCard({ hub }: { hub: Hub }) {
   const strength = hub.domains.find((d) => d.key === "strength");
   const positions = strength?.detail.positions ?? [];
+  const [openId, setOpenId] = useState<string | null>(null);
   if (!positions.length) return null;
 
   return (
@@ -535,41 +696,112 @@ function PositionsCard({ hub }: { hub: Hub }) {
       <View style={styles.card}>
         <Text style={styles.cardDetail}>
           Each lift is a position. The price is its peak estimated 1RM, which
-          does not fall because of one bad session.
+          does not fall because of one bad session. Tap + to see the sets
+          behind the %.
         </Text>
-        {positions.slice(0, 8).map((p) => (
-          <View key={p.exercise_id} style={styles.positionRow}>
-            <View style={styles.positionName}>
-              <Text style={styles.positionTitle} numberOfLines={1}>
-                {p.name}
-              </Text>
-              <Text style={styles.positionSub}>
-                {p.peak_e1rm} lb peak
-                {p.weeks_stale > 0
-                  ? ` · ${p.weeks_stale}w since trained`
-                  : ""}
-                {p.estimated ? " · softening" : ""}
-              </Text>
+        {positions.map((p) => {
+          const open = openId === p.exercise_id;
+          return (
+            <View key={p.exercise_id} style={styles.positionBlock}>
+              <View style={styles.positionRow}>
+                <View style={styles.positionName}>
+                  <Text style={styles.positionTitle} numberOfLines={1}>
+                    {p.name}
+                  </Text>
+                  <Text style={styles.positionSub}>
+                    {p.peak_e1rm} lb peak
+                    {p.weeks_stale > 0
+                      ? ` · ${p.weeks_stale}w since trained`
+                      : ""}
+                    {p.estimated ? " · softening" : ""}
+                  </Text>
+                </View>
+                <Text
+                  style={[
+                    styles.positionChange,
+                    {
+                      color:
+                        p.change_pct > 0
+                          ? colors.success
+                          : p.change_pct < 0
+                          ? colors.attention
+                          : colors.textMutedCool,
+                    },
+                  ]}
+                >
+                  {signed(p.change_pct)}%
+                </Text>
+                <TouchableOpacity
+                  onPress={() =>
+                    setOpenId(open ? null : p.exercise_id)
+                  }
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    open
+                      ? `Hide records for ${p.name}`
+                      : `Show records for ${p.name}`
+                  }
+                  accessibilityState={{ expanded: open }}
+                  style={styles.positionPlus}
+                >
+                  <MaterialCommunityIcons
+                    name={open ? "minus" : "plus"}
+                    size={18}
+                    color={colors.accentPrimary}
+                  />
+                </TouchableOpacity>
+              </View>
+              {open ? <PositionRecords position={p} /> : null}
             </View>
-            <Text
-              style={[
-                styles.positionChange,
-                {
-                  color:
-                    p.change_pct > 0
-                      ? colors.success
-                      : p.change_pct < 0
-                      ? colors.attention
-                      : colors.textMutedCool,
-                },
-              ]}
-            >
-              {signed(p.change_pct)}%
-            </Text>
-          </View>
-        ))}
+          );
+        })}
       </View>
     </>
+  );
+}
+
+/**
+ * The sets that earned the %. Baseline is week one of the lift in range;
+ * peak is the best e1RM since — change_pct is peak ÷ baseline − 1.
+ */
+function PositionRecords({ position }: { position: Position }) {
+  const history = position.history ?? [];
+  if (!history.length) {
+    return (
+      <Text style={styles.cardEmpty}>
+        No weekly sets attached for this lift yet.
+      </Text>
+    );
+  }
+
+  return (
+    <View style={styles.recordsBox}>
+      <Text style={styles.recordsMath}>
+        {position.peak_e1rm} peak ÷ {position.baseline_e1rm} baseline − 1 ={" "}
+        {signed(position.change_pct)}%
+      </Text>
+      {history.map((row) => {
+        const tags = [
+          row.is_baseline ? "baseline" : null,
+          row.is_peak ? "peak" : null,
+        ].filter(Boolean);
+        return (
+          <View key={row.week_start} style={styles.recordRow}>
+            <View style={styles.recordLeft}>
+              <Text style={styles.recordWeek}>{row.label}</Text>
+              {tags.length ? (
+                <Text style={styles.recordTag}>{tags.join(" · ")}</Text>
+              ) : null}
+            </View>
+            <Text style={styles.recordSet}>
+              {fmt(row.weight, 1)} × {row.reps}
+            </Text>
+            <Text style={styles.recordE1rm}>{fmt(row.e1rm, 1)} e1RM</Text>
+          </View>
+        );
+      })}
+    </View>
   );
 }
 
@@ -670,7 +902,76 @@ const styles = StyleSheet.create({
     color: colors.textFaintCool,
     fontSize: typography.micro,
     textAlign: "center",
+    marginBottom: spacing.md,
+  },
+
+  weekCard: {
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
     marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.borderCool,
+  },
+  weekEyebrow: {
+    color: colors.textFaintCool,
+    fontSize: typography.micro,
+    fontWeight: weight.bold,
+    letterSpacing: 1.2,
+  },
+  clearWeek: {
+    color: colors.accentPrimary,
+    fontSize: typography.caption,
+    fontWeight: weight.medium,
+  },
+  weekHeroRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  weekHeroValue: {
+    color: colors.textPrimary,
+    fontSize: typography.display,
+    fontWeight: weight.heavy,
+  },
+  weekMetaCol: { alignItems: "flex-end" },
+  weekMetaValue: {
+    color: colors.textPrimary,
+    fontSize: typography.title,
+    fontWeight: weight.bold,
+  },
+  weekFlag: {
+    color: colors.textMutedCool,
+    fontSize: typography.caption,
+    marginBottom: spacing.xs,
+  },
+  weekSection: {
+    color: colors.textFaintCool,
+    fontSize: typography.micro,
+    fontWeight: weight.bold,
+    letterSpacing: 1.2,
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+  },
+  contribRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  contribLabel: {
+    color: colors.textPrimary,
+    fontSize: typography.body,
+    fontWeight: weight.medium,
+  },
+  contribValue: {
+    color: colors.textPrimary,
+    fontSize: typography.title,
+    fontWeight: weight.bold,
   },
 
   statGrid: { flexDirection: "row", gap: spacing.sm },
@@ -786,6 +1087,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     marginTop: spacing.sm,
   },
+  positionBlock: {},
   positionName: { flex: 1, paddingRight: spacing.sm },
   positionTitle: {
     color: colors.textPrimary,
@@ -793,7 +1095,59 @@ const styles = StyleSheet.create({
     fontWeight: weight.medium,
   },
   positionSub: { color: colors.textFaintCool, fontSize: typography.micro, marginTop: 2 },
-  positionChange: { fontSize: typography.body, fontWeight: weight.bold },
+  positionChange: { fontSize: typography.body, fontWeight: weight.bold, marginRight: spacing.xs },
+  positionPlus: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 16,
+    backgroundColor: colors.surfaceSunken,
+  },
+  recordsBox: {
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surfaceSunken,
+    gap: spacing.xs,
+  },
+  recordsMath: {
+    color: colors.textMutedCool,
+    fontSize: typography.caption,
+    marginBottom: spacing.xs,
+    lineHeight: 17,
+  },
+  recordRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.xs,
+    gap: spacing.sm,
+  },
+  recordLeft: { flex: 1, minWidth: 0 },
+  recordWeek: {
+    color: colors.textPrimary,
+    fontSize: typography.caption,
+    fontWeight: weight.medium,
+  },
+  recordTag: {
+    color: colors.accentPrimary,
+    fontSize: typography.micro,
+    marginTop: 1,
+  },
+  recordSet: {
+    color: colors.textMutedCool,
+    fontSize: typography.caption,
+    fontVariant: ["tabular-nums"],
+  },
+  recordE1rm: {
+    color: colors.textPrimary,
+    fontSize: typography.caption,
+    fontWeight: weight.bold,
+    fontVariant: ["tabular-nums"],
+    minWidth: 72,
+    textAlign: "right",
+  },
 
   eventRow: {
     flexDirection: "row",

@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field
 from statistics import median
 from typing import Any, Dict, List, Optional
 
-from .weeks import bucket_by_week, parse_day, week_start_of
+from .weeks import bucket_by_week, parse_day, week_label, week_start_of
 
 # --- strength ---------------------------------------------------------------
 
@@ -145,10 +145,17 @@ def e1rm(weight: Any, reps: Any) -> Optional[float]:
 # Strength — lifts as positions, e1RM as the price
 # ---------------------------------------------------------------------------
 
-def _weekly_best_e1rm(sessions: List[Dict[str, Any]], axis: List[str]) -> Dict[str, Dict[str, float]]:
-    """{exercise_id: {week: best e1RM that week}} plus a name lookup."""
+def _weekly_best_e1rm(
+    sessions: List[Dict[str, Any]], axis: List[str]
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """
+    {exercise_id: {week: best set that week}}.
+
+    The set travels with the e1RM so a position can show *why* its change %
+    exists — the baseline and peak rows — rather than only the ratio.
+    """
     allowed = set(axis)
-    best: Dict[str, Dict[str, float]] = {}
+    best: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for session in sessions or []:
         week = week_start_of(session.get("date"))
         if not week or week not in allowed:
@@ -165,9 +172,20 @@ def _weekly_best_e1rm(sessions: List[Dict[str, Any]], axis: List[str]) -> Dict[s
                 value = e1rm(s.get("weight"), s.get("reps"))
                 if value is None:
                     continue
+                try:
+                    weight = float(s.get("weight") or 0)
+                    reps = int(s.get("reps") or 0)
+                except (TypeError, ValueError):
+                    continue
                 slot = best.setdefault(key, {})
-                if value > slot.get(week, 0):
-                    slot[week] = value
+                prev = slot.get(week)
+                if prev is None or value > float(prev["e1rm"]):
+                    slot[week] = {
+                        "e1rm": value,
+                        "weight": weight,
+                        "reps": reps,
+                        "date": str(session.get("date") or "")[:10] or None,
+                    }
     return best
 
 
@@ -207,10 +225,10 @@ def build_strength(sessions: List[Dict[str, Any]], axis: List[str]) -> Domain:
             seen = [w for w in upto if w in by_week]
             if len(seen) < MIN_EXERCISE_WEEKS:
                 continue
-            baseline = by_week[seen[0]]
+            baseline = float(by_week[seen[0]]["e1rm"])
             if baseline <= 0:
                 continue
-            peak = max(by_week[w] for w in seen)
+            peak = max(float(by_week[w]["e1rm"]) for w in seen)
             stale_weeks = len(upto) - 1 - upto.index(seen[-1])
             if stale_weeks > DROP_AFTER_WEEKS:
                 # Tried once, abandoned. Stop dragging the index with it.
@@ -221,18 +239,39 @@ def build_strength(sessions: List[Dict[str, Any]], axis: List[str]) -> Domain:
                 estimated_any = True
             ratios.append(ratio)
             if week in by_week:
-                fresh.append(by_week[week] / baseline)
+                fresh.append(float(by_week[week]["e1rm"]) / baseline)
 
             if w_idx == len(axis) - 1:
+                # First week that hits the peak — if several tie, the earliest
+                # is the one that earned the %; later ties are holds.
+                peak_week = next(
+                    w for w in seen if float(by_week[w]["e1rm"]) >= peak - 1e-9
+                )
+                history = []
+                for w in seen:
+                    rec = by_week[w]
+                    history.append(
+                        {
+                            "week_start": w,
+                            "label": week_label(w),
+                            "e1rm": round(float(rec["e1rm"]), 1),
+                            "weight": round(float(rec["weight"]), 1),
+                            "reps": int(rec["reps"]),
+                            "date": rec.get("date"),
+                            "is_baseline": w == seen[0],
+                            "is_peak": w == peak_week,
+                        }
+                    )
                 positions[key] = {
                     "exercise_id": key,
                     "name": names.get(key, key),
                     "baseline_e1rm": round(baseline, 1),
                     "peak_e1rm": round(peak, 1),
-                    "latest_e1rm": round(by_week[seen[-1]], 1),
+                    "latest_e1rm": round(float(by_week[seen[-1]]["e1rm"]), 1),
                     "change_pct": round((peak / baseline - 1) * 100, 1),
                     "weeks_stale": stale_weeks,
                     "estimated": stale_weeks > STALE_AFTER_WEEKS,
+                    "history": history,
                 }
 
         level = _mean(ratios)

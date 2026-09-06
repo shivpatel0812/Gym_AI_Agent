@@ -44,6 +44,17 @@ export type DomainPoint = {
   estimated: boolean;
 };
 
+export type PositionRecord = {
+  week_start: string;
+  label: string;
+  e1rm: number;
+  weight: number;
+  reps: number;
+  date: string | null;
+  is_baseline: boolean;
+  is_peak: boolean;
+};
+
 export type Position = {
   exercise_id: string;
   name: string;
@@ -53,6 +64,7 @@ export type Position = {
   change_pct: number;
   weeks_stale: number;
   estimated: boolean;
+  history?: PositionRecord[];
 };
 
 export type DomainDetail = {
@@ -165,6 +177,7 @@ export type ProgressHub = {
   events: ProgressEvent[];
   coverage: Coverage;
   scan_compare: ScanCompare | null;
+  goals: Goal[];
   weights: Record<string, number>;
 };
 
@@ -174,6 +187,116 @@ export type ProgressSummary = {
   spark: { week_start: string; level: number | null }[];
   coverage: Coverage;
 };
+
+export type GoalKind =
+  | "exercise_e1rm"
+  | "bodyweight"
+  | "index_level"
+  | "sessions_per_week";
+
+export type Goal = {
+  id: string;
+  kind: GoalKind;
+  kind_label: string;
+  exercise_id: string | null;
+  label: string | null;
+  target_value: number;
+  target_date: string | null;
+  start_value: number | null;
+  start_date: string;
+  status: "proposed" | "active" | "achieved" | "abandoned";
+  source: "user" | "coach";
+  current_value: number | null;
+  unit: string;
+  /** null is a real answer: too early, or nothing logged for this metric. */
+  on_track: boolean | null;
+  progress_pct: number | null;
+  days_remaining: number | null;
+  observed_rate_per_week?: number;
+  required_rate_per_week?: number;
+  note?: string;
+};
+
+export type PhotoRow = {
+  id: string;
+  date: string;
+  title: string | null;
+  has_image: boolean;
+  chat_turns: number;
+  was_corrected: boolean;
+  /** The only figures that are what the user actually ate. */
+  logged: {
+    calories: number | null;
+    protein: number | null;
+    carbs: number | null;
+    fats: number | null;
+  } | null;
+  first_guess_calories: number | null;
+  correction_ratio: number | null;
+};
+
+export type PhotoBias = {
+  measurable: boolean;
+  labelled: number;
+  needed?: number;
+  reason?: string;
+  median_correction_pct?: number;
+  direction?: "low" | "high" | "about right";
+  adjusted_share?: number;
+  summary?: string;
+};
+
+export type PhotoHub = {
+  total: number;
+  in_range: number;
+  labelled: number;
+  unlabelled: number;
+  with_image: number;
+  corrected: number;
+  photos: PhotoRow[];
+  bias: PhotoBias;
+};
+
+export async function getPhotoHub(weeks = 12, limit = 60): Promise<PhotoHub> {
+  const res = await apiClient.get("/api/progress/photos", {
+    params: { weeks, limit },
+  });
+  return res.data;
+}
+
+export async function getPhotoImage(id: string): Promise<string> {
+  const res = await apiClient.get(`/api/progress/photos/${id}/image`);
+  return res.data.data_url as string;
+}
+
+export async function getGoals(includeDone = false): Promise<Goal[]> {
+  const res = await apiClient.get("/api/progress/goals", {
+    params: { include_done: includeDone },
+  });
+  return res.data.goals ?? [];
+}
+
+export async function createGoal(payload: {
+  kind: GoalKind;
+  target_value: number;
+  target_date?: string | null;
+  exercise_id?: string | null;
+  label?: string | null;
+}): Promise<Goal> {
+  const res = await apiClient.post("/api/progress/goals", payload);
+  return res.data;
+}
+
+export async function setGoalStatus(
+  id: string,
+  status: "active" | "abandoned" | "achieved"
+): Promise<void> {
+  await apiClient.patch(`/api/progress/goals/${id}`, { status });
+}
+
+export async function deleteGoal(id: string): Promise<void> {
+  await apiClient.delete(`/api/progress/goals/${id}`);
+}
 
 export async function getProgressHub(weeks = 12): Promise<ProgressHub> {
   const res = await apiClient.get("/api/progress/hub", { params: { weeks } });

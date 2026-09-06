@@ -9,11 +9,13 @@ the tab.
 import os
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from auth import get_user_id
 from db import db
 from progress import DEFAULT_WEEKS, MAX_WEEKS, ProgressHubBuilder
+from progress.goals import GoalStore, evaluate
+from progress.photo_hub import build_photo_hub
 from progress.projection import (
     DEFAULT_FORWARD_WEEKS,
     MAX_FORWARD_WEEKS,
@@ -36,7 +38,12 @@ async def get_progress_hub(
     confident number off four data points is how this feature would lose its
     credibility on day one.
     """
-    return ProgressHubBuilder(db, user_id).build(weeks=weeks)
+    hub = ProgressHubBuilder(db, user_id).build(weeks=weeks)
+    # Attached here rather than fetched separately: evaluating goals needs a
+    # built hub, so a second endpoint would rebuild the whole thing — five more
+    # Firestore range queries to answer a question this payload already holds.
+    hub["goals"] = [evaluate(goal, hub) for goal in GoalStore(db, user_id).list()]
+    return hub
 
 
 @router.get("/summary")
@@ -156,3 +163,105 @@ async def get_progress_projection(
     )
     result["adherence"] = adherence.to_dict()
     return result
+
+
+# ---------------------------------------------------------------------------
+# Meal photo archive
+# ---------------------------------------------------------------------------
+
+@router.get("/photos")
+async def get_photo_hub(
+    user_id: str = Depends(get_user_id),
+    weeks: int = Query(DEFAULT_WEEKS, ge=4, le=MAX_WEEKS),
+    limit: int = Query(60, ge=1, le=200),
+):
+    """
+    Every meal photo the app has kept, with what was actually logged for it.
+
+    Images are **not** in this payload. They are base64 JPEGs inside the
+    documents, so returning sixty of them would be a multi-megabyte response to
+    draw a grid of thumbnails; the client asks for each one it displays.
+    """
+    from progress.weeks import week_axis
+    from datetime import datetime as _dt
+
+    axis = week_axis(_dt.now().date(), max(4, min(MAX_WEEKS, weeks)))
+    try:
+        docs = (
+            db.collection("users").document(user_id)
+            .collection("food_photo_logs").limit(300).stream()
+        )
+        logs = [{"id": d.id, **(d.to_dict() or {})} for d in docs]
+    except Exception as exc:
+        print(f"photo hub read failed: {exc}")
+        logs = []
+    return build_photo_hub(logs, axis, limit=limit)
+
+
+@router.get("/photos/{log_id}/image")
+async def get_photo_image(log_id: str, user_id: str = Depends(get_user_id)):
+    """One archived meal photo as a data URL. 404 when the log kept no image."""
+    from nutrition.photo_log_store import load_archived_image
+
+    data_url = load_archived_image(db, user_id, log_id)
+    if not data_url:
+        raise HTTPException(status_code=404, detail="No archived image for this log")
+    return {"id": log_id, "data_url": data_url}
+
+
+# ---------------------------------------------------------------------------
+# Goals
+# ---------------------------------------------------------------------------
+
+@router.get("/goals")
+async def list_goals(
+    user_id: str = Depends(get_user_id),
+    include_done: bool = Query(False),
+):
+    """Goals scored against the same numbers the hub renders."""
+    hub = ProgressHubBuilder(db, user_id).build()
+    goals = GoalStore(db, user_id).list(include_done=include_done)
+    return {"goals": [evaluate(goal, hub) for goal in goals]}
+
+
+@router.post("/goals")
+async def create_goal(
+    payload: dict = Body(...),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Create a goal, stamping the value it starts from.
+
+    The start value is captured now and never recomputed — deriving it later
+    from a sliding history window would let "40% there" change without the
+    user doing anything.
+    """
+    hub = ProgressHubBuilder(db, user_id).build()
+    try:
+        goal = GoalStore(db, user_id).create(payload or {}, hub)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return evaluate(goal, hub)
+
+
+@router.patch("/goals/{goal_id}")
+async def update_goal_status(
+    goal_id: str,
+    payload: dict = Body(...),
+    user_id: str = Depends(get_user_id),
+):
+    """Accept a coach-proposed goal, or mark one abandoned/achieved."""
+    try:
+        ok = GoalStore(db, user_id).set_status(goal_id, str((payload or {}).get("status")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return {"status": "success"}
+
+
+@router.delete("/goals/{goal_id}")
+async def delete_goal(goal_id: str, user_id: str = Depends(get_user_id)):
+    if not GoalStore(db, user_id).delete(goal_id):
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return {"status": "success"}

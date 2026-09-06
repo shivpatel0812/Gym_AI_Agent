@@ -24,7 +24,8 @@ import type { ForwardProjection, IndexPoint } from "../../api/progress";
  * chart is built to avoid.
  *
  * Scrubbing is the whole interaction, and it stops at today. There is nothing
- * to ask about a week that has not happened.
+ * to ask about a week that has not happened. Selection stays after lift so a
+ * tap can open the week's data below.
  */
 
 const PAD_X = 8;
@@ -46,6 +47,11 @@ export default function IndexChart({
   const [width, setWidth] = useState(320);
   const widthRef = useRef(width);
   widthRef.current = width;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const pointsRef = useRef(points);
+  pointsRef.current = points;
+  const forwardLenRef = useRef(0);
 
   const onLayout = (e: LayoutChangeEvent) => {
     const next = Math.round(e.nativeEvent.layout.width);
@@ -59,6 +65,7 @@ export default function IndexChart({
     if (!best.length && !real.length) return null;
     return { best, real, length: Math.max(best.length, real.length) };
   }, [projection]);
+  forwardLenRef.current = forward?.length ?? 0;
 
   const geometry = useMemo(() => {
     const measured = points
@@ -127,34 +134,35 @@ export default function IndexChart({
     };
   }, [points, width, forward]);
 
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        // The chart lives inside a ScrollView. Claiming the gesture on touch
-        // down would mean a vertical flick that happens to start on the chart
-        // never scrolls the page, so the responder is only taken once the
-        // movement is clearly horizontal.
-        onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: (_e, g) =>
-          Math.abs(g.dx) > Math.abs(g.dy) && Math.abs(g.dx) > 4,
-        onPanResponderGrant: (e) => pick(e.nativeEvent.locationX),
-        onPanResponderMove: (e) => pick(e.nativeEvent.locationX),
-        onPanResponderRelease: () => onSelect(null),
-        onPanResponderTerminate: () => onSelect(null),
-      }),
-    [points.length, width, forward?.length]
-  );
-
   function pick(x: number) {
-    if (points.length < 2) return;
+    const pts = pointsRef.current;
+    if (!pts.length) return;
     const innerW = Math.max(widthRef.current - PAD_X * 2, 1);
-    const slots = points.length + (forward?.length ?? 0);
+    const slots = pts.length + forwardLenRef.current;
     const step = slots > 1 ? innerW / (slots - 1) : 0;
     const idx = step > 0 ? Math.round((x - PAD_X) / step) : 0;
     // Clamped to the measured half — there is nothing to ask about a week that
     // has not happened.
-    onSelect(Math.max(0, Math.min(points.length - 1, idx)));
+    onSelectRef.current(Math.max(0, Math.min(pts.length - 1, idx)));
   }
+
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        // Claim on touch so a tap selects a week. Vertical scroll that starts
+        // on the chart can still take over via termination.
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderTerminationRequest: () => true,
+        onPanResponderGrant: (e) => pick(e.nativeEvent.locationX),
+        onPanResponderMove: (e) => pick(e.nativeEvent.locationX),
+        // Keep the week pinned after the finger lifts — clearing on release
+        // made every inspect feel broken.
+        onPanResponderRelease: () => {},
+        onPanResponderTerminate: () => {},
+      }),
+    []
+  );
 
   if (!geometry) {
     return (
@@ -245,33 +253,30 @@ export default function IndexChart({
             />
           ))}
 
-          {active && active.y != null ? (
-            <>
-              <Line
-                x1={active.x}
-                y1={PAD_TOP - 6}
-                x2={active.x}
-                y2={HEIGHT - PAD_BOTTOM}
-                stroke={colors.borderCoolStrong}
-                strokeWidth={1}
-              />
+          {/* Every measured week is a visible point so tap targets are obvious. */}
+          {coords.map((c, i) =>
+            c.y != null ? (
               <Circle
-                cx={active.x}
-                cy={active.y}
-                r={6}
+                key={`dot-${c.point.week_start}`}
+                cx={c.x}
+                cy={c.y}
+                r={selected === i ? 6 : 3.5}
                 fill={series.mark}
                 stroke={colors.cardBackground}
-                strokeWidth={2}
+                strokeWidth={selected === i ? 2 : 1.5}
+                opacity={selected == null || selected === i ? 1 : 0.45}
               />
-            </>
-          ) : lastMeasured && lastMeasured.y != null ? (
-            <Circle
-              cx={lastMeasured.x}
-              cy={lastMeasured.y}
-              r={5}
-              fill={series.mark}
-              stroke={colors.cardBackground}
-              strokeWidth={2}
+            ) : null
+          )}
+
+          {active && active.y != null ? (
+            <Line
+              x1={active.x}
+              y1={PAD_TOP - 6}
+              x2={active.x}
+              y2={HEIGHT - PAD_BOTTOM}
+              stroke={colors.borderCoolStrong}
+              strokeWidth={1}
             />
           ) : null}
         </Svg>

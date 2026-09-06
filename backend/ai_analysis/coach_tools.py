@@ -201,6 +201,156 @@ class CoachToolbox:
         # concepts; normalize here so no tool below has to know that.
         return normalize_records(collection, rows)
 
+    # --- progress hub -----------------------------------------------------
+    #
+    # These read the same builders the Progress tab renders, so the coach and
+    # the screen can never disagree about how someone is doing. Recomputing
+    # any of it here with different rules is how an app ends up telling a user
+    # one thing in a chart and another in chat.
+
+    def _progress_hub(self, weeks: int = 12) -> Dict[str, Any]:
+        from progress import ProgressHubBuilder
+
+        if getattr(self, "_hub_cache", None) is None:
+            self._hub_cache = {}
+        if weeks not in self._hub_cache:
+            self._hub_cache[weeks] = ProgressHubBuilder(self.db, self.user_id).build(weeks=weeks)
+        return self._hub_cache[weeks]
+
+    def get_progress_index(self, weeks: int = 12) -> Dict[str, Any]:
+        """The index, its state, and each domain — trimmed of the week series."""
+        hub = self._progress_hub(weeks)
+        index = hub.get("index") or {}
+        return {
+            "level": index.get("level"),
+            "state": index.get("state"),
+            "state_label": index.get("state_label"),
+            "reason": index.get("reason"),
+            "band": index.get("band"),
+            "confidence": index.get("confidence"),
+            "change_over_range": (index.get("range_delta") or {}).get("value"),
+            "drivers": (index.get("range_delta") or {}).get("drivers"),
+            "weeks": hub.get("weeks"),
+            "goal_direction": hub.get("goal_direction"),
+            "domains": [
+                {
+                    "key": d["key"],
+                    "label": d["label"],
+                    "level": d["level"],
+                    "change": d.get("change"),
+                    "coverage": d.get("coverage"),
+                    "unavailable_reason": d.get("unavailable_reason"),
+                }
+                for d in hub.get("domains") or []
+            ],
+            "coverage": hub.get("coverage"),
+            "scan_compare": hub.get("scan_compare"),
+            "how_to_read": (
+                "100 is this user's own starting point, never a population norm. "
+                "The level is what they have demonstrated and cannot fall on one bad "
+                "week; 'holding' is a normal state and is not a warning. Do not read "
+                "a flat week as failure, and quote the state's own reason rather than "
+                "inventing a verdict. Low coverage means thin logging, not poor "
+                "training."
+            ),
+        }
+
+    def get_lift_positions(self, weeks: int = 12) -> Dict[str, Any]:
+        """Every tracked lift with its peak e1RM and change, best first."""
+        hub = self._progress_hub(weeks)
+        strength = next((d for d in hub.get("domains") or [] if d["key"] == "strength"), None)
+        if not strength or strength.get("unavailable_reason"):
+            return {
+                "positions": [],
+                "reason": (strength or {}).get("unavailable_reason") or "No strength data.",
+            }
+        detail = strength.get("detail") or {}
+        return {
+            "positions": detail.get("positions") or [],
+            "movers": detail.get("movers") or [],
+            "laggards": detail.get("laggards") or [],
+            "note": (
+                "e1RM is peak-to-date within a single set. 'weeks_stale' counts weeks "
+                "since the lift was last trained; an estimate marked softening is "
+                "decaying from disuse, not a measured loss."
+            ),
+        }
+
+    def get_progress_goals(self, include_done: bool = False) -> Dict[str, Any]:
+        """The user's goals, scored against the hub."""
+        from progress.goals import GoalStore, evaluate
+
+        hub = self._progress_hub()
+        goals = GoalStore(self.db, self.user_id).list(include_done=include_done)
+        return {
+            "goals": [evaluate(goal, hub) for goal in goals],
+            "note": (
+                "on_track may be null, which means it is genuinely too early or there "
+                "is no data — say that rather than guessing a verdict."
+            ),
+        }
+
+    def get_meal_photo_history(self, limit: int = 20) -> Dict[str, Any]:
+        """
+        Meal photos and what the user actually logged for each.
+
+        `logged` is the only figure that is what they ate; a first guess the
+        user never accepted is not evidence about their diet.
+        """
+        from progress.photo_hub import build_photo_hub
+        from progress.weeks import week_axis
+
+        axis = week_axis(self.local_now().date(), 12)
+        try:
+            docs = self._collection("food_photo_logs").limit(300).stream()
+            logs = [{"id": d.id, **(d.to_dict() or {})} for d in docs]
+        except Exception as exc:
+            return {"error": f"Could not read the photo archive: {exc}"}
+        hub = build_photo_hub(logs, axis, limit=max(1, min(int(limit or 20), 60)))
+        hub.pop("by_week", None)
+        return hub
+
+    def propose_progress_goal(
+        self,
+        kind: str,
+        target_value: float,
+        target_date: Optional[str] = None,
+        exercise_id: Optional[str] = None,
+        label: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Stage a goal for the user to accept on the Progress tab.
+
+        Staged, not written live — same stance as every other write tool here.
+        A goal the user did not agree to is not their goal, and one that
+        appeared without being accepted is something they will be measured
+        against without having chosen it.
+        """
+        from progress.goals import GoalStore
+
+        hub = self._progress_hub()
+        try:
+            goal = GoalStore(self.db, self.user_id).create(
+                {
+                    "kind": kind,
+                    "target_value": target_value,
+                    "target_date": target_date,
+                    "exercise_id": exercise_id,
+                    "label": label,
+                    "status": "proposed",
+                    "source": "coach",
+                },
+                hub,
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        self.artifacts.append({"type": "progress_goal_proposal", "goal": goal})
+        return {
+            "status": "proposed",
+            "goal": goal,
+            "note": "Staged on the Progress tab. Tell the user it is waiting for them to accept it.",
+        }
+
     # --- tools ------------------------------------------------------------
 
     def get_recent_sessions(self, days: int = 7) -> Dict[str, Any]:
@@ -997,6 +1147,11 @@ class CoachToolbox:
             "get_personal_records": self.get_personal_records,
             "get_latest_body_scan": self.get_latest_body_scan,
             "get_body_scan_progress": self.get_body_scan_progress,
+            "get_progress_index": self.get_progress_index,
+            "get_lift_positions": self.get_lift_positions,
+            "get_progress_goals": self.get_progress_goals,
+            "get_meal_photo_history": self.get_meal_photo_history,
+            "propose_progress_goal": self.propose_progress_goal,
             "propose_nutrition_edits": self.propose_nutrition_edits,
             "propose_plan_edits": self.propose_plan_edits,
         }.get(name)
@@ -1254,6 +1409,88 @@ TOOL_SCHEMAS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_progress_index",
+            "description": (
+                "The user's Progress Hub reading: the weekly index, what state it is in "
+                "(building / holding / stalled / declining / unknown), why, and each "
+                "domain's level. THIS IS THE CANONICAL ANSWER to 'how am I doing', 'am I "
+                "making progress', 'is this working'. Always prefer it over assembling "
+                "your own verdict from raw logs, so chat and the Progress tab agree. "
+                "100 is the user's own starting point, not a population norm. 'holding' "
+                "is a normal state, NOT a warning — never tell someone a held week is a "
+                "failure. Quote the state's own reason. If confidence is low that means "
+                "thin logging, not bad training."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"weeks": _days_param("Weeks of history to read", 12)},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_lift_positions",
+            "description": (
+                "Every tracked lift with its peak estimated 1RM, percent change since "
+                "baseline, and how many weeks since it was last trained. Use for 'which "
+                "lifts are moving', 'what's stalled', 'what should I focus on'. "
+                "'laggards' are the lifts that have not moved. A position marked "
+                "estimated/softening is decaying from disuse — that is not a measured "
+                "strength loss and must not be described as one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"weeks": _days_param("Weeks of history to read", 12)},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_progress_goals",
+            "description": (
+                "The user's progress goals with current value, percent complete and "
+                "whether they are on pace. Call this whenever they mention a goal, a "
+                "target, a deadline, or ask whether they will get there. `on_track` is "
+                "null when it is genuinely too early or there is no data — report that "
+                "honestly instead of guessing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_done": {
+                        "type": "boolean",
+                        "description": "Include achieved and abandoned goals (default false).",
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_meal_photo_history",
+            "description": (
+                "The archive of meal photos with the macros the user ACTUALLY logged for "
+                "each, plus whether their photo estimates tend to read high or low. Use "
+                "for 'what have I been eating', 'are my scans accurate', or when "
+                "reviewing diet quality against real meals rather than daily totals. "
+                "Only the `logged` figures are what they ate — a first guess they never "
+                "accepted is not evidence about their diet. Respect bias.measurable: "
+                "when false there are too few corrected photos to claim a direction."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Photos to return (default 20, max 60)."}
+                },
+            },
+        },
+    },
 ]
 
 
@@ -1263,7 +1500,7 @@ TOOL_SCHEMAS = [
 # nutrition plan for the user to review on the Plan page. It is offered only
 # in nutrition mode, and even then it cannot write the plan itself.
 
-WRITE_TOOLS = {"propose_nutrition_edits", "propose_plan_edits"}
+WRITE_TOOLS = {"propose_nutrition_edits", "propose_plan_edits", "propose_progress_goal"}
 
 EDIT_OPS = [
     "update_targets",
@@ -1445,6 +1682,47 @@ PLAN_WRITE_SCHEMAS = [
 ]
 
 
+PROGRESS_WRITE_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_progress_goal",
+            "description": (
+                "Stage a progress goal for the user to accept on the Progress tab. Use "
+                "when they ask to set a goal or say they want to hit a number by a date. "
+                "It is STAGED, never live — always tell them it is waiting for them to "
+                "accept it. Pick a target the projection supports rather than a "
+                "flattering one; a goal they cannot reach is worse than no goal."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["exercise_e1rm", "bodyweight", "index_level", "sessions_per_week"],
+                        "description": "What is being targeted.",
+                    },
+                    "target_value": {
+                        "type": "number",
+                        "description": "The number to reach (lb for lifts and bodyweight).",
+                    },
+                    "target_date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD. Omit for an open-ended goal with no pace.",
+                    },
+                    "exercise_id": {
+                        "type": "string",
+                        "description": "Required for exercise_e1rm. Use an id from get_lift_positions.",
+                    },
+                    "label": {"type": "string", "description": "Short human name for the goal."},
+                },
+                "required": ["kind", "target_value"],
+            },
+        },
+    },
+]
+
+
 def tools_for_mode(mode: str = "coach") -> List[Dict[str, Any]]:
     """
     The toolset a chat turn may use.
@@ -1454,7 +1732,7 @@ def tools_for_mode(mode: str = "coach") -> List[Dict[str, Any]]:
     "improve my plan" must be able to stage patches without a mode toggle.
     """
     if mode == "nutrition":
-        return READ_TOOL_SCHEMAS + NUTRITION_WRITE_SCHEMAS
+        return READ_TOOL_SCHEMAS + NUTRITION_WRITE_SCHEMAS + PROGRESS_WRITE_SCHEMAS
     if mode == "plan":
-        return READ_TOOL_SCHEMAS + PLAN_WRITE_SCHEMAS
-    return READ_TOOL_SCHEMAS + PLAN_WRITE_SCHEMAS
+        return READ_TOOL_SCHEMAS + PLAN_WRITE_SCHEMAS + PROGRESS_WRITE_SCHEMAS
+    return READ_TOOL_SCHEMAS + PLAN_WRITE_SCHEMAS + PROGRESS_WRITE_SCHEMAS

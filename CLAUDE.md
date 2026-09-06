@@ -494,10 +494,68 @@ frame. **Do not put two of them in one chart.** The composite index line keeps
 dash pattern, because they are one quantity under two assumptions rather than
 two series.
 
+### Goals
+`progress/goals.py`, deterministic, no model — a goal that means something
+different on Tuesday than Thursday is worse than one consistently a little
+wrong, the same argument `user_state.py` makes about levers.
+
+A goal stores **the value it started from**, stamped at creation and never
+recomputed. Without it, progress can only be a fraction of the target, which
+reads as 92% done the moment someone with a 415 squat sets a 450 goal.
+Recomputing it later from a sliding window would let "40% there" change while
+the user did nothing.
+
+`on_track` is tri-state and the UI renders three things, never pass/fail.
+Under `MIN_WEEKS_FOR_VERDICT` the observed rate is one or two points, and a
+confident verdict off that is noise wearing a number — "too early" is a real
+answer. Rates are compared in the goal's own direction, or every successful
+cut (target below start) reads as behind. Lift goals read the **peak** e1RM, so
+a goal cannot un-achieve itself on one bad session.
+
+### Meal photo archive
+`food_photo_logs` has stored every meal image, estimate, correction chat and
+accepted label since Sep 2026 and nothing ever read it back. `progress/
+photo_hub.py` surfaces it.
+
+**`accepted_estimate` is the only real label** — `initial_estimate` is what the
+model guessed and `revised_estimate` is what it guessed after being argued
+with. Rows without an accepted label are counted separately, never backfilled
+from a guess, and `correction_bias` ignores them entirely: folding an
+unlabelled row in at its estimated value would make the model look perfectly
+calibrated against itself.
+
+That bias figure is the archive's second use. Built as an eval set for prompt
+changes, it also answers a question the user could not otherwise ask — which
+way estimates lean on *their* food. Under `MIN_LABELLED_FOR_BIAS` it says so
+instead of claiming a direction.
+
+Images are **never** in the list payload. They are base64 JPEGs inside the
+documents (Storage is not provisioned), so sixty of them is a multi-megabyte
+response to draw thumbnails; each thumbnail fetches its own via
+`/photos/{id}/image`.
+
+### The coach reads the same numbers
+`get_progress_index`, `get_lift_positions`, `get_progress_goals`,
+`get_meal_photo_history` and the staged `propose_progress_goal` in
+`coach_tools.py`. They call the same builders the Progress tab renders, so chat
+and the screen cannot disagree — recomputing any of it in the toolbox with
+different rules is how an app tells a user one thing in a chart and another in
+chat.
+
+Every schema carries the reading rules the numbers need: 100 is the user's own
+baseline, `holding` is not a warning, low coverage is thin logging rather than
+poor training, a softening position is disuse rather than measured loss, and a
+null `on_track` must be reported as such. `propose_progress_goal` is staged
+like every other write tool — a goal the user never accepted is one they would
+be measured against without choosing it.
+
 ### Not built
 Planned-low weeks are sourced only from the live pacing style, which has no
 start date, so only the current week can be attributed — back-dating a diet
-break would invent history.
+break would invent history. Body-scan photo retention remains **off**; a
+before/after photo compare needs that reversed deliberately (consent version,
+storage, deletion path, disclaimer), which is a product decision and not a
+side effect of a progress screen.
 
 ## Other Key Files
 - `/web-app/src/data/defaultExercises.ts` — Frontend exercise catalog (142 exercises)

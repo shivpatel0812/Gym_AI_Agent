@@ -138,6 +138,25 @@ class TestStrengthLevelIsInertial:
         assert "curl" not in tracked
         assert "bench" in tracked
 
+    def test_position_carries_the_sets_behind_the_pct(self):
+        """The % is peak ÷ baseline − 1. Without the rows, the UI can only
+        assert the number — with them it can show why."""
+        sessions = [
+            session(AXIS[0], 100, 8),
+            session(AXIS[1], 110, 8),
+            session(AXIS[2], 120, 8),
+        ]
+        domain = build_strength(sessions, AXIS)
+        bench = next(p for p in domain.detail["positions"] if p["exercise_id"] == "bench")
+        assert bench["change_pct"] == pytest.approx((e1rm(120, 8) / e1rm(100, 8) - 1) * 100, abs=0.2)
+        history = bench["history"]
+        assert history[0]["is_baseline"] is True
+        assert history[0]["weight"] == 100
+        assert history[0]["reps"] == 8
+        peak = next(r for r in history if r["is_peak"])
+        assert peak["weight"] == 120
+        assert peak["e1rm"] == bench["peak_e1rm"]
+
 
 # ---------------------------------------------------------------------------
 # Missing data lowers confidence, never score
