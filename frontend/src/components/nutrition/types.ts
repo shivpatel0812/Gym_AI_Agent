@@ -19,6 +19,7 @@ export interface FoodItem {
   carbs?: number;
   fats?: number;
   fiber?: number;
+  sugar?: number;
   sodium?: number;
   meal?: string;
   amount?: string;

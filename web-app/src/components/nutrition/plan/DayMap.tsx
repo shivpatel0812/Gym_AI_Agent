@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { DayMapModel, DayMapSlot, stackPercents } from "../../../lib/dayMap";
+import { useEffect, useRef, useState } from "react";
+import { DayMapModel, DayMapSlot, mealItemsForDay } from "../../../lib/dayMap";
 import {
   FastFoodPlace,
   PrimaryMealSlot,
@@ -9,12 +9,18 @@ import {
 } from "../../../api/nutritionPlan";
 import { SlotIcon } from "./EditMealAnchorModal";
 
+export type SlotIdea = Awaited<ReturnType<typeof import("../../../api/nutritionPlan").suggestSlotFills>>["ideas"][number];
+
 interface Props {
   map: DayMapModel;
+  planRevision?: string;
+  slotIdeas?: Record<string, SlotIdea[]>;
+  onPreloadSlot?: (slot: PrimaryMealSlot) => void;
+  onAddIdea?: (idea: SlotIdea, slot: PrimaryMealSlot, day: string) => void;
   onEditStrategy?: () => void;
   strategyExpanded?: boolean;
-  onAddAnchor?: (slot: PrimaryMealSlot) => void;
-  onAddGoTo?: (slot: PrimaryMealSlot) => void;
+  onAddAnchor?: (slot: PrimaryMealSlot, day?: string) => void;
+  onAddGoTo?: (slot: PrimaryMealSlot, day?: string) => void;
   onPressSlot?: (slot: DayMapSlot) => void;
   onStanceChange?: (slot: PrimaryMealSlot, stance: SlotStance) => void;
   onSuggestSlot?: (slot: PrimaryMealSlot) => void;
@@ -49,83 +55,74 @@ function dayTags(slot: DayMapSlot): string[] {
   return [];
 }
 
-export default function DayMap({
-  map,
-  onEditStrategy,
-  strategyExpanded,
-  onAddAnchor,
-  onAddGoTo,
-  onPressSlot,
-  onStanceChange,
-  onSuggestSlot,
-  suggestingSlot,
-  onAddPlace,
-  onSuggestOrders,
-  suggestingPlaceId,
-  orderSuggestions,
-  onLogOrder,
-}: Props) {
-  const pct = stackPercents(map.stack);
-
-  return (
-    <div className="space-y-4 mb-6">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-extrabold tracking-[0.12em] text-[#5EEAD4] mb-1">DAY BLUEPRINT</p>
-          <p className="text-[15px] font-semibold text-white leading-snug">{map.headline}</p>
-          <p className="text-xs text-[#636366] mt-1.5">
-            Breakfast · Lunch · Pre-workout · Dinner · Snack. Anchors and go-tos side by side.
-          </p>
-        </div>
-        {onEditStrategy ? (
-          <button
-            type="button"
-            onClick={onEditStrategy}
-            className="shrink-0 px-3 py-2 rounded-full border border-[#FF6B35]/40 text-[#FF6B35] text-xs font-bold"
-          >
-            {strategyExpanded ? "Hide strategy" : "Edit strategy"}
-          </button>
-        ) : null}
-      </div>
-
-      <div className="rounded-2xl border border-[#2A2D35] bg-[#161A22] p-5 space-y-3">
-        <div className="flex items-baseline justify-between gap-3">
-          <p className="text-2xl font-bold text-white">
-            {map.stack.target > 1 ? `${map.stack.target.toLocaleString()} kcal` : "Daily calories"}
-          </p>
-          {map.proteinTarget > 0 ? (
-            <p className="text-xs font-semibold text-[#8E8E93]">
-              Protein ~{map.proteinPlanned}g / {map.proteinTarget}g
-            </p>
-          ) : null}
-        </div>
-        <div className="h-3 rounded-full bg-[#1C1C1F] overflow-hidden flex">
-          {pct.anchors > 0 ? <div className="h-full bg-[#FF6B35]" style={{ width: `${pct.anchors}%` }} /> : null}
-          {pct.flexible > 0 ? <div className="h-full bg-[#C4B5FD]" style={{ width: `${pct.flexible}%` }} /> : null}
-          {pct.suggested > 0 ? <div className="h-full bg-[#5EEAD4]" style={{ width: `${pct.suggested}%` }} /> : null}
-          {pct.free > 0 ? <div className="h-full bg-[#2A2D35]" style={{ width: `${pct.free}%` }} /> : null}
-        </div>
-      </div>
-
-      {(map.sections || []).map((section) => (
-        <SlotBlock
-          key={section.slot}
-          section={section}
-          onAddAnchor={onAddAnchor}
-          onAddGoTo={onAddGoTo}
-          onPressSlot={onPressSlot}
-          onStanceChange={onStanceChange}
-          onSuggestSlot={onSuggestSlot}
-          suggesting={suggestingSlot === section.slot}
-          onAddPlace={onAddPlace}
-          onSuggestOrders={onSuggestOrders}
-          suggestingPlaceId={suggestingPlaceId}
-          orderSuggestions={orderSuggestions}
-          onLogOrder={onLogOrder}
-        />
-      ))}
+export default function DayMap(props: Props) {
+  const { map, suggestingSlot, onPreloadSlot, planRevision } = props;
+  const [day, setDay] = useState(() => ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()]);
+  const requested = useRef<{ revision?: string; slots: Set<string> }>({ slots: new Set() });
+  useEffect(() => {
+    if (requested.current.revision !== planRevision) requested.current = { revision: planRevision, slots: new Set() };
+    if (suggestingSlot || !onPreloadSlot) return;
+    const next = map.sections.find((s) => !requested.current.slots.has(s.slot));
+    if (next) { requested.current.slots.add(next.slot); onPreloadSlot(next.slot); }
+  }, [map.sections, suggestingSlot, onPreloadSlot, planRevision]);
+  const dayLabel = WEEKDAY_OPTIONS.find((d) => d.id === day)?.label || day;
+  return <div className="space-y-5 mb-6">
+    <div>
+      <p className="text-xs font-bold tracking-widest text-[#F3A86B]">YOUR WEEK, MEAL BY MEAL</p>
+      <h2 className="mt-2 text-3xl font-bold text-white">Plan around what you love</h2>
+      <p className="mt-2 text-sm text-slate-400">Choose a day. Keep your go-to foods as anchors, then explore AI options around them.</p>
     </div>
-  );
+    <div role="tablist" aria-label="Plan weekday" className="flex gap-1 rounded-2xl bg-[#11151D] p-1.5">
+      {WEEKDAY_OPTIONS.map((d) => <button key={d.id} role="tab" aria-selected={day === d.id}
+        aria-label={`${d.label} meal plan`} onClick={() => setDay(d.id)}
+        className={`flex-1 rounded-xl py-3 text-sm font-semibold ${day === d.id ? "bg-[#F3A86B] text-[#17120E]" : "text-slate-400 hover:bg-white/5"}`}>{d.label}</button>)}
+    </div>
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h3 className="text-lg font-semibold text-white">{dayLabel} · your meal plan</h3>
+      <p className="text-xs text-slate-400">{map.stack.target > 1 ? `${Math.round(map.stack.target)} kcal / day` : ""}{map.proteinTarget > 0 ? ` · ${Math.round(map.proteinTarget)}g protein` : ""}</p>
+    </div>
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+      {map.sections.map((section) => {
+        const { anchors, goTos } = mealItemsForDay(section, day);
+        const items = [...anchors, ...goTos];
+        const ideas = props.slotIdeas?.[section.slot] || [];
+        return <section key={section.slot} data-testid={`meal-plan-${section.slot}`} className="rounded-[20px] border border-[#2A3443] bg-[#11151D] p-5 space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <SlotIcon slot={section.slot} size={22} />
+            <h3 className="flex-1 text-xl font-bold text-white">{section.label}</h3>
+            <button aria-label={`Add ${section.label.toLowerCase()} anchor for ${dayLabel}`} onClick={() => props.onAddAnchor?.(section.slot, day)} className="text-xs font-bold text-[#F3A86B] py-2">+ Add anchor</button>
+          </div>
+          <p className="text-[10px] font-bold tracking-widest text-slate-400">YOUR GO-TO FOODS & ANCHORS</p>
+          {items.map((item) => <button key={item.id} onClick={() => props.onPressSlot?.(item)} aria-label={`Edit ${item.title}`}
+            className="block w-full text-left border-b border-[#26303D] pb-3">
+            <p className="text-sm font-semibold text-white">{item.title} <span className="float-right text-xs text-slate-500">Edit</span></p>
+            {item.detail !== item.title ? <p className="mt-1 text-sm text-slate-400">{item.detail}</p> : null}
+            <p className="mt-1 text-xs text-slate-500">{[item.varies ? "Choose one option" : item.kind === "goto" ? "Go-to food" : item.kind === "flexible" ? "Flexible meal" : "Anchor", !item.days?.length ? "Choose days" : item.days.length === 7 ? "Every day" : item.daysText, item.calories ? `${Math.round(item.calories)} kcal` : null, item.protein ? `${Math.round(item.protein)}g protein` : null].filter(Boolean).join(" · ")}</p>
+          </button>)}
+          {!items.length ? <div><p className="text-sm font-medium text-slate-200">What do you like for {section.label.toLowerCase()}?</p><p className="mt-1 text-sm text-slate-400">{section.slot === "breakfast" ? "Add your shake, yogurt and oatmeal as one anchor, or save a few meals to rotate." : "Save a favorite meal for this day. AI can help fill in the rest."}</p></div> : null}
+          <button aria-label={`Add ${section.label.toLowerCase()} go-to food for ${dayLabel}`} onClick={() => props.onAddGoTo?.(section.slot, day)} className="text-xs font-semibold text-[#F3A86B] py-1">+ Add a go-to food</button>
+          <div className="rounded-xl border border-[#5EEAD4]/15 bg-[#5EEAD4]/[0.03] p-3 space-y-3">
+            <h4 className="text-[11px] font-bold tracking-wide text-[#5EEAD4]">✦ AI OPTIONS FOR {section.label.toUpperCase()}</h4>
+            <p className="text-xs text-slate-400">Ideas around your favorites. Add only the ones you want.</p>
+            {ideas.map((idea, i) => {
+              const totals = (idea.foods || []).reduce((acc, f) => ({ cal: acc.cal + (f.calories || 0), pro: acc.pro + (f.protein || 0) }), { cal: 0, pro: 0 });
+              return <div key={`${idea.label}-${i}`} className="flex items-start gap-3 border-t border-[#5EEAD4]/10 pt-3">
+                <div className="flex-1"><p className="text-sm font-semibold text-white">{idea.label}</p><p className="mt-1 text-xs text-slate-400">{totals.cal ? `${Math.round(totals.cal)} kcal · ${Math.round(totals.pro)}g protein` : ""}</p>{idea.notes ? <p className="mt-1 text-xs text-slate-400">{idea.notes}</p> : null}</div>
+                <button aria-label={`Add ${idea.label} to ${dayLabel} ${section.label.toLowerCase()}`} onClick={() => props.onAddIdea?.(idea, section.slot, day)} className="rounded-lg border border-[#5EEAD4]/30 px-3 py-2 text-xs font-semibold text-[#5EEAD4]">+ Add</button>
+              </div>;
+            })}
+            {!ideas.length ? <p role="status" className="text-xs text-slate-400">{suggestingSlot === section.slot ? "Finding options that fit your plan…" : "Your meal options will appear here. You can also ask for ideas."}</p> : null}
+            <button aria-label={`Get ${section.label.toLowerCase()} ideas`} disabled={!!suggestingSlot} onClick={() => props.onSuggestSlot?.(section.slot)} className="text-xs font-semibold text-[#5EEAD4] disabled:opacity-40">{ideas.length ? "Find more options" : "Suggest options"}</button>
+          </div>
+          <details>
+            <summary className="cursor-pointer text-xs font-medium text-slate-400 py-2">Weekly schedule, options & restaurants</summary>
+            <SlotBlock {...props} section={section} suggesting={suggestingSlot === section.slot} />
+          </details>
+        </section>;
+      })}
+    </div>
+    {props.onEditStrategy ? <button onClick={props.onEditStrategy} className="text-sm font-semibold text-slate-400 py-2">{props.strategyExpanded ? "Hide plan settings" : "Plan targets & preferences"}</button> : null}
+  </div>;
 }
 
 function CompactItem({

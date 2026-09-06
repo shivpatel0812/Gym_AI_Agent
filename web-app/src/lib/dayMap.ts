@@ -14,6 +14,7 @@ import type {
 } from "../api/nutritionPlan";
 import {
   PRIMARY_SLOT_OPTIONS,
+  WEEKDAY_OPTIONS,
   daysLabel,
   slotLabel,
 } from "../api/nutritionPlan";
@@ -160,7 +161,7 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
     anchorsPro += pro;
     const slotRaw = String(anchor.slot || "other");
     const primary = mapSlot(slotRaw) || "snack";
-    const days = (anchor.days || []).map(String);
+    const days = scheduledDays(anchor.days, anchor.frequency);
     const placeBit = anchor.place?.trim() ? `at ${anchor.place.trim()}` : null;
     const detail = anchor.varies
       ? [placeBit || "Varies each time", foods.length ? `options: ${foods.join(", ")}` : "attach example meals"]
@@ -216,6 +217,7 @@ export function buildDayMap(plan: NutritionPlan): DayMapModel {
       caloriesMax: cmax || null,
       proteinMin: pmin || null,
       proteinMax: pmax || null,
+      days: scheduledDays(meal.days, meal.frequency),
       daysText: daysLabel(meal.days, meal.frequency),
       sourceId: meal.id,
       sourceIndex: i,
@@ -353,4 +355,25 @@ export function defaultMacrosForAdd(slot: string) {
 
 export function slotForBandAdd(_band: string, mealSlot: any) {
   return mealSlot;
+}
+
+/** Materialize explicit schedules without guessing days for "most days". */
+export function scheduledDays(days?: string[] | null, frequency?: string): string[] {
+  const valid = (days || []).map((d) => String(d).slice(0, 3).toLowerCase())
+    .filter((d) => WEEKDAY_OPTIONS.some((w) => w.id === d));
+  if (valid.length) return [...new Set(valid)];
+  if (frequency === "daily") return WEEKDAY_OPTIONS.map((d) => d.id);
+  if (frequency === "weekdays") return ["mon", "tue", "wed", "thu", "fri"];
+  if (frequency === "weekends") return ["sat", "sun"];
+  return [];
+}
+
+/** Foods for the selected weekday. Unscheduled favorites stay available. */
+export function mealItemsForDay(section: SlotSection, day: string) {
+  const applies = (item: DayMapSlot) => !item.days?.length || item.days.includes(day);
+  const anchors = section.anchors.filter(applies);
+  const goTos = section.goTos.filter(applies).filter((item) =>
+    !anchors.some((anchor) => (anchor.foods || []).some((name) =>
+      name.trim().toLowerCase() === item.title.trim().toLowerCase())));
+  return { anchors, goTos };
 }

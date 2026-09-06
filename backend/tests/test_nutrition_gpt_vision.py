@@ -188,7 +188,7 @@ def test_reasoning_model_gets_headroom_for_thinking(monkeypatch, tmp_path):
     assert "temperature" not in kwargs
 
 
-def test_non_reasoning_model_keeps_the_tight_budget(monkeypatch, tmp_path):
+def test_non_reasoning_model_has_room_for_full_nutrient_ledger(monkeypatch, tmp_path):
     client = _Client({"name": "Thali", "calories": 650, "protein": 22, "carbs": 100, "fats": 17})
     monkeypatch.setattr(gpt_vision, "get_openai_client", lambda: client)
     image_path = tmp_path / "meal.jpg"
@@ -197,5 +197,5 @@ def test_non_reasoning_model_keeps_the_tight_budget(monkeypatch, tmp_path):
     gpt_vision.gpt_vision_estimate(str(image_path), model="gpt-4o")
     kwargs = client.chat.completions.kwargs
 
-    assert kwargs["max_tokens"] == 1000
+    assert kwargs["max_tokens"] == 1800
     assert "max_completion_tokens" not in kwargs

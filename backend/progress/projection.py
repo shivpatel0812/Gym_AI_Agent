@@ -28,7 +28,7 @@ from .weeks import week_label
 MAX_FORWARD_WEEKS = 16
 DEFAULT_FORWARD_WEEKS = 8
 
-HELD_DOMAINS = ("consistency", "nutrition", "body")
+HELD_DOMAINS = ("consistency", "nutrition", "body", "sleep", "hydration", "stress", "activity")
 
 
 def _running_ratio(points: List[Dict[str, Any]], base: float, weeks: int) -> List[float]:

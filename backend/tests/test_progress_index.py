@@ -12,10 +12,14 @@ import pytest
 
 from progress import index as index_mod
 from progress.domains import (
+    build_activity,
     build_body,
     build_consistency,
+    build_hydration,
     build_nutrition,
+    build_sleep,
     build_strength,
+    build_stress,
     e1rm,
     goal_direction,
 )
@@ -310,6 +314,33 @@ class TestWeights:
         series = index_mod.build_series([strength, body], AXIS, "cut")
         assert series[-1].level == pytest.approx(strength.series[-1].level, abs=0.1)
 
+    def test_unlogged_lifestyle_stays_out_of_the_index(self):
+        """Sleep with no nights must not drag the number — same contract as body."""
+        strength = build_strength(
+            [session(AXIS[i], 100 + i * 5, 8) for i in range(8)], AXIS
+        )
+        sleep = build_sleep([], AXIS, sleep_goal=8.0)
+        assert sleep.unavailable_reason
+        series = index_mod.build_series([strength, sleep], AXIS, "maintain")
+        assert series[-1].level == pytest.approx(strength.series[-1].level, abs=0.1)
+        assert series[-1].contributions.get("sleep") is None
+
+    def test_logged_sleep_enters_the_index(self):
+        strength = build_strength(
+            [session(AXIS[i], 100 + i * 5, 8) for i in range(8)], AXIS
+        )
+        nights = [
+            {"date": day_in(AXIS[i % 8], i // 8), "hours_slept": 7.5}
+            for i in range(10)
+        ]
+        sleep = build_sleep(nights, AXIS, sleep_goal=8.0)
+        assert sleep.unavailable_reason is None
+        assert sleep.level() is not None
+        series = index_mod.build_series([strength, sleep], AXIS, "maintain")
+        assert series[-1].contributions.get("sleep") is not None
+        # With sleep present the composite is a blend, not strength alone.
+        assert series[-1].level != pytest.approx(strength.series[-1].level, abs=0.05)
+
 
 # ---------------------------------------------------------------------------
 # The hub end to end
@@ -369,6 +400,25 @@ class TestHub:
         ).build(weeks=8, today="2026-09-05")
         kinds = {e["kind"] for e in hub["events"]}
         assert "no_evidence" in kinds
+
+    def test_pr_events_stamp_the_week_the_peak_was_hit(self):
+        """A lift that peaked mid-range must not show under 'this week' when
+        the user scrubs that older week — the old code stamped axis[-1]."""
+        peak_week = AXIS[2]
+        sessions = [
+            session(AXIS[0], 100, 8),
+            session(AXIS[1], 110, 8),
+            session(peak_week, 130, 8),  # peak here
+            session(AXIS[3], 120, 8),    # later hold, not a new peak
+            session(AXIS[4], 115, 8),
+        ]
+        hub = ProgressHubBuilder(
+            FakeHubDb({"workout_sessions": sessions}), "u1"
+        ).build(weeks=8, today="2026-09-05")
+        prs = [e for e in hub["events"] if e["kind"] == "pr"]
+        assert prs, "expected a PR event for the climbing lift"
+        assert all(e["week_start"] == peak_week for e in prs)
+        assert AXIS[-1] not in {e["week_start"] for e in prs}
 
 
 # ---------------------------------------------------------------------------

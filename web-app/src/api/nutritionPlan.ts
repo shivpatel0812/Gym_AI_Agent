@@ -472,7 +472,8 @@ export async function suggestSlotFills(
   planId: string,
   slot: string,
   stance?: string,
-  model?: string
+  model?: string,
+  opts?: { count?: number; excludeLabels?: string[]; refresh?: boolean }
 ): Promise<{
   ideas: Array<{
     label: string;
@@ -485,7 +486,7 @@ export async function suggestSlotFills(
 }> {
   const res = await apiClient.post(
     `/api/nutrition-plan/${planId}/suggest-slot`,
-    { slot, stance, model },
+    { slot, stance, model, count: opts?.count ?? 1, exclude_labels: opts?.excludeLabels, refresh: !!opts?.refresh },
     { timeout: 60000 }
   );
   return res.data?.suggestion ?? { ideas: [] };

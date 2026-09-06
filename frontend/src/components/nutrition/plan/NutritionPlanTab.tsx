@@ -110,6 +110,17 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
     >
   >({});
 
+  const ideaContext = JSON.stringify([plan?.id, plan?.meal_anchors, plan?.go_to_items,
+    plan?.flexible_meals, plan?.targets, plan?.preferences, plan?.slot_profiles, plan?.fast_food_places]);
+  const latestIdeaContext = useRef(ideaContext);
+  latestIdeaContext.current = ideaContext;
+  const suggestionLock = useRef(false);
+  useEffect(() => {
+    setIdeasBySlot({});
+    setSlotAi({});
+    setPreloadedSlots({});
+  }, [ideaContext]);
+
   const loadSuggestions = useCallback(async () => {
     try {
       const pending = await getPendingSuggestions();
@@ -238,7 +249,8 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
 
   const openNewAnchorForBand = (
     slot: PrimaryMealSlot | DayBand,
-    kind: "individual" | "potential" | "uncertain" = "individual"
+    kind: "individual" | "potential" | "uncertain" = "individual",
+    day?: string
   ) => {
     const resolved: PrimaryMealSlot =
       slot === "Morning"
@@ -259,8 +271,8 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
     setEditingAnchor({
       slot: resolved,
       foods: [],
-      frequency: "daily",
-      days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      frequency: day ? "most_days" : "daily",
+      days: day ? [day] : ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
       ...defaults,
     });
     setEditingAnchorIndex(null);
@@ -407,8 +419,9 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
     setPlan((prev) => (prev ? { ...prev, meal_anchors: anchors } : prev));
     const ok = await savePatch({ meal_anchors: anchors });
     if (!ok) {
-      // Reload so we don't leave a lying optimistic state.
+      // Keep the editor available so the user can retry without losing input.
       await load();
+      return;
     }
     setAnchorEditorOpen(false);
     setEditingAnchor(null);
@@ -484,8 +497,8 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
     ]);
   };
 
-  const openNewGoTo = (slot?: PrimaryMealSlot | string) => {
-    setEditingGoTo(slot ? { slot, name: "" } : null);
+  const openNewGoTo = (slot?: PrimaryMealSlot | string, day?: string) => {
+    setEditingGoTo(slot ? { slot, name: "", days: day ? [day] : [] } : null);
     setEditingGoToIndex(null);
     setGoToEditorOpen(true);
   };
@@ -671,8 +684,9 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
     mode: "preload" | "more" = "more"
   ) => {
     if (!plan) return;
-    if (mode === "preload" && (preloadedSlots[slot] || suggestingSlot === slot)) return;
-    if (mode === "more" && suggestingSlot) return;
+    if (suggestionLock.current) return;
+    suggestionLock.current = true;
+    const requestContext = ideaContext;
 
     setSuggestingSlot(slot);
     if (mode === "preload") {
@@ -681,7 +695,7 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
     try {
       const stance =
         (plan.slot_profiles || []).find((p) => p.slot === slot)?.stance || "anchors";
-      const existing = ideasBySlot[slot] || [];
+      const existing = mode === "preload" ? [] : ideasBySlot[slot] || [];
       const suggestion = await suggestSlotFills(
         plan.id,
         slot,
@@ -692,6 +706,7 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
           excludeLabels: existing.map((i) => i.label),
         }
       );
+      if (requestContext !== latestIdeaContext.current) return;
       // Guidance, verdicts and the rotating-options meal describe the slot the
       // user already has, so they replace rather than accumulate.
       setSlotAi((prev) => ({
@@ -728,17 +743,18 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
         Alert.alert("Error", "Could not get AI suggestions.");
       }
     } finally {
+      suggestionLock.current = false;
       setSuggestingSlot(null);
     }
   };
 
-  const addIdeaAsAnchor = (idea: SlotIdea, slot: PrimaryMealSlot) => {
+  const addIdeaAsAnchor = (idea: SlotIdea, slot: PrimaryMealSlot, day?: string) => {
     setEditingAnchor({
       slot,
       label: idea.label,
       foods: (idea.foods as any) || [{ name: idea.label }],
       frequency: "most_days",
-      days: (idea.days as any) || ["mon", "tue", "wed", "thu", "fri"],
+      days: day ? [day] : (idea.days as any) || ["mon", "tue", "wed", "thu", "fri"],
       notes: idea.notes || null,
       source: "ai_slot",
     });
@@ -1056,9 +1072,11 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
 
         {dayMap ? (
           <DayMap
+            key={plan.id}
             map={dayMap}
+            planRevision={ideaContext}
             onAddAnchor={openNewAnchorForBand}
-            onAddGoTo={(slot) => openNewGoTo(slot)}
+            onAddGoTo={(slot, day) => openNewGoTo(slot, day)}
             onPressSlot={handlePressBlueprintSlot}
             onToggleDay={toggleBlueprintDay}
             onSuggestSlot={(slot) => runSuggestSlot(slot, "more")}

@@ -64,6 +64,7 @@ export type Position = {
   change_pct: number;
   weeks_stale: number;
   estimated: boolean;
+  peak_week?: string;
   history?: PositionRecord[];
 };
 
@@ -82,10 +83,24 @@ export type DomainDetail = {
   latest_weight_lb?: number;
   change_lb?: number;
   weigh_in_count?: number;
+  target?: number;
+  target_source?: string;
+  unit?: string;
+  logs_in_range?: number;
+  latest_avg?: number | null;
+  direction?: string;
 };
 
 export type Domain = {
-  key: "strength" | "consistency" | "nutrition" | "body";
+  key:
+    | "strength"
+    | "consistency"
+    | "nutrition"
+    | "body"
+    | "sleep"
+    | "hydration"
+    | "stress"
+    | "activity";
   label: string;
   level: number | null;
   series: DomainPoint[];
@@ -117,6 +132,10 @@ export type Coverage = {
   sessions_logged: number;
   days_food_logged: number;
   weigh_ins: number;
+  nights_sleep_logged?: number;
+  days_hydration_logged?: number;
+  days_stress_logged?: number;
+  days_activity_logged?: number;
   days_logged_this_week: number;
 };
 

@@ -111,6 +111,7 @@ def create_photo_log(
     cooking_style: Optional[str] = None,
     model: Optional[str] = None,
     source: str = "photo",
+    archive: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Create a food photo / estimate log. Returns the new doc id."""
     try:
@@ -128,7 +129,8 @@ def create_photo_log(
             "chat": [],
             "chat_turn_count": 0,
         }
-        archive = compress_image_for_archive(image_path) if image_path else None
+        if archive is None and image_path:
+            archive = compress_image_for_archive(image_path)
         if archive:
             payload.update(archive)
             payload["has_image"] = True
@@ -170,6 +172,8 @@ def record_accepted_estimate(
                     "carbs": estimate.get("carbs"),
                     "fats": estimate.get("fats"),
                     "fiber": estimate.get("fiber"),
+                    "sugar": estimate.get("sugar"),
+                    "sodium": estimate.get("sodium"),
                 },
                 "accepted_at": _now(),
                 "updated_at": _now(),

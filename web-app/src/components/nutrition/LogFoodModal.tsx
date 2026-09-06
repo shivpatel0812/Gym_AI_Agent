@@ -11,7 +11,8 @@ import {
 } from "@/lib/aiModels";
 
 async function compressImage(file: File): Promise<File> {
-  const maxWidth = 1280;
+  // Match the backend image limit in both orientations.
+  const maxEdge = 1536;
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -22,15 +23,16 @@ async function compressImage(file: File): Promise<File> {
     });
     let width = img.width;
     let height = img.height;
-    if (width > maxWidth) {
-      height = Math.round((height * maxWidth) / width);
-      width = maxWidth;
-    }
+    const ratio = Math.min(1, maxEdge / Math.max(width, height));
+    width = Math.max(1, Math.round(width * ratio));
+    height = Math.max(1, Math.round(height * ratio));
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
     if (!ctx) return file;
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, width, height);
     ctx.drawImage(img, 0, 0, width, height);
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, "image/jpeg", 0.82)
@@ -56,6 +58,13 @@ interface LogFoodFormProps {
   onCancel: () => void;
 }
 
+function optionalNutrient(value: unknown): number | undefined {
+  if (typeof value !== "number" && typeof value !== "string") return undefined;
+  if (typeof value === "string" && !value.trim()) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
 function toFoodDbItem(raw: any): FoodDbItem {
   return {
     id: raw.id,
@@ -67,6 +76,8 @@ function toFoodDbItem(raw: any): FoodDbItem {
     carbs: Number(raw.carbs) || 0,
     fats: Number(raw.fats) || 0,
     fiber: Number(raw.fiber) || 0,
+    sugar: optionalNutrient(raw.sugar),
+    sodium: optionalNutrient(raw.sodium),
     aliases: Array.isArray(raw.aliases) ? raw.aliases : [],
   };
 }
@@ -98,6 +109,8 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
   const [customCarbs, setCustomCarbs] = useState("");
   const [customFats, setCustomFats] = useState("");
   const [customFiber, setCustomFiber] = useState("");
+  const [customSugar, setCustomSugar] = useState("");
+  const [customSodium, setCustomSodium] = useState("");
   const [customAmount, setCustomAmount] = useState("");
   const [photoTitle, setPhotoTitle] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -170,6 +183,8 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       carbs: Math.round(selected.carbs * scale),
       fats: Math.round(selected.fats * scale),
       fiber: Math.round((selected.fiber || 0) * scale),
+      sugar: selected.sugar == null ? undefined : Math.round(selected.sugar * scale * 10) / 10,
+      sodium: selected.sodium == null ? undefined : Math.round(selected.sodium * scale),
     };
   }, [selected, scale]);
 
@@ -184,6 +199,8 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         carbs: food.carbs,
         fats: food.fats,
         fiber: food.fiber || 0,
+        sugar: food.sugar,
+        sodium: food.sodium,
         aliases: [...(food.aliases || []), ...extraAliases].filter(Boolean),
       });
       const saved = toFoodDbItem(res.data);
@@ -258,6 +275,8 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       carbs: scaled.carbs,
       fats: scaled.fats,
       fiber: scaled.fiber,
+      sugar: scaled.sugar,
+      sodium: scaled.sodium,
       meal,
       amount: amountLabel,
     });
@@ -281,6 +300,8 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       carbs: Number.isFinite(carbs) && carbs >= 0 ? Math.round(carbs * 10) / 10 : 0,
       fats: Number.isFinite(fats) && fats >= 0 ? Math.round(fats * 10) / 10 : 0,
       fiber: Number.isFinite(fiber) && fiber >= 0 ? Math.round(fiber * 10) / 10 : 0,
+      sugar: optionalNutrient(customSugar),
+      sodium: optionalNutrient(customSodium),
       meal,
       amount: customAmount.trim() || undefined,
     });
@@ -294,6 +315,8 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         carbs: Number.isFinite(carbs) && carbs >= 0 ? Math.round(carbs * 10) / 10 : 0,
         fats: Number.isFinite(fats) && fats >= 0 ? Math.round(fats * 10) / 10 : 0,
         fiber: Number.isFinite(fiber) && fiber >= 0 ? Math.round(fiber * 10) / 10 : 0,
+        sugar: optionalNutrient(customSugar),
+        sodium: optionalNutrient(customSodium),
       },
       [name]
     );
@@ -330,6 +353,8 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
     carbs?: number;
     fats?: number;
     fiber?: number;
+    sugar?: number;
+    sodium?: number;
   }) => {
     const title = photoTitle.trim();
     setCustomName(title || item.name || "Meal");
@@ -339,6 +364,8 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
     setCustomCarbs(String(Number(item.carbs) || 0));
     setCustomFats(String(Number(item.fats) || 0));
     setCustomFiber(String(Number(item.fiber) || 0));
+    setCustomSugar(String(optionalNutrient(item.sugar) ?? ""));
+    setCustomSodium(String(optionalNutrient(item.sodium) ?? ""));
     setFromPhoto(true);
     setMode("custom");
   };
@@ -358,7 +385,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         payload.append("model", aiModel);
 
         const response = await apiClient.post("/api/macros/analyze-image", payload, {
-          timeout: aiModel === "gpt-5.6-sol" ? 120000 : 60000,
+          timeout: 120000,
         });
         const item = response.data?.food || response.data?.food_items?.[0];
         if (!item) {
@@ -925,6 +952,18 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
                 className="w-full h-12 px-4 rounded-xl bg-[#0F1117] border border-[#2A2D35] text-white text-sm placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
               />
             </div>
+            {([
+              ["Sugar (g)", customSugar, setCustomSugar],
+              ["Sodium (mg)", customSodium, setCustomSodium],
+            ] as const).map(([label, value, setValue]) => (
+              <label key={label} className="text-sm text-[#8E8E93]">
+                {label}
+                <input type="number" min="0" step="any" value={value}
+                  placeholder="Unknown" onChange={(e) => setValue(e.target.value)}
+                  className="w-full mt-2 px-4 py-3 rounded-xl bg-[#0F1117] border border-[#2A2D35] text-white" />
+              </label>
+            ))}
+
           </div>
 
           <button

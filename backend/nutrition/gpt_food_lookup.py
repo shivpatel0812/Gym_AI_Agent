@@ -2,8 +2,10 @@
 Estimate macros for a typed food query, e.g. "2 belvita crackers".
 """
 import json
+import math
 from typing import Dict, Optional, Tuple
 from .gpt_fallback import get_openai_client
+from .nutrients import NUTRIENT_RULES, optional_nutrients
 
 
 ESTIMATE_RULES = """
@@ -51,7 +53,7 @@ def _parse_json(content: str) -> Optional[Dict]:
 def _num(value, default=0):
     try:
         n = float(value)
-        if n < 0:
+        if not math.isfinite(n) or n < 0:
             return default
         return n
     except (TypeError, ValueError):
@@ -189,6 +191,7 @@ def estimate_food_from_query(query: str, name: Optional[str] = None) -> Optional
 "{q}"
 
 {ESTIMATE_RULES}
+{NUTRIENT_RULES}
 {{
   "name": "short food title for the log",
   "serving": "the full amount they ate, e.g. 3 frankie wraps",
@@ -202,6 +205,8 @@ def estimate_food_from_query(query: str, name: Optional[str] = None) -> Optional
   "carbs": number,
   "fats": number,
   "fiber": number,
+  "sugar": number or null,
+  "sodium": number or null,
   "aliases": ["short phrases someone might search"]
 }}
 
@@ -259,5 +264,6 @@ If grams are unknown, estimate. aliases should include the original query and si
         "carbs": carbs,
         "fats": fats,
         "fiber": fiber,
+        **optional_nutrients(parsed),
         "aliases": alias_strs[:12],
     }

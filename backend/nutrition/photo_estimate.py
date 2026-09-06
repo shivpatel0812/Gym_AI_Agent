@@ -5,6 +5,9 @@ should trust them, so a model cannot make a result look reliable merely by
 claiming high confidence.
 """
 
+import math
+from .nutrients import optional_nutrients
+
 from typing import Any, Dict, Iterable, List, Optional
 
 
@@ -24,7 +27,7 @@ def _number(value: Any, default: float = 0.0, maximum: Optional[float] = None) -
         number = float(value)
     except (TypeError, ValueError):
         return default
-    if number < 0:
+    if not math.isfinite(number) or number < 0:
         return default
     if maximum is not None:
         number = min(number, maximum)
@@ -76,6 +79,7 @@ def normalize_components(value: Any) -> List[Dict[str, Any]]:
             "carbs": round(_number(raw.get("carbs"), maximum=2000), 1),
             "fats": round(_number(raw.get("fats", raw.get("fat")), maximum=1000), 1),
             "fiber": round(_number(raw.get("fiber"), maximum=500), 1),
+            **optional_nutrients(raw),
         }
         components.append(component)
     return components

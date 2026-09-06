@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   MdLunchDining,
   MdCheck,
@@ -10,7 +10,7 @@ import CreateNutritionPlanModal from "./CreateNutritionPlanModal";
 import EditMealAnchorModal, { SlotIcon, sumAnchorMacros } from "./EditMealAnchorModal";
 import EditGoToItemModal from "./EditGoToItemModal";
 import EditFlexibleMealModal from "./EditFlexibleMealModal";
-import DayMap from "./DayMap";
+import DayMap, { SlotIdea } from "./DayMap";
 import PlanSuggestions from "./PlanSuggestions";
 import AddBlueprintModal, { BlueprintAddResult } from "./AddBlueprintModal";
 import {
@@ -33,8 +33,10 @@ import {
   pauseNutritionPlan,
   resumeNutritionPlan,
   slotLabel,
+  suggestSlotFills,
   updateNutritionPlan,
 } from "../../../api/nutritionPlan";
+import { loadStoredAiModel } from "../../../lib/aiModels";
 import { buildDayMap } from "../../../lib/dayMap";
 
 interface Props {
@@ -79,6 +81,38 @@ export default function NutritionPlanTab({ onAskCoach, focusSuggestions }: Props
   const [suggestions, setSuggestions] = useState<NutritionSuggestionSet | null>(null);
   const [planChangedSince, setPlanChangedSince] = useState(false);
   const [suggestionsBusy, setSuggestionsBusy] = useState(false);
+
+  const [ideasBySlot, setIdeasBySlot] = useState<Record<string, SlotIdea[]>>({});
+  const [suggestingSlot, setSuggestingSlot] = useState<string | null>(null);
+  const suggestionLock = useRef(false);
+  const ideaContext = JSON.stringify([plan?.id, plan?.meal_anchors, plan?.go_to_items,
+    plan?.flexible_meals, plan?.targets, plan?.preferences, plan?.slot_profiles, plan?.fast_food_places]);
+  const latestIdeaContext = useRef(ideaContext);
+  latestIdeaContext.current = ideaContext;
+  useEffect(() => { setIdeasBySlot({}); }, [ideaContext]);
+  const runSuggestSlot = async (slot: PrimaryMealSlot, more = false) => {
+    if (!plan || suggestionLock.current) return;
+    suggestionLock.current = true;
+    setSuggestingSlot(slot);
+    const requestContext = ideaContext;
+    try {
+      const response = await suggestSlotFills(plan.id, slot,
+        plan.slot_profiles?.find((p) => p.slot === slot)?.stance || "anchors", loadStoredAiModel(),
+        { count: more ? 2 : 1, excludeLabels: more ? (ideasBySlot[slot] || []).map((i) => i.label) : [] });
+      if (requestContext !== latestIdeaContext.current) return;
+      setIdeasBySlot((previous) => {
+        const existing = previous[slot] || [];
+        const labels = new Set(existing.map((i) => i.label.trim().toLowerCase()));
+        const fresh = (response.ideas || []).filter((i) => !labels.has(i.label.trim().toLowerCase()));
+        return { ...previous, [slot]: [...existing, ...fresh].slice(0, 6) };
+      });
+    } catch {
+      if (more) setError("Could not load meal options. Your saved foods are still here; try again.");
+    } finally {
+      suggestionLock.current = false;
+      setSuggestingSlot(null);
+    }
+  };
 
   const loadSuggestions = useCallback(async () => {
     try {
@@ -370,8 +404,8 @@ export default function NutritionPlanTab({ onAskCoach, focusSuggestions }: Props
     setEditingFlexIndex(null);
   };
 
-  const openNewGoTo = (slot?: PrimaryMealSlot | string) => {
-    setEditingGoTo(slot ? { slot, name: "" } : null);
+  const openNewGoTo = (slot?: PrimaryMealSlot | string, day?: string) => {
+    setEditingGoTo(slot ? { slot, name: "", days: day ? [day] : [] } : null);
     setEditingGoToIndex(null);
     setGoToEditorOpen(true);
   };
@@ -629,21 +663,32 @@ export default function NutritionPlanTab({ onAskCoach, focusSuggestions }: Props
 
       {dayMap ? (
         <DayMap
+          key={plan.id}
           map={dayMap}
+          planRevision={ideaContext}
+          slotIdeas={ideasBySlot}
+          suggestingSlot={suggestingSlot}
+          onPreloadSlot={(slot) => runSuggestSlot(slot)}
+          onSuggestSlot={(slot) => runSuggestSlot(slot, true)}
+          onAddIdea={(idea, slot, day) => {
+            setEditingAnchor({ slot, label: idea.label, foods: idea.foods || [], frequency: "most_days", days: [day], notes: idea.notes });
+            setEditingAnchorIndex(null);
+            setAnchorEditorOpen(true);
+          }}
           strategyExpanded={strategyOpen}
           onEditStrategy={() => setStrategyOpen((v) => !v)}
-          onAddAnchor={(slot) => {
+          onAddAnchor={(slot, day) => {
             setEditingAnchor({
               slot,
               label: slotLabel(slot),
               foods: [],
-              frequency: "daily",
-              days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+              frequency: day ? "most_days" : "daily",
+              days: day ? [day] : ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
             });
             setEditingAnchorIndex(null);
             setAnchorEditorOpen(true);
           }}
-          onAddGoTo={(slot) => openNewGoTo(slot)}
+          onAddGoTo={(slot, day) => openNewGoTo(slot, day)}
           onPressSlot={handlePressBlueprintSlot}
           onStanceChange={async (slot, stance) => {
             if (!plan) return;
@@ -669,6 +714,8 @@ export default function NutritionPlanTab({ onAskCoach, focusSuggestions }: Props
         />
       ) : null}
 
+      {strategyOpen ? (
+      <>
       <div className="rounded-2xl bg-[#161A22] border border-[#2A2D35] p-5">
         <div className="flex items-center justify-between mb-2">
           <p className="text-[15px] font-bold text-white">Daily targets</p>
@@ -735,28 +782,9 @@ export default function NutritionPlanTab({ onAskCoach, focusSuggestions }: Props
         )}
       </div>
 
-      {!strategyOpen ? (
-        <button
-          type="button"
-          onClick={() => setStrategyOpen(true)}
-          className="w-full flex items-center gap-3 rounded-xl border border-[#2A2D35] bg-[#161A22] p-4 text-left"
-        >
-          <div className="flex-1">
-            <p className="font-bold text-white">Strategy under the map</p>
-            <p className="text-xs text-[#636366] mt-1">
-              {(plan.meal_anchors || []).length} anchors · {(plan.flexible_meals || []).length} flexible ·{" "}
-              {(plan.go_to_items || []).length} go-tos
-            </p>
-          </div>
-          <MdChevronRight className="text-[#636366] rotate-90" size={22} />
-        </button>
-      ) : null}
-
-      {strategyOpen ? (
-      <>
-      <p className="text-[11px] font-extrabold text-[#636366] tracking-wider pt-2">YOUR STRATEGY</p>
+      <p className="text-[11px] font-extrabold text-[#636366] tracking-wider pt-2">PLAN SETTINGS & FOOD LIBRARY</p>
       <p className="text-sm text-[#8E8E93] -mt-2">
-        Anchors are meals you repeat. Flexible meals are less controlled. Go-tos fill gaps on the day map.
+        Manage all your saved meals and preferences here, including foods scheduled for other days.
       </p>
 
       <div className="space-y-2">

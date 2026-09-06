@@ -8,6 +8,8 @@ export interface FoodDbItem {
   carbs: number;
   fats: number;
   fiber?: number;
+  sugar?: number;
+  sodium?: number;
   aliases?: string[];
 }
 

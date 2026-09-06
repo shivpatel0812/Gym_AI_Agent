@@ -66,6 +66,8 @@ interface RevisedEstimate {
   carbs: number;
   fats: number;
   fiber: number;
+  sugar?: number;
+  sodium?: number;
   components?: PhotoComponent[];
   revision_note?: string | null;
 }
@@ -169,6 +171,8 @@ function EstimateMacros({
         color="#C4B5FD"
         previousValue={previous?.fats}
       />
+      {estimate.sugar != null ? <MacroPill label="Sugar" value={estimate.sugar} unit="g" color="#E4B896" previousValue={previous?.sugar} /> : null}
+      {estimate.sodium != null ? <MacroPill label="Sodium" value={estimate.sodium} unit="mg" color="#9CC0E8" previousValue={previous?.sodium} /> : null}
       <MacroPill
         label="Fiber"
         value={estimate.fiber}
@@ -340,6 +344,8 @@ export default function MacroAdjustChat({
             carbs: live.carbs,
             fats: live.fats,
             fiber: live.fiber,
+            sugar: live.sugar ?? undefined,
+            sodium: live.sodium ?? undefined,
             components: liveComponents,
             assumptions: estimate.analysis?.assumptions,
             uncertainties: estimate.analysis?.uncertainties,

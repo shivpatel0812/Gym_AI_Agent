@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from ai_models import completion_kwargs, is_gpt5_family, resolve_model
 
 from .gpt_fallback import get_openai_client
+from .nutrients import NUTRIENT_RULES, optional_nutrients
 from .gpt_food_lookup import (
     MAX_CALORIES,
     _parse_json,
@@ -40,7 +41,9 @@ def gpt_vision_estimate(
     # before emitting a single character of JSON, and a truncated response
     # parses as None — which silently demotes the estimate to the
     # description-only fallback. Give the thinking pass its own headroom.
-    budget = 4000 if is_gpt5_family(resolved) else 1000
+    # Allow a complete component ledger including sugar and sodium. This is
+    # a ceiling, not a requested response length.
+    budget = 4000 if is_gpt5_family(resolved) else 1800
     variant = resolve_variant(prompt_variant)
 
     try:
@@ -69,6 +72,7 @@ def gpt_vision_estimate(
                     "protein": prior.get("protein"),
                     "carbs": prior.get("carbs"),
                     "fats": prior.get("fats"),
+                    **optional_nutrients(prior),
                 }
             )
         prior_context = json.dumps(safe_priors, separators=(",", ":")) if safe_priors else "[]"
@@ -86,6 +90,7 @@ Relevant foods this user previously confirmed: {prior_context}
 
 Rules:
 {rules}
+{NUTRIENT_RULES}
 
 Return JSON only in this shape:
 {{
@@ -107,13 +112,15 @@ Return JSON only in this shape:
     "visible_evidence": "none|possible|clear|unknown"
   }},
   "components": [
-    {{"item": "food component", "amount": "amount", "estimated_grams": number, "calories": number, "protein": number, "carbs": number, "fats": number, "fiber": number}}
+    {{"item": "food component", "amount": "amount", "estimated_grams": number, "calories": number, "protein": number, "carbs": number, "fats": number, "fiber": number, "sugar": number or null, "sodium": number or null}}
   ],
   "calories": number,
   "protein": number,
   "carbs": number,
   "fats": number,
   "fiber": number,
+  "sugar": number or null,
+  "sodium": number or null,
   "assumptions": ["short assumption"],
   "uncertainties": ["short uncertainty"]
 }}
@@ -169,6 +176,7 @@ Round calories to a whole number. Round protein, carbs, fats, and fiber to 1 dec
             "carbs": carbs,
             "fats": fats,
             "fiber": fiber,
+            **optional_nutrients(parsed),
             "model": resolved,
             "prompt_variant": variant,
             "analysis": analysis,

@@ -40,6 +40,7 @@ import {
   PortionChoice,
   normalizeCookingStyle,
   toPhotoEstimate,
+  optionalNutrient,
 } from "./photoEstimate";
 import MacroAdjustChat from "./MacroAdjustChat";
 import ScanFoodCamera, { type ScanCapture } from "./ScanFoodCamera";
@@ -85,6 +86,8 @@ function toFoodDbItem(raw: any): FoodDbItem {
     carbs: Number(raw.carbs) || 0,
     fats: Number(raw.fats) || 0,
     fiber: Number(raw.fiber) || 0,
+    sugar: optionalNutrient(raw.sugar),
+    sodium: optionalNutrient(raw.sodium),
     aliases: Array.isArray(raw.aliases) ? raw.aliases : [],
   };
 }
@@ -133,6 +136,8 @@ const emptyPhotoMacroDraft = (): PhotoMacroDraft => ({
   carbs: "",
   fats: "",
   fiber: "",
+  sugar: "",
+  sodium: "",
 });
 
 const photoMacroDraftFrom = (estimate: PhotoEstimate): PhotoMacroDraft => ({
@@ -141,11 +146,14 @@ const photoMacroDraftFrom = (estimate: PhotoEstimate): PhotoMacroDraft => ({
   carbs: String(estimate.carbs),
   fats: String(estimate.fats),
   fiber: String(estimate.fiber),
+  sugar: String(estimate.sugar ?? ""),
+  sodium: String(estimate.sodium ?? ""),
 });
 
 const parsedPhotoMacroDraft = (draft: PhotoMacroDraft): Partial<MacroValues> => {
   const parsed: Partial<MacroValues> = {};
   (Object.keys(draft) as (keyof MacroValues)[]).forEach((key) => {
+    if (!draft[key].trim()) return;
     const value = Number(draft[key]);
     if (Number.isFinite(value) && value >= 0) parsed[key] = value;
   });
@@ -330,6 +338,8 @@ export default function LogFoodForm({
       carbs: Math.round(selected.carbs * scale),
       fats: Math.round(selected.fats * scale),
       fiber: Math.round((selected.fiber || 0) * scale),
+      sugar: selected.sugar == null ? undefined : Math.round(selected.sugar * scale * 10) / 10,
+      sodium: selected.sodium == null ? undefined : Math.round(selected.sodium * scale),
     };
   }, [selected, scale]);
 
@@ -372,6 +382,8 @@ export default function LogFoodForm({
         carbs: food.carbs,
         fats: food.fats,
         fiber: food.fiber || 0,
+        sugar: food.sugar,
+        sodium: food.sodium,
         aliases: [...(food.aliases || []), ...extraAliases].filter(Boolean),
         log_source: metadata?.logSource,
         was_adjusted: metadata?.wasAdjusted,
@@ -453,6 +465,8 @@ export default function LogFoodForm({
       carbs: scaled.carbs,
       fats: scaled.fats,
       fiber: scaled.fiber,
+      sugar: scaled.sugar ?? undefined,
+      sodium: scaled.sodium ?? undefined,
       meal: activeMeal,
       amount: amountLabel,
       ...(amountMode === "serving"
@@ -646,6 +660,8 @@ export default function LogFoodForm({
       carbs: displayed.carbs,
       fats: displayed.fats,
       fiber: displayed.fiber,
+      sugar: displayed.sugar ?? undefined,
+      sodium: displayed.sodium ?? undefined,
       meal: activeMeal,
       amount: displayed.amount,
       uncertain: showUncertain ? uncertain : undefined,
@@ -665,6 +681,8 @@ export default function LogFoodForm({
         carbs: displayed.carbs,
         fats: displayed.fats,
         fiber: displayed.fiber,
+        sugar: displayed.sugar ?? undefined,
+        sodium: displayed.sodium ?? undefined,
       },
       [photoTitle.trim(), photoNote.trim()].filter(Boolean),
       {
@@ -682,6 +700,8 @@ export default function LogFoodForm({
           carbs: displayed.carbs,
           fats: displayed.fats,
           fiber: displayed.fiber,
+          sugar: displayed.sugar ?? undefined,
+          sodium: displayed.sodium ?? undefined,
         })
         .catch(() => {});
     }
@@ -739,6 +759,8 @@ export default function LogFoodForm({
     carbs: number;
     fats: number;
     fiber: number;
+    sugar?: number;
+    sodium?: number;
     components?: PhotoComponent[];
   }) => {
     if (!photoResult) return;
@@ -751,6 +773,8 @@ export default function LogFoodForm({
       carbs: revised.carbs,
       fats: revised.fats,
       fiber: revised.fiber,
+      sugar: revised.sugar ?? undefined,
+      sodium: revised.sodium ?? undefined,
       analysis: {
         ...photoResult.analysis,
         // The revision re-prices line items, so keeping the old ledger would
@@ -782,6 +806,8 @@ export default function LogFoodForm({
       carbs: photoDisplayed.carbs,
       fats: photoDisplayed.fats,
       fiber: photoDisplayed.fiber,
+      sugar: photoDisplayed.sugar ?? undefined,
+      sodium: photoDisplayed.sodium ?? undefined,
       meal: activeMeal,
       amount: photoDisplayed.amount,
       uncertain: showUncertain ? uncertain : undefined,
@@ -801,6 +827,8 @@ export default function LogFoodForm({
         carbs: photoDisplayed.carbs,
         fats: photoDisplayed.fats,
         fiber: photoDisplayed.fiber,
+        sugar: photoDisplayed.sugar ?? undefined,
+        sodium: photoDisplayed.sodium ?? undefined,
       },
       [photoTitle.trim(), photoNote.trim()].filter(Boolean),
       {
@@ -822,6 +850,8 @@ export default function LogFoodForm({
           carbs: photoDisplayed.carbs,
           fats: photoDisplayed.fats,
           fiber: photoDisplayed.fiber,
+          sugar: photoDisplayed.sugar ?? undefined,
+          sodium: photoDisplayed.sodium ?? undefined,
         })
         .catch(() => {});
     }
@@ -1123,6 +1153,8 @@ export default function LogFoodForm({
                   carbs: item.carbs,
                   fats: item.fats,
                   fiber: item.fiber,
+                  sugar: item.sugar,
+                  sodium: item.sodium,
                   amount: item.amount,
                   meal: displayMealLabel(mealSlot),
                   uncertain: true,
@@ -1140,6 +1172,8 @@ export default function LogFoodForm({
                     carbs: item.carbs || 0,
                     fats: item.fats || 0,
                     fiber: item.fiber || 0,
+                    sugar: item.sugar,
+                    sodium: item.sodium,
                   },
                   [item.name]
                 );
@@ -1622,6 +1656,8 @@ export default function LogFoodForm({
                             ["Carbs (g)", "carbs"],
                             ["Fat (g)", "fats"],
                             ["Fiber (g)", "fiber"],
+                            ["Sugar (g)", "sugar"],
+                            ["Sodium (mg)", "sodium"],
                           ] as const
                         ).map(([label, key]) => (
                           <View key={key} style={styles.photoAdvancedField}>

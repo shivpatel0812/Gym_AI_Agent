@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ImageBackground,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -31,6 +32,8 @@ type RevisedEstimate = {
   carbs: number;
   fats: number;
   fiber: number;
+  sugar?: number;
+  sodium?: number;
   components?: PhotoComponent[];
 };
 
@@ -145,6 +148,8 @@ export default function PhotoScanResults({
       carbs: revised.carbs,
       fats: revised.fats,
       fiber: revised.fiber,
+      sugar: revised.sugar ?? undefined,
+      sodium: revised.sodium ?? undefined,
       analysis: {
         ...estimate.analysis,
         components: revised.components?.length
@@ -201,7 +206,7 @@ export default function PhotoScanResults({
           </View>
         )}
 
-        <View style={[styles.card, { paddingBottom: Math.max(insets.bottom, 14) + 8 }]}>
+        <ScrollView style={{ flex: 1.7 }} contentContainerStyle={[styles.card, { paddingBottom: Math.max(insets.bottom, 14) + 8 }]}>
           <View style={styles.cardMeta}>
             <MaterialCommunityIcons name="bookmark-outline" size={16} color="#8A8A8E" />
             <Text style={styles.cardTime}>{timeLabel}</Text>
@@ -249,6 +254,12 @@ export default function PhotoScanResults({
               <Text style={styles.macroValue}>{displayNumber(displayed.fats)}g</Text>
             </View>
           </View>
+
+          <View style={styles.macroRow}>
+            <Text style={styles.macroLabel}>Sugar <Text style={styles.macroValue}>{displayed.sugar == null ? "Unknown" : `${displayNumber(displayed.sugar)}g`}</Text></Text>
+            <Text style={styles.macroLabel}>Sodium <Text style={styles.macroValue}>{displayed.sodium == null ? "Unknown" : `${Math.round(displayed.sodium)}mg`}</Text></Text>
+          </View>
+          <Text style={styles.scoreReason}>Sugar and sodium are estimates unless read from a nutrition label.</Text>
 
           {fit && fit.score !== null ? (
             <View style={styles.scoreBlock}>
@@ -352,7 +363,7 @@ export default function PhotoScanResults({
           </View>
 
           <Text style={styles.mealHint}>Logs to {mealLabel}</Text>
-        </View>
+        </ScrollView>
       </View>
 
       {showChat ? (
@@ -401,7 +412,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   card: {
-    marginTop: -28,
+    flexGrow: 1,
     backgroundColor: "#F4E9E6",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,

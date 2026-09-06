@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { MdClose, MdSearch, MdAddCircle } from "react-icons/md";
 import apiClient from "../../../lib/api-client";
 import foodDatabase, { FoodDbItem } from "../../../data/foodDatabase";
-import { GO_TO_SLOT_OPTIONS, GoToItem } from "../../../api/nutritionPlan";
+import { GO_TO_SLOT_OPTIONS, GoToItem, WEEKDAY_OPTIONS } from "../../../api/nutritionPlan";
 import { SlotIcon } from "./EditMealAnchorModal";
 
 interface Props {
@@ -99,6 +99,7 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
       carbs: Math.round(food.carbs * 10) / 10,
       fats: Math.round(food.fats * 10) / 10,
       fiber: food.fiber != null ? Math.round(food.fiber * 10) / 10 : null,
+      days: draft.days || [],
       notes: draft.notes,
     });
     setQuery("");
@@ -123,6 +124,7 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
         carbs: draft.carbs != null ? Number(draft.carbs) : null,
         fats: draft.fats != null ? Number(draft.fats) : null,
         fiber: draft.fiber != null ? Number(draft.fiber) : null,
+        days: draft.days || [],
         notes: draft.notes?.trim() || null,
       });
     } finally {
@@ -155,6 +157,16 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 pb-6 space-y-2">
+          <fieldset className="py-3">
+            <legend className="text-sm font-semibold text-slate-200">Which days do you like this?</legend>
+            <div className="flex gap-1 mt-2">{WEEKDAY_OPTIONS.map((day) => {
+              const on = (draft.days || []).includes(day.id);
+              return <button key={day.id} type="button" aria-label={day.label} aria-pressed={on}
+                onClick={() => update({ days: on ? (draft.days || []).filter((d) => d !== day.id) : [...(draft.days || []), day.id] })}
+                className={`flex-1 rounded-lg py-2 text-xs font-semibold ${on ? "bg-[#F3A86B] text-black" : "bg-[#0B0C10] text-slate-400"}`}>{day.label}</button>;
+            })}</div>
+            <button type="button" onClick={() => update({ days: WEEKDAY_OPTIONS.map((d) => d.id) })} className="mt-2 text-xs text-[#F3A86B]">Every day</button>
+          </fieldset>
           <p className="text-xs font-bold text-[#636366] mt-2">Search your food database</p>
           <p className="text-xs text-[#636366] mb-2">
             Pick from saved foods or the built-in catalog, then tweak the serving.

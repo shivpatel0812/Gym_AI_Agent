@@ -167,7 +167,10 @@ export function dayStatusForSlot(section: SlotSection, dayId: string): DayStatus
 export function buildWeeklyBars(sections: SlotSection[], allSlots: DayMapSlot[]): WeeklyBar[] {
   return WEEKDAYS.map((d) => {
     let calories = 0;
+    const visibleGoTos = new Set(sections.flatMap((section) =>
+      mealItemsForDay(section, d.id).goTos.map((item) => item.id)));
     for (const slot of allSlots) {
+      if (slot.kind === "goto" && !visibleGoTos.has(slot.id)) continue;
       if (!dayIdsOf(slot).includes(d.id)) continue;
       if (slot.kind === "flexible") {
         const min = slot.caloriesMin ?? 0;
@@ -356,6 +359,7 @@ export function buildDayMap(
       caloriesMax: cmax || null,
       proteinMin: pmin || null,
       proteinMax: pmax || null,
+      days: scheduledDays(meal.days, meal.frequency),
       daysText: daysLabel(meal.days, meal.frequency),
       sourceId: meal.id,
       sourceIndex: i,
@@ -366,15 +370,8 @@ export function buildDayMap(
 
   let goToCal = 0;
   let goToPro = 0;
-  const anchorFoodNames = (plan.meal_anchors || []).flatMap((a) =>
-    (a.foods || []).map((f) => String(f.name || "").trim()).filter(Boolean)
-  );
   (plan.go_to_items || []).forEach((item, i) => {
     const name = String(item.name || "").trim();
-    // Skip go-tos that are already a food inside an anchored meal.
-    if (name && anchorFoodNames.some((af) => foodNamesMatch(af, name))) {
-      return;
-    }
     const primary = mapSlot(String(item.slot || "other")) || "snack";
     const cal = num(item.calories);
     const pro = num(item.protein);
@@ -543,4 +540,25 @@ export function defaultMacrosForAdd(slot: string) {
 
 export function slotForBandAdd(_band: string, mealSlot: any) {
   return mealSlot;
+}
+
+/** Materialize explicit schedules without guessing days for "most days". */
+export function scheduledDays(days?: string[] | null, frequency?: string): string[] {
+  const valid = (days || []).map((d) => String(d).slice(0, 3).toLowerCase())
+    .filter((d) => WEEKDAYS.some((w) => w.id === d));
+  if (valid.length) return [...new Set(valid)];
+  if (frequency === "daily") return WEEKDAYS.map((d) => d.id);
+  if (frequency === "weekdays") return ["mon", "tue", "wed", "thu", "fri"];
+  if (frequency === "weekends") return ["sat", "sun"];
+  return [];
+}
+
+/** Foods for the selected weekday. Unscheduled favorites stay available. */
+export function mealItemsForDay(section: SlotSection, day: string) {
+  const applies = (item: DayMapSlot) => !item.days?.length || item.days.includes(day);
+  const anchors = section.anchors.filter(applies);
+  const goTos = section.goTos.filter(applies).filter((item) =>
+    !anchors.some((anchor) => (anchor.foods || []).some((name) =>
+      name.trim().toLowerCase() === item.title.trim().toLowerCase())));
+  return { anchors, goTos };
 }

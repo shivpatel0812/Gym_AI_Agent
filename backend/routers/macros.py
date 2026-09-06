@@ -1,3 +1,7 @@
+import asyncio
+from time import perf_counter
+from starlette.concurrency import run_in_threadpool
+
 from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File, Form
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
@@ -25,6 +29,7 @@ from nutrition.slot_targets import resolve_slot_targets
 from nutrition.photo_log_store import (
     append_adjust_chat,
     create_photo_log,
+    compress_image_for_archive,
     load_archived_image,
     record_accepted_estimate,
 )
@@ -102,6 +107,7 @@ def _saved_food_payload(item: dict, now: str) -> Optional[dict]:
         "carbs": per_unit(item.get("carbs")),
         "fats": per_unit(item.get("fats")),
         "fiber": per_unit(item.get("fiber")),
+        **{key: per_unit(item[key]) for key in ("sugar", "sodium") if item.get(key) is not None},
         "updated_at": now,
         "last_used_at": now,
     }
@@ -213,6 +219,8 @@ def _rank_photo_food_priors(
 
 
 def _photo_food_priors(user_id: str, title: Optional[str], description: Optional[str]) -> List[dict]:
+    if not (title or "").strip() and not (description or "").strip():
+        return []
     foods = [(doc.to_dict() or {}) for doc in _foods_ref(user_id).stream()]
     return _rank_photo_food_priors(foods, title, description)
 
@@ -233,15 +241,20 @@ async def _save_normalized_food_image(upload: UploadFile) -> str:
     if len(payload) > MAX_FOOD_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Image is too large (max 12MB)")
 
+    return await run_in_threadpool(_normalize_food_image_bytes, payload)
+
+
+def _normalize_food_image_bytes(payload: bytes) -> str:
+    """Keep image decoding and JPEG compression off the async request loop."""
     temp_path = None
     try:
         with Image.open(BytesIO(payload)) as source:
-            source.load()
             if source.width < 64 or source.height < 64:
                 raise HTTPException(status_code=400, detail="Image is too small to analyze")
             if source.width * source.height > MAX_FOOD_IMAGE_PIXELS:
                 raise HTTPException(status_code=413, detail="Image dimensions are too large")
 
+            source.load()
             image = ImageOps.exif_transpose(source)
             if image.mode in ("RGBA", "LA") or "transparency" in image.info:
                 rgba = image.convert("RGBA")
@@ -336,6 +349,72 @@ async def get_macro_entries(user_id: str = Depends(get_user_id), date_filter: Op
         _with_fit({"id": macro.id, **macro.to_dict()}, context)
         for macro in macros
     ]
+
+
+@router.get("/daily")
+async def get_daily_macro_history(
+    days: int = Query(30, ge=1, le=180),
+    user_id: str = Depends(get_user_id),
+):
+    """
+    One row per logged day — totals only, no food items.
+
+    Built for the Nutrition History chart. Dumping every meal for a 90-day
+    scrub is a multi-megabyte response for no plot benefit.
+    """
+    try:
+        cutoff = user_now(db, user_id) - timedelta(days=days)
+    except Exception:
+        cutoff = datetime.now() - timedelta(days=days)
+    horizon = cutoff.strftime("%Y-%m-%d")
+    macros_ref = db.collection("users").document(user_id).collection("macros")
+    by_day: Dict[str, Dict[str, float]] = {}
+    for doc in macros_ref.where("date", ">=", horizon).stream():
+        data = doc.to_dict() or {}
+        day = str(data.get("date") or "")[:10]
+        if len(day) != 10:
+            continue
+        bucket = by_day.setdefault(
+            day,
+            {"calories": 0.0, "protein": 0.0, "carbs": 0.0, "fats": 0.0, "fiber": 0.0},
+        )
+        # Prefer stamped totals; fall back to summing the ledger so older rows
+        # that never got totals still show up on the chart.
+        foods = data.get("food_items") or []
+        calories = data.get("total_calories")
+        protein = data.get("total_protein")
+        carbs = data.get("total_carbs")
+        fats = data.get("total_fats")
+        fiber = data.get("total_fiber")
+        if calories is None and foods:
+            calories = sum(float(f.get("calories") or 0) for f in foods if isinstance(f, dict))
+        if protein is None and foods:
+            protein = sum(float(f.get("protein") or 0) for f in foods if isinstance(f, dict))
+        if carbs is None and foods:
+            carbs = sum(float(f.get("carbs") or 0) for f in foods if isinstance(f, dict))
+        if fats is None and foods:
+            fats = sum(float(f.get("fats") or 0) for f in foods if isinstance(f, dict))
+        if fiber is None and foods:
+            fiber = sum(float(f.get("fiber") or 0) for f in foods if isinstance(f, dict))
+        bucket["calories"] += float(calories or 0)
+        bucket["protein"] += float(protein or 0)
+        bucket["carbs"] += float(carbs or 0)
+        bucket["fats"] += float(fats or 0)
+        bucket["fiber"] += float(fiber or 0)
+
+    series = [
+        {
+            "date": day,
+            "calories": round(totals["calories"]),
+            "protein": round(totals["protein"], 1),
+            "carbs": round(totals["carbs"], 1),
+            "fats": round(totals["fats"], 1),
+            "fiber": round(totals["fiber"], 1),
+        }
+        for day, totals in sorted(by_day.items())
+    ]
+    return {"days": days, "series": series}
+
 
 @router.get("/meal-timing")
 async def get_meal_timing(
@@ -453,21 +532,34 @@ async def analyze_food_image_endpoint(
     the default, so this is safe to pass through from a client.
     """
     temp_file = None
+    started = perf_counter()
     try:
         temp_file = await _save_normalized_food_image(file)
+        normalized_at = perf_counter()
         try:
-            priors = _photo_food_priors(user_id, title, description)
+            priors = await run_in_threadpool(_photo_food_priors, user_id, title, description)
         except Exception:
             priors = []
-        result = analyze_food_image(
-            temp_file,
-            description,
-            model=model,
-            title=title,
-            cooking_style=normalize_cooking_style(cooking_style),
-            prior_foods=priors,
-            prompt_variant=prompt_variant,
+        result, archive = await asyncio.gather(
+            run_in_threadpool(
+                analyze_food_image,
+                temp_file,
+                description,
+                model=model,
+                title=title,
+                cooking_style=normalize_cooking_style(cooking_style),
+                prior_foods=priors,
+                prompt_variant=prompt_variant,
+            ),
+            run_in_threadpool(compress_image_for_archive, temp_file),
+            return_exceptions=True,
         )
+        # Wait for both workers before cleanup, even when either one fails.
+        if isinstance(result, BaseException):
+            raise result
+        if isinstance(archive, BaseException):
+            archive = None
+        analyzed_at = perf_counter()
         # Persist every upload + estimate for testing / review. Never fail the
         # user-facing estimate if archival write has a problem.
         try:
@@ -484,11 +576,12 @@ async def analyze_food_image_endpoint(
             # Log the model that actually produced the answer, not the one that
             # was asked for — escalation makes those differ, and reviewing a
             # bad estimate against the wrong model is worse than useless.
-            log_id = create_photo_log(
+            log_id = await run_in_threadpool(
+                create_photo_log,
                 db,
                 user_id,
                 estimate=estimate_for_log,
-                image_path=temp_file,
+                archive=archive,
                 title=title,
                 description=description,
                 cooking_style=normalize_cooking_style(cooking_style),
@@ -499,6 +592,12 @@ async def analyze_food_image_endpoint(
                 result = {**result, "photo_log_id": log_id}
         except Exception as exc:
             print(f"Warning: food photo log failed: {exc}")
+        if isinstance(result, dict):
+            result["timings_ms"] = {
+                "normalize": round((normalized_at - started) * 1000),
+                "estimate_and_archive": round((analyzed_at - normalized_at) * 1000),
+                "total": round((perf_counter() - started) * 1000),
+            }
         return result
     except HTTPException:
         raise

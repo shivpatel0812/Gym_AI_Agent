@@ -9,6 +9,8 @@ export type MacroValues = {
   carbs: number;
   fats: number;
   fiber: number;
+  sugar?: number;
+  sodium?: number;
 };
 
 export type PhotoComponent = {
@@ -19,6 +21,8 @@ export type PhotoComponent = {
   carbs: number;
   fats: number;
   fiber: number;
+  sugar?: number;
+  sodium?: number;
 };
 
 export type PhotoConfidence = {
@@ -70,6 +74,18 @@ function finiteNumber(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+export function optionalNutrient(value: unknown): number | undefined {
+  if (typeof value !== "number" && typeof value !== "string") return undefined;
+  if (typeof value === "string" && !value.trim()) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+function scaleNutrient(value: number | undefined, factor: number, digits = 1) {
+  const number = optionalNutrient(value);
+  return number === undefined ? undefined : Math.round(number * factor * 10 ** digits) / 10 ** digits;
+}
+
 function roundMacro(value: number) {
   return Math.round(Math.max(0, value) * 10) / 10;
 }
@@ -86,6 +102,8 @@ function componentList(value: unknown): PhotoComponent[] {
       carbs: roundMacro(finiteNumber(item.carbs)),
       fats: roundMacro(finiteNumber(item.fats)),
       fiber: roundMacro(finiteNumber(item.fiber)),
+      sugar: optionalNutrient(item.sugar),
+      sodium: optionalNutrient(item.sodium),
     }))
     .filter((item) => item.name)
     .slice(0, 12);
@@ -125,6 +143,8 @@ export function toPhotoEstimate(raw: any, titleFallback = ""): PhotoEstimate | n
     carbs: roundMacro(finiteNumber(item.carbs)),
     fats: roundMacro(finiteNumber(item.fats)),
     fiber: roundMacro(finiteNumber(item.fiber)),
+    sugar: optionalNutrient(item.sugar),
+    sodium: optionalNutrient(item.sodium),
     estimatedGrams: finiteNumber(portion.estimated_grams) || undefined,
     analysis: {
       confidence: {
@@ -169,6 +189,8 @@ export function scalePhotoEstimate(base: PhotoEstimate, servings: number): Photo
     carbs: roundMacro(base.carbs * factor),
     fats: roundMacro(base.fats * factor),
     fiber: roundMacro(base.fiber * factor),
+    sugar: scaleNutrient(base.sugar, factor),
+    sodium: scaleNutrient(base.sodium, factor, 0),
     estimatedGrams: base.estimatedGrams
       ? roundMacro(base.estimatedGrams * factor)
       : undefined,
@@ -183,6 +205,8 @@ export function scalePhotoEstimate(base: PhotoEstimate, servings: number): Photo
         carbs: roundMacro(component.carbs * factor),
         fats: roundMacro(component.fats * factor),
         fiber: roundMacro(component.fiber * factor),
+        sugar: scaleNutrient(component.sugar, factor),
+        sodium: scaleNutrient(component.sodium, factor, 0),
       })),
     },
   };
@@ -207,6 +231,8 @@ export function adjustPhotoEstimate(
     carbs: roundMacro(base.carbs * portionFactor),
     fats: roundMacro(base.fats * portionFactor + oilDelta),
     fiber: roundMacro(base.fiber * portionFactor),
+    sugar: scaleNutrient(base.sugar, portionFactor),
+    sodium: scaleNutrient(base.sodium, portionFactor, 0),
   };
 
   // The ledger has to keep summing to the number on screen, or it stops being
@@ -220,6 +246,8 @@ export function adjustPhotoEstimate(
     carbs: roundMacro(component.carbs * portionFactor),
     fats: roundMacro(component.fats * portionFactor),
     fiber: roundMacro(component.fiber * portionFactor),
+    sugar: scaleNutrient(component.sugar, portionFactor),
+    sodium: scaleNutrient(component.sodium, portionFactor, 0),
   }));
   if (scaledComponents.length && Math.round(oilDelta * 9) !== 0) {
     scaledComponents.push({

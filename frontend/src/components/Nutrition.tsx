@@ -27,6 +27,7 @@ import MealTimingCard from "./nutrition/MealTimingCard";
 import { MealDragHandle, useMealDrag } from "./nutrition/MealDrag";
 import NutritionPlanTab from "./nutrition/plan/NutritionPlanTab";
 import NutritionSuggestionsTab from "./nutrition/plan/NutritionSuggestionsTab";
+import NutritionHistoryTab from "./nutrition/NutritionHistoryTab";
 import SavedFoodsTab from "./nutrition/SavedFoodsTab";
 import {
   getActiveNutritionPlan,
@@ -190,7 +191,7 @@ export default function Nutrition() {
   const askNutritionCoach = (prompt: string) => {
     navigation.navigate("AIHub", { coachMode: "nutrition", prompt });
   };
-  const [hubTab, setHubTab] = useState<"today" | "plan" | "updates" | "foods">("today");
+  const [hubTab, setHubTab] = useState<"today" | "plan" | "updates" | "foods" | "history">("today");
   const [pendingUpdates, setPendingUpdates] = useState(0);
   const [activePlan, setActivePlan] = useState<NutritionPlan | null>(null);
   const [entries, setEntries] = useState<MacroEntry[]>([]);
@@ -220,7 +221,14 @@ export default function Nutrition() {
 
   useEffect(() => {
     const tab = route.params?.tab;
-    if (tab === "foods" || tab === "plan" || tab === "today" || tab === "updates" || tab === "suggestions") {
+    if (
+      tab === "foods" ||
+      tab === "plan" ||
+      tab === "today" ||
+      tab === "updates" ||
+      tab === "suggestions" ||
+      tab === "history"
+    ) {
       setHubTab(tab === "suggestions" ? "updates" : tab);
     }
   }, [route.params?.tab]);
@@ -624,17 +632,23 @@ export default function Nutrition() {
   return (
     <View style={styles.container}>
       <View style={styles.hubHeader}>
-        <View style={styles.hubTabs}>
-          {(["today", "plan", "updates", "foods"] as const).map((tab) => {
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.hubTabs}
+        >
+          {(["today", "history", "plan", "updates", "foods"] as const).map((tab) => {
             const active = hubTab === tab;
             const label =
               tab === "today"
                 ? "Today"
-                : tab === "plan"
-                  ? "Plan"
-                  : tab === "updates"
-                    ? "Updates"
-                    : "Foods";
+                : tab === "history"
+                  ? "History"
+                  : tab === "plan"
+                    ? "Plan"
+                    : tab === "updates"
+                      ? "Updates"
+                      : "Foods";
             return (
               <TouchableOpacity key={tab} style={styles.hubTab} onPress={() => setHubTab(tab)}>
                 <View style={styles.hubTabLabelRow}>
@@ -651,7 +665,7 @@ export default function Nutrition() {
               </TouchableOpacity>
             );
           })}
-        </View>
+        </ScrollView>
       </View>
 
       {hubTab === "plan" ? (
@@ -667,6 +681,8 @@ export default function Nutrition() {
         />
       ) : hubTab === "foods" ? (
         <SavedFoodsTab />
+      ) : hubTab === "history" ? (
+        <NutritionHistoryTab />
       ) : (
         <ScrollView
           style={{ flex: 1 }}
@@ -1233,13 +1249,13 @@ const styles = StyleSheet.create({
   hubHeader: {
     paddingTop: Platform.OS === "ios" ? 54 : StatusBar.currentHeight ? StatusBar.currentHeight + 8 : 8,
     backgroundColor: colors.background,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
   hubTabs: {
     flexDirection: "row",
-    gap: 24,
+    gap: 20,
     paddingHorizontal: spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
   hubTab: { paddingVertical: 12, position: "relative" },
   hubTabLabelRow: { flexDirection: "row", alignItems: "center", gap: 6 },

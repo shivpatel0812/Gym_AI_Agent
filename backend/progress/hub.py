@@ -20,10 +20,14 @@ from nutrition.targets import resolve_targets
 from . import index as index_mod
 from .domains import (
     Domain,
+    build_activity,
     build_body,
     build_consistency,
+    build_hydration,
     build_nutrition,
+    build_sleep,
     build_strength,
+    build_stress,
     goal_direction,
 )
 from .scan_compare import build_scan_compare
@@ -120,6 +124,10 @@ class ProgressHubBuilder:
         sessions = self._dated("workout_sessions", since)
         macro_rows = self._dated("macros", since)
         weigh_ins = self._dated("weigh_ins", since)
+        sleep_rows = self._dated("sleep", since)
+        hydration_rows = self._dated("hydration", since)
+        stress_rows = self._dated("stress", since)
+        activity_rows = self._dated("physical_activities", since)
         profile = self._profile()
         nutrition_plan = self._nutrition_plan() or {}
         workout_plan = self._workout_plan() or {}
@@ -134,7 +142,16 @@ class ProgressHubBuilder:
             profile.get("nutrition_targets"), nutrition_plan.get("targets")
         )
 
-        weeks_with_any_data = self._weeks_with_data(axis, sessions, macro_rows, weigh_ins)
+        weeks_with_any_data = self._weeks_with_data(
+            axis,
+            sessions,
+            macro_rows,
+            weigh_ins,
+            sleep_rows,
+            hydration_rows,
+            stress_rows,
+            activity_rows,
+        )
 
         domains: List[Domain] = [
             build_strength(sessions, axis),
@@ -143,6 +160,12 @@ class ProgressHubBuilder:
             ),
             build_nutrition(macro_rows, axis, targets),
             build_body(weigh_ins, axis, goal),
+            # Optional lifestyle — each returns unavailable_reason until the
+            # user has enough logs; build_series then drops them from the mean.
+            build_sleep(sleep_rows, axis, profile.get("sleep_goal")),
+            build_hydration(hydration_rows, axis, profile.get("hydration_goal")),
+            build_stress(stress_rows, axis, profile.get("typical_stress_level")),
+            build_activity(activity_rows, axis, profile.get("steps_goal")),
         ]
 
         planned_low = self._planned_low_weeks(axis, nutrition_plan)
@@ -177,7 +200,17 @@ class ProgressHubBuilder:
             ],
             "domains": [self._domain_payload(d, levers) for d in domains],
             "events": events,
-            "coverage": self._coverage(axis, sessions, macro_rows, weigh_ins, weeks_with_any_data),
+            "coverage": self._coverage(
+                axis,
+                sessions,
+                macro_rows,
+                weigh_ins,
+                sleep_rows,
+                hydration_rows,
+                stress_rows,
+                activity_rows,
+                weeks_with_any_data,
+            ),
             "scan_compare": build_scan_compare(scans, axis),
             "weights": index_mod.weights_for(direction),
         }
@@ -229,19 +262,19 @@ class ProgressHubBuilder:
     @staticmethod
     def _weeks_with_data(
         axis: List[str],
-        sessions: List[Dict[str, Any]],
-        macro_rows: List[Dict[str, Any]],
-        weigh_ins: List[Dict[str, Any]],
+        *row_groups: List[Dict[str, Any]],
     ) -> Dict[str, bool]:
         """
         Did the user log anything at all this week?
 
         This is what separates "missed my workouts" from "was not using the
         app". Food logged with no sessions is real evidence of missed
-        sessions; a completely silent week is evidence of nothing.
+        sessions; a completely silent week is evidence of nothing. Sleep,
+        hydration, stress and steps count the same way — they prove the week
+        was observed.
         """
         present = {w: False for w in axis}
-        for rows in (sessions, macro_rows, weigh_ins):
+        for rows in row_groups:
             for row in rows or []:
                 week = week_start_of(row.get("date"))
                 if week in present:
@@ -270,6 +303,10 @@ class ProgressHubBuilder:
         sessions: List[Dict[str, Any]],
         macro_rows: List[Dict[str, Any]],
         weigh_ins: List[Dict[str, Any]],
+        sleep_rows: List[Dict[str, Any]],
+        hydration_rows: List[Dict[str, Any]],
+        stress_rows: List[Dict[str, Any]],
+        activity_rows: List[Dict[str, Any]],
         weeks_with_any_data: Dict[str, bool],
     ) -> Dict[str, Any]:
         last_week = axis[-1] if axis else None
@@ -282,6 +319,16 @@ class ProgressHubBuilder:
             "sessions_logged": len(session_days),
             "days_food_logged": len(food_days),
             "weigh_ins": len(weigh_ins),
+            "nights_sleep_logged": len({str(r.get("date"))[:10] for r in sleep_rows}),
+            "days_hydration_logged": len({str(r.get("date"))[:10] for r in hydration_rows}),
+            "days_stress_logged": len({str(r.get("date"))[:10] for r in stress_rows}),
+            "days_activity_logged": len(
+                {
+                    str(r.get("date"))[:10]
+                    for r in activity_rows
+                    if (r.get("steps") or 0)
+                }
+            ),
             "days_logged_this_week": len({str(r.get("date"))[:10] for r in last_bucket}),
         }
 
@@ -306,15 +353,27 @@ class ProgressHubBuilder:
         strength = next((d for d in domains if d.key == "strength"), None)
         if strength:
             for position in (strength.detail.get("positions") or [])[:5]:
-                if position["change_pct"] > 0:
-                    events.append(
-                        {
-                            "week_start": axis[-1],
-                            "kind": "pr",
-                            "title": f"{position['name']} up {position['change_pct']:.0f}%",
-                            "detail": f"Peak e1RM {position['peak_e1rm']} lb, from {position['baseline_e1rm']} lb.",
-                        }
-                    )
+                if position["change_pct"] <= 0:
+                    continue
+                # Stamp the week the peak was earned, not the latest axis week.
+                # Tagging axis[-1] made every range-wide gain look like it
+                # happened "this week" under the scrub card.
+                peak_week = position.get("peak_week")
+                if not peak_week:
+                    for row in position.get("history") or []:
+                        if row.get("is_peak") and row.get("week_start"):
+                            peak_week = row["week_start"]
+                            break
+                if peak_week not in allowed:
+                    continue
+                events.append(
+                    {
+                        "week_start": peak_week,
+                        "kind": "pr",
+                        "title": f"{position['name']} up {position['change_pct']:.0f}%",
+                        "detail": f"Peak e1RM {position['peak_e1rm']} lb, from {position['baseline_e1rm']} lb.",
+                    }
+                )
 
         for scan in scans:
             week = week_start_of(scan.get("date") or scan.get("created_at"))
@@ -363,9 +422,13 @@ def _lever_for(domain_key: str, levers: List[Dict[str, Any]]) -> Optional[Dict[s
     """
     mapping = {
         "nutrition": {"protein", "calories", "fiber", "carbs", "fats"},
-        "consistency": {"steps"},
-        "body": {"hydration"},
-        "strength": {"sleep_hours", "stress"},
+        "consistency": set(),
+        "body": set(),
+        "strength": set(),
+        "sleep": {"sleep_hours", "sleep_quality"},
+        "hydration": {"hydration"},
+        "stress": {"stress"},
+        "activity": {"steps"},
     }
     keys = mapping.get(domain_key, set())
     for lever in levers:

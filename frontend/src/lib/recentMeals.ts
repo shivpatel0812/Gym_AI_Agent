@@ -8,6 +8,8 @@ export type RecentMealPick = {
   carbs?: number;
   fats?: number;
   fiber?: number;
+  sugar?: number;
+  sodium?: number;
   amount?: string;
   meal?: string;
   date?: string;
@@ -104,6 +106,8 @@ export function extractRecentMeals(
         carbs: food.carbs != null ? Number(food.carbs) : undefined,
         fats: food.fats != null ? Number(food.fats) : undefined,
         fiber: food.fiber != null ? Number(food.fiber) : undefined,
+        sugar: food.sugar != null ? Number(food.sugar) : undefined,
+        sodium: food.sodium != null ? Number(food.sodium) : undefined,
         amount: food.amount ? String(food.amount) : undefined,
         meal: food.meal ? String(food.meal) : displayMealLabel(want || "lunch"),
         date,

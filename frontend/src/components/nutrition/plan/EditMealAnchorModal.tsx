@@ -356,9 +356,9 @@ export default function EditMealAnchorModal({
             <View style={styles.chipRow}>
               {(
                 [
-                  ["individual", "Individual", bp.accent, bp.accentSoft],
-                  ["potential", "Potential", bp.potential, bp.potentialSoft],
-                  ["uncertain", "Uncertain", bp.uncertain, bp.uncertainSoft],
+                  ["individual", "Anchor", bp.accent, bp.accentSoft],
+                  ["potential", "Options", bp.potential, bp.potentialSoft],
+                  ["uncertain", "To decide", bp.uncertain, bp.uncertainSoft],
                 ] as const
               ).map(([id, text, color, soft]) => {
                 const on = mealKind === id;
@@ -411,10 +411,9 @@ export default function EditMealAnchorModal({
               </View>
             ) : null}
 
-            <Text style={styles.label}>Days you're certain</Text>
+            <Text style={styles.label}>Which days do you eat this?</Text>
             <Text style={styles.hint}>
-              Turn on days you know this meal. Leave Thu–Sun off if those are uncertain — keep the meal
-              slot on Uncertain and add places there.
+              Pick the days for this anchor. You can keep different favorites on other days.
             </Text>
             <View style={styles.chipRow}>
               {WEEKDAY_OPTIONS.map((d) => {
@@ -422,6 +421,9 @@ export default function EditMealAnchorModal({
                 return (
                   <TouchableOpacity
                     key={d.id}
+                    accessibilityRole="checkbox"
+                    accessibilityLabel={d.label}
+                    accessibilityState={{ checked: on }}
                     style={[styles.dayChip, on && styles.dayChipOn]}
                     onPress={() =>
                       setDays((prev) =>
@@ -430,7 +432,7 @@ export default function EditMealAnchorModal({
                     }
                   >
                     <Text style={[styles.dayChipText, on && styles.dayChipTextOn]}>
-                      {d.short || d.label.slice(0, 1)}
+                      {d.label}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -438,7 +440,7 @@ export default function EditMealAnchorModal({
             </View>
             {days.length > 0 && days.length < 7 ? (
               <Text style={styles.hint}>
-                Open / uncertain:{" "}
+                Other days:{" "}
                 {WEEKDAY_OPTIONS.filter((d) => !days.includes(d.id))
                   .map((d) => d.label)
                   .join(", ")}
@@ -462,6 +464,7 @@ export default function EditMealAnchorModal({
               </TouchableOpacity>
             </View>
 
+            {!days.length ? <>
             <Text style={styles.label}>How often (if no days picked)</Text>
             <View style={styles.chipRow}>
               {FREQUENCY_OPTIONS.map((f) => (
@@ -474,6 +477,8 @@ export default function EditMealAnchorModal({
                 </TouchableOpacity>
               ))}
             </View>
+
+            </> : null}
 
             <Text style={styles.label}>
               {uncertain
@@ -489,7 +494,7 @@ export default function EditMealAnchorModal({
                   ? "Attach 3–4 previous meals as options — pick one when you eat."
                   : alternateForKey
                     ? "Pick another food that also counts for this slot (e.g. another yogurt)."
-                    : "Each card is one meal slot. Add alternates or “any similar” so Previous still matches."}
+                    : "Foods you eat together make one anchor. Add alternates when you switch brands or flavors."}
             </Text>
             {varies || uncertain ? (
               <TouchableOpacity

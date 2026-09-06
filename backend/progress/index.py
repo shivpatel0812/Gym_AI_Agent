@@ -33,14 +33,46 @@ overnight drop, so a change to the weights below is a new version, not an edit.
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
-FORMULA_VERSION = "v1"
+FORMULA_VERSION = "v2"
 
 # Which domains matter depends on what the user is training for. A cut lives or
 # dies on nutrition; a bulk is judged mostly on whether the lifts moved.
+#
+# Sleep / hydration / stress / activity are optional: they only enter the
+# weighted mean when that domain has a level that week. Missing ones are left
+# out of total_weight, never scored as zero — same stance as body without
+# weigh-ins. Absolute weights need not sum to 1; build_series renormalizes.
 GOAL_WEIGHTS = {
-    "cut": {"strength": 0.25, "consistency": 0.25, "nutrition": 0.30, "body": 0.20},
-    "gain": {"strength": 0.35, "consistency": 0.25, "nutrition": 0.25, "body": 0.15},
-    "maintain": {"strength": 0.30, "consistency": 0.30, "nutrition": 0.25, "body": 0.15},
+    "cut": {
+        "strength": 0.25,
+        "consistency": 0.25,
+        "nutrition": 0.30,
+        "body": 0.20,
+        "sleep": 0.10,
+        "hydration": 0.05,
+        "stress": 0.05,
+        "activity": 0.05,
+    },
+    "gain": {
+        "strength": 0.35,
+        "consistency": 0.25,
+        "nutrition": 0.25,
+        "body": 0.15,
+        "sleep": 0.10,
+        "hydration": 0.05,
+        "stress": 0.05,
+        "activity": 0.05,
+    },
+    "maintain": {
+        "strength": 0.30,
+        "consistency": 0.30,
+        "nutrition": 0.25,
+        "body": 0.15,
+        "sleep": 0.10,
+        "hydration": 0.05,
+        "stress": 0.05,
+        "activity": 0.05,
+    },
 }
 
 # The band never collapses below this. A user with three tidy weeks has almost

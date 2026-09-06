@@ -200,3 +200,38 @@ describe("uncounted items", () => {
     expect(parsed?.analysis.uncounted).toEqual([]);
   });
 });
+
+describe("sugar and sodium", () => {
+  it("keeps unknown values distinct from zero", () => {
+    const parsed = toPhotoEstimate({ name: "Meal", sugar: null, sodium: "" })!;
+    expect(parsed.sugar).toBeUndefined();
+    expect(parsed.sodium).toBeUndefined();
+    expect(scalePhotoEstimate(parsed, 3).sodium).toBeUndefined();
+    const zero = toPhotoEstimate({ name: "Meal", sugar: 0, sodium: 0 })!;
+    expect(zero.sugar).toBe(0);
+    expect(zero.sodium).toBe(0);
+  });
+
+  it("scales nutrients with the portion and servings, but not cooking oil", () => {
+    const base = { ...estimate, sugar: 12.5, sodium: 600 };
+    const smaller = adjustPhotoEstimate(base, "smaller", "generous");
+    expect(smaller.sugar).toBe(10);
+    expect(smaller.sodium).toBe(480);
+    const twice = scalePhotoEstimate(smaller, 2);
+    expect(twice.sugar).toBe(20);
+    expect(twice.sodium).toBe(960);
+    expect(adjustPhotoEstimate(base, "estimated", "light").sodium).toBe(600);
+  });
+
+  it("carries component nutrients and rejects malformed values", () => {
+    const parsed = toPhotoEstimate({
+      food: { name: "Meal", sugar: -5, sodium: Infinity },
+      analysis: { components: [{ name: "Rice", sugar: 1.5, sodium: 200 }] },
+    })!;
+    expect(parsed.sugar).toBeUndefined();
+    expect(parsed.sodium).toBeUndefined();
+    const scaled = scalePhotoEstimate(parsed, 2).analysis.components[0];
+    expect(scaled.sugar).toBe(3);
+    expect(scaled.sodium).toBe(400);
+  });
+});

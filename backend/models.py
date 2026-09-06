@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
 
 class WorkoutType(str, Enum):
@@ -73,8 +73,9 @@ class FoodItem(BaseModel):
     protein: float
     carbs: Optional[float] = None
     fats: Optional[float] = None
+    sugar: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     fiber: Optional[float] = None
-    sodium: Optional[float] = None
+    sodium: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     meal: Optional[str] = None
     amount: Optional[str] = None
     # How many units this row represents. The macro fields above are always the
@@ -117,6 +118,8 @@ class SavedFood(BaseModel):
     protein: float
     carbs: Optional[float] = 0
     fats: Optional[float] = 0
+    sodium: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    sugar: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     fiber: Optional[float] = 0
     aliases: Optional[List[str]] = None
     # Request-only hints used to calibrate repeated photo corrections. The
@@ -133,6 +136,8 @@ class SavedFoodUpdate(BaseModel):
     protein: Optional[float] = None
     carbs: Optional[float] = None
     fats: Optional[float] = None
+    sodium: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    sugar: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     fiber: Optional[float] = None
     aliases: Optional[List[str]] = None
 
@@ -158,6 +163,8 @@ class AcceptedEstimateRequest(BaseModel):
     protein: float
     carbs: Optional[float] = None
     fats: Optional[float] = None
+    sodium: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    sugar: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     fiber: Optional[float] = None
     name: Optional[str] = None
     amount: Optional[str] = None

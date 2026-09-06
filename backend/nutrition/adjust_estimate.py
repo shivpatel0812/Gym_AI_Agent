@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from ai_models import completion_kwargs, is_gpt5_family, resolve_model
 from .gpt_fallback import get_openai_client
+from .nutrients import NUTRIENT_RULES, optional_nutrients
 from .gpt_food_lookup import MAX_CALORIES, _parse_json, finalize_estimated_macros
 from .photo_estimate import normalize_components
 
@@ -55,19 +56,24 @@ Always return a fenced JSON block (```json ... ```) with this shape:
   "name": "food name",
   "amount": "portion description",
   "components": [
-    {"item": "chapati", "amount": "1 medium", "calories": 130, "protein": 4, "carbs": 26, "fats": 1, "fiber": 1.5}
+    {"item": "chapati", "amount": "1 medium", "calories": 130, "protein": 4, "carbs": 26, "fats": 1, "fiber": 1.5, "sugar": 0.5, "sodium": 100}
   ],
   "calories": number,
   "protein": number,
   "carbs": number,
   "fats": number,
   "fiber": number,
+  "sugar": number or null,
+  "sodium": number or null,
   "revision_note": "what changed"
 }
 
 Round calories to whole numbers. Round macros to 1 decimal.
 Calories must be consistent with 4*protein + 4*carbs + 9*fats (within 20 kcal).
 """
+
+
+SYSTEM_PROMPT += "\n" + NUTRIENT_RULES
 
 
 def _component_ledger(components: Any) -> str:
@@ -80,7 +86,8 @@ def _component_ledger(components: Any) -> str:
         amount = f" ({row['amount']})" if row.get("amount") else ""
         lines.append(
             f"    - {row['name']}{amount}: {row['calories']} kcal, "
-            f"{row['protein']}p / {row['carbs']}c / {row['fats']}f"
+            f"{row['protein']}p / {row['carbs']}c / {row['fats']}f, "
+            f"sugar {row.get('sugar')}g / sodium {row.get('sodium')}mg"
         )
     return "\n".join(lines)
 
@@ -108,6 +115,7 @@ def _estimate_context(estimate: Dict) -> str:
         f"  Amount: {amount or '(estimated portion)'}\n"
         f"  Calories: {cal}  Protein: {pro}g  Carbs: {carbs}g  Fat: {fats}g  Fiber: {fiber}g\n"
         f"{_component_ledger(estimate.get('components'))}\n"
+        f"  Sugar: {estimate.get('sugar')}g  Sodium: {estimate.get('sodium')}mg\n"
         f"  Notes: {note_str}"
     )
 
@@ -200,6 +208,7 @@ def _finalize(parsed: Dict, current: Dict) -> Dict:
         "carbs": carbs,
         "fats": fats,
         "fiber": fiber,
+        **optional_nutrients(parsed),
         "components": components,
         "revision_note": str(parsed.get("revision_note", "")).strip()[:200] or None,
     }

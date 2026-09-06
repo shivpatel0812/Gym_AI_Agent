@@ -1,3 +1,4 @@
+import { optionalNutrient } from "./photoEstimate";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -26,6 +27,8 @@ function toItem(raw: any): FoodDbItem {
     carbs: Number(raw.carbs) || 0,
     fats: Number(raw.fats) || 0,
     fiber: Number(raw.fiber) || 0,
+    sugar: optionalNutrient(raw.sugar),
+    sodium: optionalNutrient(raw.sodium),
     aliases: Array.isArray(raw.aliases) ? raw.aliases : [],
   };
 }
@@ -89,6 +92,8 @@ export default function SavedFoodsTab() {
         carbs: Number(editing.carbs) || 0,
         fats: Number(editing.fats) || 0,
         fiber: Number(editing.fiber) || 0,
+        sugar: optionalNutrient(editing.sugar) ?? null,
+        sodium: optionalNutrient(editing.sodium) ?? null,
       });
       const next = toItem(res.data);
       setFoods((prev) => prev.map((f) => (f.id === next.id ? next : f)));
@@ -194,6 +199,8 @@ export default function SavedFoodsTab() {
                 ["carbs", "C"],
                 ["fats", "F"],
                 ["fiber", "Fi"],
+                ["sugar", "Sugar (g)"],
+                ["sodium", "Sodium (mg)"],
               ] as const
             ).map(([key, short]) => (
               <View key={key} style={styles.macroField}>
@@ -203,7 +210,7 @@ export default function SavedFoodsTab() {
                   keyboardType="numeric"
                   value={editing[key] != null ? String(editing[key]) : ""}
                   onChangeText={(v) =>
-                    setEditing({ ...editing, [key]: v === "" ? 0 : Number(v) || 0 })
+                    setEditing({ ...editing, [key]: key === "sugar" || key === "sodium" ? optionalNutrient(v) : v === "" ? 0 : Number(v) || 0 })
                   }
                 />
               </View>
@@ -288,8 +295,8 @@ const styles = StyleSheet.create({
   },
   editorTitle: { fontSize: 15, fontWeight: "700", color: colors.textPrimary, marginBottom: 4 },
   label: { fontSize: 11, fontWeight: "700", color: colors.textMuted, marginTop: 6 },
-  macroRow: { flexDirection: "row", gap: 6, marginTop: 8 },
-  macroField: { flex: 1 },
+  macroRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
+  macroField: { flexGrow: 1, flexBasis: "28%" },
   macroLabel: { fontSize: 10, fontWeight: "700", color: colors.textMuted, marginBottom: 2 },
   macroInput: {
     ...field,

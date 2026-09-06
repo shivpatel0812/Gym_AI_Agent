@@ -28,6 +28,8 @@ export function scaleFoodItem(base: FoodItem, quantity: number): FoodItem {
     carbs: round1((Number(base.carbs) || 0) * qty),
     fats: round1((Number(base.fats) || 0) * qty),
     fiber: round1((Number(base.fiber) || 0) * qty),
+    sugar: base.sugar == null ? undefined : round1(base.sugar * qty),
+    sodium: base.sodium == null ? undefined : Math.round(base.sodium * qty),
     quantity: qty,
     unit_amount: unit,
     amount: qty > 1 ? (unit ? `${qty} × ${unit}` : `×${qty}`) : unit,

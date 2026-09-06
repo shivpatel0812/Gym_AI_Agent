@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import {
   DayMapSlot,
   SLOT_TIME_LABELS,
   SlotSection,
+  mealItemsForDay,
 } from "../../../lib/dayMap";
 import {
   AnchorVerdict,
@@ -56,10 +57,11 @@ export type SlotIdea = {
 
 interface Props {
   map: DayMapModel;
+  planRevision?: string;
   onEditStrategy?: () => void;
   strategyExpanded?: boolean;
-  onAddAnchor?: (slot: PrimaryMealSlot, kind?: "individual" | "potential" | "uncertain") => void;
-  onAddGoTo?: (slot: PrimaryMealSlot) => void;
+  onAddAnchor?: (slot: PrimaryMealSlot, kind?: "individual" | "potential" | "uncertain", day?: string) => void;
+  onAddGoTo?: (slot: PrimaryMealSlot, day?: string) => void;
   onPressSlot?: (slot: DayMapSlot) => void;
   /** Toggle a weekday on an individual meal / go-to row. */
   onToggleDay?: (slot: DayMapSlot, dayId: string) => void;
@@ -67,7 +69,7 @@ interface Props {
   onPreloadSlot?: (slot: PrimaryMealSlot) => void;
   suggestingSlot?: string | null;
   slotIdeas?: Record<string, SlotIdea[]> | SlotIdea[];
-  onAddIdea?: (idea: SlotIdea, slot: PrimaryMealSlot) => void;
+  onAddIdea?: (idea: SlotIdea, slot: PrimaryMealSlot, day?: string) => void;
   /** Raw macro log rows — used to show last-month eats under each meal slot. */
   macroLogs?: any[];
   onAddLoggedMeal?: (pattern: LoggedMealPattern, slot: PrimaryMealSlot) => void;
@@ -187,58 +189,153 @@ function ideaMacros(idea: SlotIdea) {
   return { cal, pro, carbs, fats };
 }
 
-export default function DayMap({
-  map,
-  onEditStrategy,
-  strategyExpanded,
-  onAddAnchor,
-  onAddGoTo,
-  onPressSlot,
-  onToggleDay,
-  onSuggestSlot,
-  onPreloadSlot,
-  suggestingSlot,
-  slotIdeas,
-  onAddIdea,
-  macroLogs,
-  onAddLoggedMeal,
-  onAddPlace,
-  onSuggestOrders,
-  suggestingPlaceId,
-  orderSuggestions,
-  onLogOrder,
-  anchorVerdicts,
-  slotGuidance,
-  optionsAnchors,
-  onAddOptionsAnchor,
-  coachEditsBySlot,
-  coachEditCounts,
-  suggestionsBusy,
-  onAcceptCoachEdit,
-  onDismissCoachEdit,
-  onEditCoachEdit,
-}: Props) {
+export default function DayMap(props: Props) {
+  const { map, suggestingSlot, onPreloadSlot, planRevision } = props;
+  const [day, setDay] = useState(() => ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()]);
+  const [weekOpen, setWeekOpen] = useState(false);
+  const requested = useRef<{ revision?: string; slots: Set<string> }>({ slots: new Set() });
+  useEffect(() => {
+    if (requested.current.revision !== planRevision) {
+      requested.current = { revision: planRevision, slots: new Set() };
+    }
+    // Preload one meal at a time. The API reuses ideas cached for this plan version.
+    if (suggestingSlot || !onPreloadSlot) return;
+    const next = map.sections.find((section) => !requested.current.slots.has(section.slot));
+    if (next) {
+      requested.current.slots.add(next.slot);
+      onPreloadSlot(next.slot);
+    }
+  }, [map.sections, suggestingSlot, onPreloadSlot, planRevision]);
+  const dayLabel = WEEKDAY_OPTIONS.find((d) => d.id === day)?.label || day;
+  const maxBar = Math.max(map.stack.target || 1, ...map.weeklyBars.map((b) => b.calories), 1);
+  return (
+    <View style={styles.wrap}>
+      <View style={styles.heroHead}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.kicker, { color: THEME.muted }]}>YOUR WEEK, MEAL BY MEAL</Text>
+          <Text style={styles.headline}>Plan around what you love</Text>
+          <Text style={plannerStyles.intro}>Choose a day. Keep your go-to foods as anchors, then explore AI options around them.</Text>
+        </View>
+      </View>
+      <View style={plannerStyles.days} accessibilityRole="tablist">
+        {WEEKDAY_OPTIONS.map((d) => (
+          <TouchableOpacity key={d.id} accessibilityRole="tab" accessibilityLabel={`${d.label} meal plan`}
+            accessibilityState={{ selected: day === d.id }} onPress={() => setDay(d.id)}
+            style={[plannerStyles.day, day === d.id && plannerStyles.daySelected]}>
+            <Text style={[plannerStyles.dayText, day === d.id && plannerStyles.dayTextSelected]}>{d.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <View style={plannerStyles.summary}>
+        <Text style={plannerStyles.summaryTitle}>{dayLabel} · your meal plan</Text>
+        <Text style={plannerStyles.subtle}>{[map.stack.target > 1 ? `${Math.round(map.stack.target)} kcal / day` : null,
+          map.proteinTarget > 0 ? `${Math.round(map.proteinTarget)}g protein` : null].filter(Boolean).join(" · ")}</Text>
+      </View>
+      {map.sections.map((section) => <MealDayCard key={section.slot} {...props} section={section} day={day} />)}
+      <TouchableOpacity style={plannerStyles.detailsButton} accessibilityRole="button"
+        accessibilityState={{ expanded: weekOpen }} onPress={() => setWeekOpen((v) => !v)}>
+        <Text style={plannerStyles.detailsText}>Weekly overview</Text>
+        <MaterialCommunityIcons name={weekOpen ? "chevron-up" : "chevron-down"} size={20} color={THEME.muted} />
+      </TouchableOpacity>
+      {weekOpen ? <View style={styles.weekCard}>
+        <Text style={styles.weekCardKicker}>PLANNED CALORIES · WEEKLY ESTIMATE</Text>
+        <View style={styles.barsRow}>{map.weeklyBars.map((bar) => <View key={bar.id} style={styles.barCol}>
+          <View style={styles.barTrack}><View style={[styles.barFill, { height: Math.max(6, bar.calories / maxBar * 72) }]} /></View>
+          <Text style={styles.barLabel}>{bar.label}</Text>
+        </View>)}</View>
+        <Text style={plannerStyles.subtle}>{map.headline}</Text>
+        <Text style={plannerStyles.subtle}>~{map.weeklyAvg.toLocaleString()} average kcal/day · {Math.round(map.stack.target)} target</Text>
+      </View> : null}
+      {props.onEditStrategy ? <TouchableOpacity onPress={props.onEditStrategy} style={plannerStyles.detailsButton}>
+        <Text style={plannerStyles.detailsText}>{props.strategyExpanded ? "Hide plan settings" : "Plan targets & preferences"}</Text>
+      </TouchableOpacity> : null}
+    </View>
+  );
+}
+
+function MealDayCard(props: Props & { section: SlotSection; day: string }) {
+  const { section, day, slotIdeas, suggestingSlot, onAddAnchor, onAddGoTo, onPressSlot, onAddIdea, onSuggestSlot } = props;
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const { anchors, goTos } = mealItemsForDay(section, day);
+  const items = [...anchors, ...goTos];
+  const ideas = Array.isArray(slotIdeas) ? slotIdeas : slotIdeas?.[section.slot] || [];
+  const busy = suggestingSlot === section.slot;
+  const dayLabel = WEEKDAY_OPTIONS.find((d) => d.id === day)?.label || day;
+  return <View style={plannerStyles.mealCard} testID={`meal-plan-${section.slot}`}>
+    <View style={plannerStyles.mealHeading}>
+      <View style={plannerStyles.mealIcon}><MaterialCommunityIcons name={slotIcon(section.slot)} size={22} color={THEME.accent} /></View>
+      <View style={{ flex: 1 }}><Text style={plannerStyles.mealTitle}>{section.label}</Text>
+        {section.targetHeadline ? <Text style={plannerStyles.subtle}>{section.targetHeadline}</Text> : null}
+      </View>
+      {onAddAnchor ? <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Add ${section.label.toLowerCase()} anchor for ${dayLabel}`}
+        onPress={() => onAddAnchor(section.slot, "individual", day)} style={plannerStyles.addButton}>
+        <MaterialCommunityIcons name="plus" size={16} color={THEME.accent} /><Text style={plannerStyles.addText}>Add anchor</Text>
+      </TouchableOpacity> : null}
+    </View>
+    <Text style={plannerStyles.sectionLabel}>YOUR GO-TO FOODS & ANCHORS</Text>
+    {items.map((item) => <TouchableOpacity key={item.id} onPress={() => onPressSlot?.(item)}
+      accessibilityRole="button" accessibilityLabel={`Edit ${item.title}`} style={plannerStyles.foodRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={plannerStyles.foodTitle}>{item.title}</Text>
+        {item.detail && item.detail !== item.title ? <Text style={plannerStyles.foodDetail}>{item.detail}</Text> : null}
+        <Text style={plannerStyles.foodMeta}>{[
+          item.uncertain ? "To decide" : item.varies ? "Choose one option" : item.kind === "goto" ? "Go-to food" : item.kind === "flexible" ? "Flexible meal" : "Anchor",
+          !item.days?.length ? "Choose days" : item.days.length === 7 ? "Every day" : item.daysText,
+          calorieText(item), proteinText(item),
+        ].filter(Boolean).join(" · ")}</Text>
+        {item.aiPending ? <Text style={plannerStyles.aiLabel}>Coach update ready to review</Text> : null}
+        {item.sourceId && props.anchorVerdicts?.[item.sourceId]?.advice ? <Text style={plannerStyles.foodDetail}>{props.anchorVerdicts[item.sourceId].advice}</Text> : null}
+      </View>
+      <MaterialCommunityIcons name="pencil-outline" size={16} color={THEME.muted} />
+    </TouchableOpacity>)}
+    {!items.length ? <View style={plannerStyles.emptyCard}>
+      <Text style={plannerStyles.emptyTitle}>What do you like for {section.label.toLowerCase()}?</Text>
+      <Text style={plannerStyles.foodDetail}>{section.slot === "breakfast" ? "Add your shake, yogurt and oatmeal as one anchor, or save a few meals to rotate." : "Save a favorite meal for this day. AI can help fill in the rest."}</Text>
+    </View> : null}
+    {onAddGoTo ? <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Add ${section.label.toLowerCase()} go-to food for ${dayLabel}`}
+      onPress={() => onAddGoTo(section.slot, day)}><Text style={plannerStyles.inlineAction}>+ Add a go-to food</Text></TouchableOpacity> : null}
+    <View style={plannerStyles.aiSection}>
+      <View style={plannerStyles.mealHeading}>
+        <MaterialCommunityIcons name="auto-fix" size={16} color={THEME.ai} />
+        <Text style={plannerStyles.aiLabel}>AI OPTIONS FOR {section.label.toUpperCase()}</Text>
+        {busy ? <ActivityIndicator size="small" color={THEME.ai} /> : null}
+      </View>
+      <Text style={plannerStyles.subtle}>Ideas around your favorites. Add only the ones you want.</Text>
+      {ideas.map((idea, index) => {
+        const macros = ideaMacros(idea);
+        return <View key={`${idea.label}-${index}`} style={plannerStyles.ideaRow}>
+          <View style={{ flex: 1 }}><Text style={plannerStyles.foodTitle}>{idea.label}</Text>
+            <Text style={plannerStyles.foodMeta}>{[macros.cal ? `${Math.round(macros.cal)} kcal` : null, macros.pro ? `${Math.round(macros.pro)}g protein` : null].filter(Boolean).join(" · ")}</Text>
+            {idea.notes ? <Text style={plannerStyles.foodDetail}>{idea.notes}</Text> : null}
+          </View>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Add ${idea.label} to ${dayLabel} ${section.label.toLowerCase()}`}
+            onPress={() => onAddIdea?.(idea, section.slot, day)} style={plannerStyles.ideaAdd}>
+            <Text style={plannerStyles.aiLabel}>+ Add</Text>
+          </TouchableOpacity>
+        </View>;
+      })}
+      {!ideas.length ? <Text style={plannerStyles.foodDetail}>{busy ? "Finding options that fit your plan…" : "Your meal options will appear here. You can also ask for ideas."}</Text> : null}
+      {onSuggestSlot ? <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Get ${section.label.toLowerCase()} ideas`}
+        disabled={Boolean(suggestingSlot)} onPress={() => onSuggestSlot(section.slot)}>
+        <Text style={[plannerStyles.inlineAction, { color: THEME.ai, opacity: suggestingSlot ? 0.5 : 1 }]}>{ideas.length ? "Find more options" : "Suggest options"}</Text>
+      </TouchableOpacity> : null}
+    </View>
+    <TouchableOpacity accessibilityRole="button" accessibilityLabel={`${section.label} details and weekly schedule`}
+      accessibilityState={{ expanded: detailsOpen }} onPress={() => setDetailsOpen((v) => !v)} style={plannerStyles.detailsButton}>
+      <Text style={plannerStyles.detailsText}>Weekly schedule, options & history</Text>
+      <MaterialCommunityIcons name={detailsOpen ? "chevron-up" : "chevron-down"} size={18} color={THEME.muted} />
+    </TouchableOpacity>
+    {detailsOpen ? <MealDetails {...props} /> : null}
+  </View>;
+}
+
+function MealDetails(props: Props & { section: SlotSection }) {
+  const { map, section, onAddAnchor, onAddGoTo, onPressSlot, onToggleDay, onSuggestSlot,
+    suggestingSlot, macroLogs, onAddLoggedMeal, onAddPlace, onSuggestOrders, suggestingPlaceId,
+    orderSuggestions, onLogOrder, anchorVerdicts, slotGuidance, optionsAnchors, onAddOptionsAnchor,
+    coachEditsBySlot, suggestionsBusy, onAcceptCoachEdit, onDismissCoachEdit, onEditCoachEdit } = props;
   const theme = THEME;
-  const [focusSlot, setFocusSlot] = useState<PrimaryMealSlot>(
-    () => map.sections[0]?.slot || "breakfast"
-  );
-  const section = useMemo(
-    () => map.sections.find((s) => s.slot === focusSlot) || map.sections[0],
-    [map.sections, focusSlot]
-  );
-
-  const maxBar = Math.max(
-    map.stack.target || 1,
-    ...(map.weeklyBars || []).map((b) => b.calories),
-    1
-  );
-  const mappedDays = (map.weeklyBars || []).filter((b) => b.calories > 0).length;
-  const ideasForFocus = useMemo(() => {
-    if (!slotIdeas) return [];
-    if (Array.isArray(slotIdeas)) return slotIdeas;
-    return slotIdeas[focusSlot] || [];
-  }, [slotIdeas, focusSlot]);
-
+  const focusSlot = section.slot;
   const planAnchorsForFocus = useMemo(() => {
     return (map.sections.find((s) => s.slot === focusSlot)?.anchors || [])
       .filter((a) => a.kind === "anchor")
@@ -282,117 +379,7 @@ export default function DayMap({
 
   const weekWindows = useMemo(() => listRecentWeekWindows(5), []);
 
-  useEffect(() => {
-    onPreloadSlot?.(focusSlot);
-    // Only when the focused meal changes — parent guards against re-fetch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusSlot]);
-
   return (
-    <View style={styles.wrap}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.slotTabs}
-      >
-        {map.sections.map((s) => {
-          const on = s.slot === focusSlot;
-          return (
-            <TouchableOpacity
-              key={s.slot}
-              style={[
-                styles.slotTab,
-                { borderColor: theme.border, backgroundColor: theme.surface2 },
-                on && {
-                  borderColor: theme.accent,
-                  backgroundColor: theme.accentSoft,
-                },
-              ]}
-              onPress={() => setFocusSlot(s.slot)}
-              activeOpacity={0.85}
-            >
-              <MaterialCommunityIcons
-                name={slotIcon(s.slot)}
-                size={16}
-                color={on ? "#fff" : theme.muted}
-              />
-              <Text style={[styles.slotTabText, on && styles.slotTabTextOn]}>{s.label}</Text>
-              {(coachEditCounts?.[s.slot] || 0) > 0 ? (
-                <View style={[styles.slotTabBadge, { backgroundColor: theme.ai }]}>
-                  <Text style={styles.slotTabBadgeText}>{coachEditCounts?.[s.slot]}</Text>
-                </View>
-              ) : on ? (
-                <View style={[styles.slotTabDot, { backgroundColor: theme.accent }]} />
-              ) : null}
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      <View style={styles.heroHead}>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.kicker, { color: theme.muted }]}>DAY BLUEPRINT</Text>
-          <Text style={styles.headline}>{map.headline}</Text>
-        </View>
-        {onEditStrategy ? (
-          <TouchableOpacity
-            style={[styles.strategyBtn, { borderColor: theme.border }]}
-            onPress={onEditStrategy}
-          >
-            <Text style={styles.strategyBtnText}>
-              {strategyExpanded ? "Hide" : "Strategy"}
-            </Text>
-          </TouchableOpacity>
-        ) : null}
-      </View>
-
-      <View
-        style={[
-          styles.weekCard,
-          { backgroundColor: theme.surface, borderColor: theme.border },
-        ]}
-      >
-        <View style={styles.weekCardTop}>
-          <Text style={styles.weekCardKicker}>WEEKLY CALORIE MAP</Text>
-          <Text style={styles.weekCardAvg}>
-            ~{map.weeklyAvg.toLocaleString()} avg kcal/day
-          </Text>
-        </View>
-        <View style={styles.barsRow}>
-          {(map.weeklyBars || []).map((bar) => {
-            const h = Math.max(6, Math.round((bar.calories / maxBar) * 72));
-            const filled = bar.calories > 0;
-            return (
-              <View key={bar.id} style={styles.barCol}>
-                <View style={styles.barTrack}>
-                  {filled ? (
-                    <View style={[styles.barFill, { height: h }]} />
-                  ) : (
-                    <View style={[styles.barEmpty, { height: 28, borderColor: theme.border }]} />
-                  )}
-                </View>
-                <Text style={styles.barLabel}>{bar.short}</Text>
-              </View>
-            );
-          })}
-        </View>
-        <View style={styles.weekCardFoot}>
-          <Text style={styles.weekCardFootText}>{mappedDays} days mapped</Text>
-          <View style={styles.targetLine}>
-            <View
-              style={[
-                styles.targetRule,
-                { backgroundColor: theme.target, borderStyle: "dashed" },
-              ]}
-            />
-            <Text style={[styles.targetText, { color: theme.target }]}>
-              {Math.round(map.stack.target).toLocaleString()} target
-            </Text>
-          </View>
-        </View>
-      </View>
-
-      {section ? (
         <SlotFocus
           theme={theme}
           section={section}
@@ -421,113 +408,40 @@ export default function DayMap({
           onDismissCoachEdit={onDismissCoachEdit}
           onEditCoachEdit={onEditCoachEdit}
         />
-      ) : null}
-
-      <View style={styles.aiHead}>
-        <MaterialCommunityIcons name="auto-fix" size={14} color={theme.ai} />
-        <Text style={[styles.aiHeadText, { color: theme.ai }]}>AI SUGGESTIONS</Text>
-        <Text style={styles.aiHeadHint}>
-          {ideasForFocus.length
-            ? `· ${ideasForFocus.length} ready`
-            : suggestingSlot === focusSlot
-              ? "· loading…"
-              : "· 1 preloads"}
-        </Text>
-      </View>
-
-      {suggestingSlot === focusSlot && !ideasForFocus.length ? (
-        <View
-          style={[
-            styles.aiCard,
-            {
-              borderColor: `${theme.ai}55`,
-              backgroundColor: theme.surface,
-              width: 220,
-            },
-          ]}
-        >
-          <ActivityIndicator color={theme.ai} />
-          <Text style={[styles.aiLoadingText, { color: theme.ai, marginTop: 8 }]}>
-            Finding one idea…
-          </Text>
-        </View>
-      ) : null}
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.aiRow}
-      >
-        {(ideasForFocus || []).map((idea, i) => {
-          const m = ideaMacros(idea);
-          const tag =
-            idea.tag ||
-            (m.pro && m.pro >= 30 ? "High protein" : idea.notes ? "Suggested" : "Idea");
-          return (
-            <View
-              key={`${idea.label}-${i}`}
-              style={[
-                styles.aiCard,
-                {
-                  borderColor: `${theme.ai}55`,
-                  backgroundColor: theme.surface,
-                },
-              ]}
-            >
-              <View style={styles.aiCardTop}>
-                <View style={[styles.aiTag, { backgroundColor: theme.aiSoft, borderColor: `${theme.ai}66`, borderWidth: 1 }]}>
-                  <Text style={[styles.aiTagText, { color: theme.ai }]}>{tag}</Text>
-                </View>
-                {m.cal ? <Text style={styles.aiCal}>{Math.round(m.cal)} kcal</Text> : null}
-              </View>
-              <Text style={styles.aiTitle}>{idea.label}</Text>
-              <Text style={styles.aiMacros}>
-                {[
-                  m.pro != null && m.pro > 0 ? `${Math.round(m.pro)}g P` : null,
-                  m.carbs != null && m.carbs > 0 ? `${Math.round(m.carbs)}g C` : null,
-                  m.fats != null && m.fats > 0 ? `${Math.round(m.fats)}g F` : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ") || "Tap to add & edit macros"}
-              </Text>
-              {idea.notes ? (
-                <Text style={[styles.aiWhy, { color: `${theme.ai}99` }]} numberOfLines={2}>
-                  {idea.notes}
-                </Text>
-              ) : null}
-              <TouchableOpacity
-                style={[styles.aiAddBtn, { borderColor: `${theme.ai}77` }]}
-                onPress={() => onAddIdea?.(idea, focusSlot)}
-              >
-                <Text style={[styles.aiAddText, { color: theme.ai }]}>Add to meals →</Text>
-              </TouchableOpacity>
-            </View>
-          );
-        })}
-        <TouchableOpacity
-          style={[
-            styles.aiFetchCard,
-            { borderColor: `${theme.ai}55`, backgroundColor: theme.aiSoft },
-          ]}
-          onPress={() => onSuggestSlot?.(focusSlot)}
-          disabled={Boolean(suggestingSlot)}
-        >
-          {suggestingSlot === focusSlot && ideasForFocus.length ? (
-            <ActivityIndicator color={theme.ai} />
-          ) : (
-            <MaterialCommunityIcons name="auto-fix" size={22} color={theme.ai} />
-          )}
-          <Text style={styles.aiFetchTitle}>
-            {ideasForFocus.length ? "More ideas" : "Get an idea"}
-          </Text>
-          <Text style={styles.aiFetchSub}>
-            {ideasForFocus.length ? "Add 2 more" : "Generate with AI"}
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </View>
   );
 }
+
+const plannerStyles = StyleSheet.create({
+  intro: { color: "#A0AAB8", fontSize: 14, lineHeight: 21, marginTop: 8 },
+  days: { flexDirection: "row", gap: 4, backgroundColor: "#11151D", padding: 5, borderRadius: 14 },
+  day: { flex: 1, paddingVertical: 12, alignItems: "center", borderRadius: 10 },
+  daySelected: { backgroundColor: "#F3A86B" },
+  dayText: { color: "#9AA7B8", fontSize: 12, fontWeight: "700" },
+  dayTextSelected: { color: "#17120E" },
+  summary: { gap: 4, paddingVertical: 4 },
+  summaryTitle: { color: "#F5F5F7", fontSize: 16, fontWeight: "700" },
+  subtle: { color: "#9BA7B6", fontSize: 12, lineHeight: 18 },
+  mealCard: { backgroundColor: "#11151D", borderColor: "#2A3443", borderWidth: 1, borderRadius: 20, padding: 16, gap: 12 },
+  mealHeading: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  mealIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: "#F3A86B14", alignItems: "center", justifyContent: "center" },
+  mealTitle: { color: "#F5F5F7", fontSize: 21, fontWeight: "700" },
+  addButton: { flexDirection: "row", gap: 3, alignItems: "center", paddingVertical: 10 },
+  addText: { color: THEME.accent, fontSize: 12, fontWeight: "700" },
+  sectionLabel: { color: "#B3BECB", fontSize: 10, fontWeight: "700", letterSpacing: 1.1, marginTop: 4 },
+  foodRow: { flexDirection: "row", gap: 12, alignItems: "center", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: "#26303D" },
+  foodTitle: { color: "#F0F2F5", fontSize: 15, fontWeight: "600", lineHeight: 21 },
+  foodDetail: { color: "#ABB5C4", fontSize: 13, lineHeight: 19, marginTop: 4 },
+  foodMeta: { color: "#8594A7", fontSize: 11, lineHeight: 17, marginTop: 5 },
+  emptyCard: { paddingVertical: 8 },
+  emptyTitle: { color: "#DCE3EC", fontSize: 14, fontWeight: "600" },
+  inlineAction: { color: THEME.accent, fontSize: 13, fontWeight: "600", paddingVertical: 8 },
+  aiSection: { backgroundColor: "#5EEAD408", borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "#5EEAD424", gap: 8 },
+  aiLabel: { color: THEME.ai, fontSize: 11, fontWeight: "700", letterSpacing: 0.3 },
+  ideaRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#5EEAD41C" },
+  ideaAdd: { borderWidth: 1, borderColor: "#5EEAD444", borderRadius: 9, padding: 10 },
+  detailsButton: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10, paddingVertical: 10 },
+  detailsText: { color: "#A5B0C0", fontSize: 12, fontWeight: "600" },
+});
 
 function SlotFocus({
   theme,
@@ -559,8 +473,8 @@ function SlotFocus({
 }: {
   theme: BlueprintTheme;
   section: SlotSection;
-  onAddAnchor?: (slot: PrimaryMealSlot, kind?: "individual" | "potential" | "uncertain") => void;
-  onAddGoTo?: (slot: PrimaryMealSlot) => void;
+  onAddAnchor?: (slot: PrimaryMealSlot, kind?: "individual" | "potential" | "uncertain", day?: string) => void;
+  onAddGoTo?: (slot: PrimaryMealSlot, day?: string) => void;
   onPressSlot?: (slot: DayMapSlot) => void;
   onToggleDay?: (slot: DayMapSlot, dayId: string) => void;
   onSuggestSlot?: (slot: PrimaryMealSlot) => void;
@@ -701,7 +615,7 @@ function SlotFocus({
         >
           <View style={styles.slotTargetTop}>
             <Text style={[styles.slotTargetLabel, { color: theme.muted }]}>
-              THIS MEAL SHOULD CARRY
+              MEAL TARGET
             </Text>
             {section.targetHeadline ? (
               <Text style={[styles.slotTargetHeadline, { color: theme.accent }]}>
@@ -757,9 +671,9 @@ function SlotFocus({
           [
             ["all", "All"],
             ["individual", "Anchor"],
-            ["potential", "Potential"],
-            ["uncertain", "Uncertain"],
-            ["previous", "Previous"],
+            ["potential", "Options"],
+            ["uncertain", "To decide"],
+            ["previous", "History"],
           ] as const
         ).map(([id, label]) => {
           const on = mealFilter === id;
@@ -1437,7 +1351,7 @@ function MealRow({
                     { color: verdict.verdict === "solid" ? theme.ai : theme.potential },
                   ]}
                 >
-                  {verdict.verdict === "solid" ? "AI approved" : "AI: adjust"}
+                  {verdict.verdict === "solid" ? "Fits your plan" : "AI: adjust"}
                 </Text>
               </View>
             ) : null}

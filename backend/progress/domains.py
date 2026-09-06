@@ -1,5 +1,5 @@
 """
-The four progress domains, each reported as a level and a trend.
+The progress domains, each reported as a level and a trend.
 
 The split is the whole design. A bad week is three different things that look
 identical on a chart:
@@ -21,11 +21,17 @@ Every level is expressed as an index where 100 is that user's own starting
 point or their own plan's expectation — never a population norm. A cut and a
 bulk must both be able to score 100, or it is a fitness score wearing a
 progress score's name.
+
+Lifestyle domains (sleep, hydration, stress, activity) follow the same rule as
+body: absent until there is enough personal logging, then scored against that
+user's own target, never a population default.
 """
 
 from dataclasses import asdict, dataclass, field
 from statistics import median
 from typing import Any, Dict, List, Optional
+
+from metrics.baseline import MIN_SAMPLES, compute_baseline
 
 from .weeks import bucket_by_week, parse_day, week_label, week_start_of
 
@@ -271,6 +277,9 @@ def build_strength(sessions: List[Dict[str, Any]], axis: List[str]) -> Domain:
                     "change_pct": round((peak / baseline - 1) * 100, 1),
                     "weeks_stale": stale_weeks,
                     "estimated": stale_weeks > STALE_AFTER_WEEKS,
+                    # The week the peak was first hit — events must stamp this,
+                    # not "today", or every PR piles onto the current week.
+                    "peak_week": peak_week,
                     "history": history,
                 }
 
@@ -558,6 +567,205 @@ def build_body(
             "weigh_in_count": len(rows),
             "trend": trend,
         },
+    )
+
+
+# Same contract as body: unavailable until there is enough personal evidence,
+# then weekly hit-rate against that user's own target. Declared profile goals
+# win; otherwise the median of what they logged. Population defaults are never
+# invented — that would score someone against a number they never chose.
+
+MIN_LIFESTYLE_LOGS = MIN_SAMPLES
+# Within this band of the personal target a night/day counts as a hit.
+LIFESTYLE_HIT_BAND = 0.10
+
+
+def _numeric_field(rows: List[Dict[str, Any]], field: str) -> List[float]:
+    out: List[float] = []
+    for row in rows or []:
+        try:
+            value = float(row.get(field) or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            out.append(value)
+    return out
+
+
+def _hit_higher(value: float, target: float) -> float:
+    """1.0 within +/- band of target or above it; linear falloff below."""
+    if target <= 0:
+        return 0.0
+    floor = target * (1.0 - LIFESTYLE_HIT_BAND)
+    if value >= floor:
+        return 1.0
+    return max(0.0, value / floor)
+
+
+def _hit_lower(value: float, target: float) -> float:
+    """Lower-is-better (stress). 1.0 at or under target; falls off toward 10."""
+    if target <= 0:
+        return 0.0
+    ceiling = target * (1.0 + LIFESTYLE_HIT_BAND)
+    if value <= ceiling:
+        return 1.0
+    # Past the band, score decays toward the top of a 1–10 scale.
+    span = max(10.0 - ceiling, 1.0)
+    return max(0.0, 1.0 - (value - ceiling) / span)
+
+
+def _build_lifestyle_domain(
+    *,
+    key: str,
+    label: str,
+    rows: List[Dict[str, Any]],
+    axis: List[str],
+    field: str,
+    metric_key: str,
+    declared_target: Optional[float],
+    higher_is_better: bool,
+    unit: str,
+) -> Domain:
+    """
+    Weekly hit-rate against a personal target for a daily log.
+
+    A week with nothing logged contributes no level that week (coverage 0) —
+    the trailing mean then carries prior weeks, same as nutrition. The whole
+    domain stays unavailable until MIN_LIFESTYLE_LOGS exist in range, so a
+    single logged night cannot move the index.
+    """
+    values = _numeric_field(rows, field)
+    baseline = compute_baseline(
+        metric_key, values, declared_target=declared_target, min_samples=MIN_LIFESTYLE_LOGS
+    )
+    if len(values) < MIN_LIFESTYLE_LOGS or not baseline.usable:
+        return Domain(
+            key=key,
+            label=label,
+            unavailable_reason=(
+                f"Needs at least {MIN_LIFESTYLE_LOGS} logged days to read a pattern."
+            ),
+        )
+
+    target = float(baseline.target or 0)
+    by_week = bucket_by_week(rows or [], axis)
+    scorer = _hit_higher if higher_is_better else _hit_lower
+    series: List[WeekPoint] = []
+    rates: List[Optional[float]] = []
+    days_logged_last = 0
+
+    for week in axis:
+        day_rows = by_week.get(week) or []
+        day_scores: List[float] = []
+        for row in day_rows:
+            try:
+                value = float(row.get(field) or 0)
+            except (TypeError, ValueError):
+                continue
+            if value <= 0:
+                continue
+            day_scores.append(scorer(value, target))
+        rate = _mean(day_scores)
+        rates.append(rate)
+        window = [r for r in rates[-TRAILING_WEEKS:] if r is not None]
+        level = _mean(window)
+        if week == axis[-1]:
+            days_logged_last = len(day_scores)
+        series.append(
+            WeekPoint(
+                week_start=week,
+                level=round(level * 100, 1) if level is not None else None,
+                current=round(rate * 100, 1) if rate is not None else None,
+                coverage=round(min(1.0, len(day_scores) / 7), 2),
+            )
+        )
+
+    latest_values = values[-7:] if values else []
+    return Domain(
+        key=key,
+        label=label,
+        series=series,
+        detail={
+            "target": round(target, 1),
+            "target_source": baseline.source,
+            "unit": unit,
+            "logs_in_range": len(values),
+            "days_logged_last_week": days_logged_last,
+            "latest_avg": round(sum(latest_values) / len(latest_values), 1) if latest_values else None,
+            "direction": "higher" if higher_is_better else "lower",
+        },
+    )
+
+
+def build_sleep(
+    sleep_rows: List[Dict[str, Any]],
+    axis: List[str],
+    sleep_goal: Optional[float] = None,
+) -> Domain:
+    return _build_lifestyle_domain(
+        key="sleep",
+        label="Sleep",
+        rows=sleep_rows,
+        axis=axis,
+        field="hours_slept",
+        metric_key="sleep_hours",
+        declared_target=sleep_goal,
+        higher_is_better=True,
+        unit="h",
+    )
+
+
+def build_hydration(
+    hydration_rows: List[Dict[str, Any]],
+    axis: List[str],
+    cups_goal: Optional[float] = None,
+) -> Domain:
+    return _build_lifestyle_domain(
+        key="hydration",
+        label="Hydration",
+        rows=hydration_rows,
+        axis=axis,
+        field="amount_cups",
+        metric_key="hydration",
+        declared_target=cups_goal,
+        higher_is_better=True,
+        unit="cups",
+    )
+
+
+def build_stress(
+    stress_rows: List[Dict[str, Any]],
+    axis: List[str],
+    typical_stress: Optional[float] = None,
+) -> Domain:
+    return _build_lifestyle_domain(
+        key="stress",
+        label="Stress",
+        rows=stress_rows,
+        axis=axis,
+        field="level",
+        metric_key="stress",
+        declared_target=typical_stress,
+        higher_is_better=False,
+        unit="/10",
+    )
+
+
+def build_activity(
+    activity_rows: List[Dict[str, Any]],
+    axis: List[str],
+    steps_goal: Optional[float] = None,
+) -> Domain:
+    return _build_lifestyle_domain(
+        key="activity",
+        label="Activity",
+        rows=activity_rows,
+        axis=axis,
+        field="steps",
+        metric_key="steps",
+        declared_target=steps_goal,
+        higher_is_better=True,
+        unit="steps",
     )
 
 

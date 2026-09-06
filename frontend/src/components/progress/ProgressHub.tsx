@@ -328,9 +328,28 @@ export default function ProgressHub() {
               />
               <Stat label="Weigh-ins" value={String(hub.coverage.weigh_ins)} />
             </View>
+            <View style={[styles.statGrid, { marginTop: spacing.sm }]}>
+              <Stat
+                label="Sleep nights"
+                value={String(hub.coverage.nights_sleep_logged ?? 0)}
+              />
+              <Stat
+                label="Hydration"
+                value={String(hub.coverage.days_hydration_logged ?? 0)}
+              />
+              <Stat
+                label="Stress"
+                value={String(hub.coverage.days_stress_logged ?? 0)}
+              />
+              <Stat
+                label="Activity"
+                value={String(hub.coverage.days_activity_logged ?? 0)}
+              />
+            </View>
             <Text style={styles.footnote}>
-              Coverage is shown, not scored. Days you did not log lower how
-              confident this is — they never lower the number itself.
+              Coverage is shown, not scored. Domains you do not log (sleep,
+              hydration, stress, steps, weigh-ins) stay out of the index until
+              you have enough days — they never drag the number down as zeros.
             </Text>
 
             {projection?.available && projection.assumption ? (
@@ -393,7 +412,16 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-const DOMAIN_ORDER = ["strength", "consistency", "nutrition", "body"] as const;
+const DOMAIN_ORDER = [
+  "strength",
+  "consistency",
+  "nutrition",
+  "body",
+  "sleep",
+  "hydration",
+  "stress",
+  "activity",
+] as const;
 
 /**
  * What one week of the index is made of — domain levels that week, plus any
@@ -420,7 +448,11 @@ function WeekDetailCard({
     key,
     label: labels[key] ?? key,
     value: point.contributions?.[key] ?? null,
-  }));
+  })).filter((row) => {
+    // Only show domains that exist on the hub — optional lifestyle ones stay
+    // off the week card until the user has enough logs to score them.
+    return labels[row.key] != null;
+  });
 
   return (
     <View style={styles.weekCard}>
@@ -679,6 +711,15 @@ function domainDetail(domain: Domain): string {
       return d.latest_weight_lb
         ? `${d.latest_weight_lb} lb smoothed, ${signed(d.change_lb)} lb over range. 100 is your goal's expected pace.`
         : "Not enough weigh-ins to read a trend.";
+    case "sleep":
+    case "hydration":
+    case "stress":
+    case "activity":
+      return d.target != null
+        ? `${d.days_logged_last_week ?? 0} days last week · target ${d.target}${
+            d.unit ? ` ${d.unit}` : ""
+          } (${d.target_source === "declared" ? "your goal" : "your usual"}). 100 is hitting it.`
+        : "Not enough logs yet.";
     default:
       return "";
   }

@@ -43,6 +43,8 @@ def _to_result(vision: Dict[str, Any], cooking_style: Optional[str]) -> Dict[str
         "carbs": vision["carbs"],
         "fats": vision["fats"],
         "fiber": vision.get("fiber", 0),
+        "sugar": vision.get("sugar"),
+        "sodium": vision.get("sodium"),
         "amount": vision.get("amount"),
     }
     analysis = vision.get("analysis") or empty_photo_analysis(
@@ -141,6 +143,8 @@ def analyze_food_image(
                 "carbs": fallback.get("carbs", 0),
                 "fats": fallback.get("fats", 0),
                 "fiber": fallback.get("fiber", 0),
+                "sugar": fallback.get("sugar"),
+                "sodium": fallback.get("sodium"),
                 "amount": fallback.get("serving"),
             }
             analysis = empty_photo_analysis(
