@@ -92,22 +92,116 @@ def exercise_sessions_per_week(plan: Dict[str, Any]) -> Dict[str, int]:
 # raise, which costs the user's trust in every other number on the page.
 PLAUSIBLE_WEEKLY_E1RM_GAIN = 0.02
 
-# The cap does not bind for the first few weeks. Load comes in indivisible
-# steps, and one step — or even a single extra rep — can legitimately be worth
-# more than 2% on a light lift. Applied from week one it would block the very
-# first rep increase and flatten every curve to nothing.
-PLAUSIBILITY_GRACE_WEEKS = 4
+# The same figure by training age. Spending the novice rate on everyone is how
+# a twelve-week chart came to promise a 24% gain on a lift that had not moved
+# in seven months: the newbie window is the one period where 2% a week is
+# ordinary, and it closes. These are rate-of-gain conventions, not measurements
+# of any individual — which is exactly why the assumption is reported back in
+# the payload rather than applied silently.
+EXPERIENCE_WEEKLY_E1RM_GAIN = {
+    "beginner": 0.020,
+    "novice": 0.020,
+    "intermediate": 0.008,
+    "advanced": 0.004,
+    "elite": 0.003,
+}
+# Matches the fallback profile_transformer and the coach already assume.
+DEFAULT_EXPERIENCE_LEVEL = "intermediate"
+
+# Strength is built out of surplus energy. The same program returns less at
+# maintenance and less again in a deficit, so a projection blind to the
+# nutrition plan quietly promises bulk-rate strength to someone eating to hold
+# their weight. Deliberately not zero for a cut: strength is largely retained
+# and often still creeps up in a deficit, it just stops running.
+ENERGY_BALANCE_FACTOR = {
+    "gain": 1.0,
+    "maintain": 0.7,
+    "lose": 0.4,
+}
+
+# Progression is indivisible, and that is the whole reason a ceiling needs
+# slack. The smallest real step on a dumbbell lift is the next dumbbell or one
+# more rep, and the next dumbbell can be worth more than a whole block of an
+# advanced lifter's budget — 80 lb to 85 lb is 6.25%, against roughly 3.4% for
+# twelve weeks of advanced gain at maintenance. A ceiling rising 0.28% a week
+# admits no step at all and flatlines the curve at its seed, which is as
+# useless as the runaway it replaced.
+#
+# So the walk may run one step ahead of the smooth budget, sized at about one
+# extra rep. It buys the next rep, never the next two, and never the next
+# dumbbell on its own — which is the correct answer: when the plates are too
+# coarse to progress, reps are what moves, and the load follows once the reps
+# have paid for it. This replaces a flat four-week grace period that scaled
+# with nothing and, at the novice rate, handed the walk 8% of headroom on
+# week one.
+ONE_STEP_SLACK = 0.03
+
+
+def plausible_weekly_gain(
+    experience_level: Optional[str] = None,
+    energy_balance: Optional[str] = None,
+) -> float:
+    """
+    The weekly estimated-1RM budget for this lifter, eating the way they eat.
+
+    Unknown experience falls back to intermediate rather than novice: assuming
+    the newbie window on someone who may be years past it is the optimistic
+    error, and this module exists to avoid those.
+    """
+    level = str(experience_level or DEFAULT_EXPERIENCE_LEVEL).strip().lower()
+    rate = EXPERIENCE_WEEKLY_E1RM_GAIN.get(level)
+    if rate is None:
+        rate = EXPERIENCE_WEEKLY_E1RM_GAIN[DEFAULT_EXPERIENCE_LEVEL]
+    balance = str(energy_balance or "").strip().lower()
+    # An unstated nutrition goal is not evidence of a deficit; leave the rate
+    # alone rather than penalising a plan that simply has no diet attached.
+    return rate * ENERGY_BALANCE_FACTOR.get(balance, 1.0)
+
+
+def plausibility_ceiling(
+    baseline_e1rm: float, week: int, weekly_gain: float
+) -> float:
+    """The most estimated 1RM this lifter can plausibly hold by a given week."""
+    return baseline_e1rm * ((1 + weekly_gain) ** week) * (1 + ONE_STEP_SLACK)
 
 
 def exceeds_plausible_gain(
-    candidate_e1rm: float, baseline_e1rm: Optional[float], week: int
+    candidate_e1rm: float,
+    baseline_e1rm: Optional[float],
+    week: int,
+    weekly_gain: Optional[float] = None,
 ) -> bool:
     """Whether a projected week has outrun what training plausibly delivers."""
     if not baseline_e1rm or baseline_e1rm <= 0:
         return False
-    effective_week = max(week, PLAUSIBILITY_GRACE_WEEKS)
-    ceiling = baseline_e1rm * ((1 + PLAUSIBLE_WEEKLY_E1RM_GAIN) ** effective_week)
-    return candidate_e1rm > ceiling
+    if weekly_gain is None:
+        weekly_gain = plausible_weekly_gain()
+    return candidate_e1rm > plausibility_ceiling(baseline_e1rm, week, weekly_gain)
+
+
+def pace_to_destination(
+    baseline_e1rm: Optional[float],
+    destination_e1rm: Optional[float],
+    weeks: Optional[int],
+    plausible_rate: float,
+) -> float:
+    """
+    Slow the walk to arrive when the user said, not as fast as it can.
+
+    A goal set for week twelve is a week-twelve target. Running open-loop and
+    holding on arrival answered "85s for 6-8 by December" in week two and then
+    drew a flat line for ten weeks — which reads as a plan with nothing left to
+    do. Pacing spreads the same gain across the horizon the user chose.
+
+    A goal that needs more than the plausible rate is not sped up to meet it.
+    That gap is the finding, and `reachable` is where it gets reported.
+    """
+    if not baseline_e1rm or baseline_e1rm <= 0 or not destination_e1rm or not weeks:
+        return plausible_rate
+    if destination_e1rm <= baseline_e1rm:
+        return plausible_rate
+    required = (destination_e1rm / baseline_e1rm) ** (1.0 / max(1, weeks)) - 1.0
+    return min(plausible_rate, required)
 
 
 # Epley, matching _compute_e1rm_history in the progression engine.
@@ -236,6 +330,12 @@ class ExerciseProjection:
     arrived_week: Optional[int] = None
     reachable: Optional[bool] = None
 
+    # What the curve assumed about this lifter. Reported rather than applied
+    # silently: these are conventions, not measurements, and a user who trains
+    # like an intermediate or starts eating in a surplus should be able to see
+    # which figure produced their chart and say it is wrong.
+    assumptions: Optional[Dict[str, Any]] = None
+
     def to_dict(self) -> Dict[str, Any]:
         if self.is_cardio:
             return self._cardio_dict()
@@ -276,6 +376,8 @@ class ExerciseProjection:
             payload["destination"] = self.destination
             payload["arrived_week"] = self.arrived_week
             payload["reachable"] = self.reachable
+        if self.assumptions:
+            payload["assumptions"] = self.assumptions
         return payload
 
     def _cardio_dict(self) -> Dict[str, Any]:
@@ -430,6 +532,8 @@ class PlanProjector:
         target_reps: Optional[int] = None,
         target_weeks: Optional[int] = None,
         day_intensity: Optional[str] = None,
+        experience_level: Optional[str] = None,
+        energy_balance: Optional[str] = None,
     ) -> ExerciseProjection:
         """
         Walk the real engine forward, assuming every prescription is met.
@@ -501,6 +605,22 @@ class PlanProjector:
         arrived_week: Optional[int] = None
         hold_after_destination = False
 
+        # What this lifter can plausibly add per week, before the plan's own
+        # finish line is allowed to slow it further.
+        plausible_rate = plausible_weekly_gain(experience_level, energy_balance)
+        destination_e1rm = (
+            e1rm(destination.get("weight"), destination.get("reps"))
+            if destination
+            else None
+        )
+        weekly_gain = pace_to_destination(
+            baseline_e1rm, destination_e1rm, weeks, plausible_rate
+        )
+        # A stated goal is a ceiling as well as a target. Projecting past what
+        # the user asked for is how a 12-week chart ended 15 lb above the
+        # heaviest dumbbell they named.
+        e1rm_cap = destination_e1rm if destination_e1rm else None
+
         for week in range(1, weeks + 1):
             point = None
             sessions_recorded = 0
@@ -570,7 +690,17 @@ class PlanProjector:
                 if baseline_e1rm is None:
                     baseline_e1rm = candidate.e1rm
 
-                if exceeds_plausible_gain(candidate.e1rm, baseline_e1rm, week):
+                over_destination = (
+                    e1rm_cap is not None
+                    and arrived_week is None
+                    and candidate.e1rm > e1rm_cap
+                    and not _hits_destination(
+                        candidate, destination["weight"], destination["reps"]
+                    )
+                )
+                if over_destination or exceeds_plausible_gain(
+                    candidate.e1rm, baseline_e1rm, week, weekly_gain
+                ):
                     # Past this the curve is arithmetic, not training. Double
                     # progression compounds happily forever; bodies do not, and
                     # the smallest plate on a light isolation lift is a huge
@@ -677,6 +807,22 @@ class PlanProjector:
             destination=destination,
             arrived_week=arrived_week,
             reachable=reachable,
+            assumptions={
+                "experience_level": (
+                    str(experience_level).strip().lower()
+                    if experience_level
+                    else DEFAULT_EXPERIENCE_LEVEL
+                ),
+                "experience_assumed": not experience_level,
+                "energy_balance": (
+                    str(energy_balance).strip().lower() if energy_balance else None
+                ),
+                "weekly_e1rm_gain": round(plausible_rate, 5),
+                # Lower than the above when the user's own finish line is
+                # nearer than what they could plausibly manage.
+                "paced_weekly_gain": round(weekly_gain, 5),
+                "horizon_gain_pct": round(((1 + weekly_gain) ** weeks - 1) * 100, 1),
+            },
         )
 
     def _project_cardio(

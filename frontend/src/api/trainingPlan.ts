@@ -354,6 +354,20 @@ export async function endPlan(planId: string): Promise<void> {
   await apiClient.post(`/api/training-plan/${planId}/end`);
 }
 
+/** Direct user edits — used by the week-strip drag to rewrite the calendar. */
+export async function updatePlan(
+  planId: string,
+  updates: {
+    weekly_schedule?: Record<string, string>;
+    plan_name?: string;
+    primary_goal?: string;
+    duration_weeks?: number;
+  }
+): Promise<TrainingPlan> {
+  const res = await apiClient.patch(`/api/training-plan/${planId}`, updates);
+  return res.data.plan;
+}
+
 export async function deletePlan(planId: string): Promise<void> {
   await apiClient.delete(`/api/training-plan/${planId}`);
 }

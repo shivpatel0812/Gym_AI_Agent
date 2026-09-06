@@ -35,6 +35,8 @@ async def update_routine(routine_id: str, routine: DailyRoutine, user_id: str = 
     payload["updated_at"] = datetime.now().isoformat()
     if payload.get("completed_dates") is None:
         payload.pop("completed_dates", None)
+    if payload.get("scheduled_days") is None:
+        payload.pop("scheduled_days", None)
     doc_ref = _col(user_id).document(routine_id)
     if not doc_ref.get().exists:
         raise HTTPException(status_code=404, detail="Routine not found")

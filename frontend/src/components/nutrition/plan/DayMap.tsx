@@ -58,6 +58,7 @@ export type SlotIdea = {
 interface Props {
   map: DayMapModel;
   planRevision?: string;
+  onNavigate?: () => void;
   onEditStrategy?: () => void;
   strategyExpanded?: boolean;
   onAddAnchor?: (slot: PrimaryMealSlot, kind?: "individual" | "potential" | "uncertain", day?: string) => void;
@@ -193,6 +194,9 @@ export default function DayMap(props: Props) {
   const { map, suggestingSlot, onPreloadSlot, planRevision } = props;
   const [day, setDay] = useState(() => ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()]);
   const [weekOpen, setWeekOpen] = useState(false);
+  const [view, setView] = useState<"plan" | "manage">("plan");
+  const [managedSlot, setManagedSlot] = useState<PrimaryMealSlot>("breakfast");
+  const manageMeal = (slot: PrimaryMealSlot) => { setManagedSlot(slot); setView("manage"); props.onNavigate?.(); };
   const requested = useRef<{ revision?: string; slots: Set<string> }>({ slots: new Set() });
   useEffect(() => {
     if (requested.current.revision !== planRevision) {
@@ -218,6 +222,29 @@ export default function DayMap(props: Props) {
         </View>
       </View>
       <View style={plannerStyles.days} accessibilityRole="tablist">
+        {(["plan", "manage"] as const).map((mode) => <TouchableOpacity key={mode}
+          accessibilityRole="tab" accessibilityLabel={mode === "plan" ? "Daily meal options" : "Manage meal assignments"}
+          accessibilityState={{ selected: view === mode }} onPress={() => { setView(mode); props.onNavigate?.(); }}
+          style={[plannerStyles.day, view === mode && plannerStyles.daySelected]}>
+          <Text style={[plannerStyles.dayText, view === mode && plannerStyles.dayTextSelected]}>
+            {mode === "plan" ? "Daily plan" : "Manage assignments"}
+          </Text>
+        </TouchableOpacity>)}
+      </View>
+      {view === "manage" ? <>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.slotTabs}>
+          {map.sections.map((section) => <TouchableOpacity key={section.slot} accessibilityRole="tab"
+            accessibilityLabel={`Manage ${section.label.toLowerCase()}`}
+            accessibilityState={{ selected: managedSlot === section.slot }} onPress={() => setManagedSlot(section.slot)}
+            style={[styles.slotTab, { borderColor: managedSlot === section.slot ? THEME.accent : THEME.border }]}>
+            <Text style={[styles.slotTabText, managedSlot === section.slot && styles.slotTabTextOn]}>{section.label}</Text>
+          </TouchableOpacity>)}
+        </ScrollView>
+        <Text style={plannerStyles.summaryTitle}>{map.sections.find(s => s.slot === managedSlot)?.label} assignments</Text>
+        <Text style={plannerStyles.subtle}>Tap days to save where each option belongs. Tap a meal to edit its foods. Options without selected days remain available on every day.</Text>
+        {map.sections.filter(s => s.slot === managedSlot).map(section => <MealDetails key={section.slot} {...props} section={section} />)}
+      </> : <>
+      <View style={plannerStyles.days} accessibilityRole="tablist">
         {WEEKDAY_OPTIONS.map((d) => (
           <TouchableOpacity key={d.id} accessibilityRole="tab" accessibilityLabel={`${d.label} meal plan`}
             accessibilityState={{ selected: day === d.id }} onPress={() => setDay(d.id)}
@@ -231,7 +258,8 @@ export default function DayMap(props: Props) {
         <Text style={plannerStyles.subtle}>{[map.stack.target > 1 ? `${Math.round(map.stack.target)} kcal / day` : null,
           map.proteinTarget > 0 ? `${Math.round(map.proteinTarget)}g protein` : null].filter(Boolean).join(" · ")}</Text>
       </View>
-      {map.sections.map((section) => <MealDayCard key={section.slot} {...props} section={section} day={day} />)}
+      {map.sections.map((section) => <MealDayCard key={section.slot} {...props} section={section} day={day} onManage={manageMeal} />)}
+      </>}
       <TouchableOpacity style={plannerStyles.detailsButton} accessibilityRole="button"
         accessibilityState={{ expanded: weekOpen }} onPress={() => setWeekOpen((v) => !v)}>
         <Text style={plannerStyles.detailsText}>Weekly overview</Text>
@@ -253,9 +281,8 @@ export default function DayMap(props: Props) {
   );
 }
 
-function MealDayCard(props: Props & { section: SlotSection; day: string }) {
+function MealDayCard(props: Props & { section: SlotSection; day: string; onManage: (slot: PrimaryMealSlot) => void }) {
   const { section, day, slotIdeas, suggestingSlot, onAddAnchor, onAddGoTo, onPressSlot, onAddIdea, onSuggestSlot } = props;
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const { anchors, goTos } = mealItemsForDay(section, day);
   const items = [...anchors, ...goTos];
   const ideas = Array.isArray(slotIdeas) ? slotIdeas : slotIdeas?.[section.slot] || [];
@@ -320,12 +347,11 @@ function MealDayCard(props: Props & { section: SlotSection; day: string }) {
         <Text style={[plannerStyles.inlineAction, { color: THEME.ai, opacity: suggestingSlot ? 0.5 : 1 }]}>{ideas.length ? "Find more options" : "Suggest options"}</Text>
       </TouchableOpacity> : null}
     </View>
-    <TouchableOpacity accessibilityRole="button" accessibilityLabel={`${section.label} details and weekly schedule`}
-      accessibilityState={{ expanded: detailsOpen }} onPress={() => setDetailsOpen((v) => !v)} style={plannerStyles.detailsButton}>
-      <Text style={plannerStyles.detailsText}>Weekly schedule, options & history</Text>
-      <MaterialCommunityIcons name={detailsOpen ? "chevron-up" : "chevron-down"} size={18} color={THEME.muted} />
+    <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Manage ${section.label.toLowerCase()} assignments`}
+      onPress={() => props.onManage(section.slot)} style={plannerStyles.detailsButton}>
+      <Text style={plannerStyles.detailsText}>Manage days, options & history</Text>
+      <MaterialCommunityIcons name="chevron-right" size={18} color={THEME.muted} />
     </TouchableOpacity>
-    {detailsOpen ? <MealDetails {...props} /> : null}
   </View>;
 }
 
@@ -671,8 +697,8 @@ function SlotFocus({
           [
             ["all", "All"],
             ["individual", "Anchor"],
-            ["potential", "Options"],
-            ["uncertain", "To decide"],
+            ["potential", "Potential"],
+            ["uncertain", "Uncertain"],
             ["previous", "History"],
           ] as const
         ).map(([id, label]) => {
@@ -691,6 +717,9 @@ function SlotFocus({
           return (
             <TouchableOpacity
               key={id}
+              accessibilityRole="tab"
+              accessibilityLabel={`${label} meal filter`}
+              accessibilityState={{ selected: on }}
               style={[
                 styles.stanceChip,
                 { borderColor: theme.border, backgroundColor: theme.surface2 },
@@ -873,6 +902,30 @@ function SlotFocus({
             </View>
           ) : null}
 
+          {visibleMeals.map((slot) => {
+            const mk = mealKindOf(slot);
+            const color = filterTone[mk].color;
+            return (
+              <MealRow
+                key={slot.id}
+                theme={theme}
+                slot={slot}
+                accent={color}
+                showOptions={mk === "potential"}
+                onPress={() => onPressSlot?.(slot)}
+                onToggleDay={onToggleDay}
+                verdict={slot.sourceId ? anchorVerdicts?.[String(slot.sourceId)] : undefined}
+              />
+            );
+          })}
+          {!visibleMeals.length ? (
+            <Text style={styles.empty}>
+              {mealFilter === "all"
+                ? "No plan meals yet — add one below, or check Previous."
+                : `No ${mealFilter === "individual" ? "anchor" : mealFilter} meals yet — add one below.`}
+            </Text>
+          ) : null}
+
           {logSuggestions.length && onAddLoggedMeal ? (
             <View style={styles.coachBullets}>
               <View style={styles.coachBulletsHead}>
@@ -909,30 +962,6 @@ function SlotFocus({
             </View>
           ) : null}
 
-          <DayColHeader theme={theme} />
-          {visibleMeals.map((slot) => {
-            const mk = mealKindOf(slot);
-            const color = filterTone[mk].color;
-            return (
-              <MealRow
-                key={slot.id}
-                theme={theme}
-                slot={slot}
-                accent={color}
-                showOptions={mk === "potential"}
-                onPress={() => onPressSlot?.(slot)}
-                onToggleDay={onToggleDay}
-                verdict={slot.sourceId ? anchorVerdicts?.[String(slot.sourceId)] : undefined}
-              />
-            );
-          })}
-          {!visibleMeals.length ? (
-            <Text style={styles.empty}>
-              {mealFilter === "all"
-                ? "No plan meals yet — add one below, or check Previous."
-                : `No ${mealFilter === "individual" ? "anchor" : mealFilter} meals yet — add one below.`}
-            </Text>
-          ) : null}
 
           {onAddAnchor ? (
             <TouchableOpacity
@@ -961,7 +990,7 @@ function SlotFocus({
             <Text style={styles.blockTitle}>GO-TOS</Text>
             <Text style={styles.blockHint}>Quick singles · tap day</Text>
           </View>
-          <DayColHeader theme={theme} />
+
           {(section.goTos || []).map((slot) => (
             <MealRow
               key={slot.id}
@@ -1133,7 +1162,7 @@ function PreviousLogRow({
         <View style={[styles.mealBullet, { backgroundColor: mark }]} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={styles.mealTitleRow}>
-            <Text style={styles.mealTitle} numberOfLines={1}>
+            <Text style={styles.mealTitle}>
               {pattern.name}
             </Text>
             {pattern.matchedAnchor ? (
@@ -1170,7 +1199,7 @@ function PreviousLogRow({
                 on ? { borderColor: mark, backgroundColor: `${mark}33` } : null,
               ]}
             >
-              {on ? <View style={[styles.dotInner, { backgroundColor: mark }]} /> : null}
+              <Text style={{ color: on ? mark : theme.muted, fontSize: 11, fontWeight: "700" }}>{WEEKDAY_OPTIONS[i].short}</Text>
             </View>
           ))}
         </View>
@@ -1296,12 +1325,12 @@ function MealRow({
             : null;
 
   return (
-    <View style={styles.mealRow}>
-      <TouchableOpacity style={styles.mealMain} onPress={onPress} activeOpacity={0.75}>
+    <View style={[styles.mealRow, { flexDirection: "column", alignItems: "stretch" }]}>
+      <TouchableOpacity style={styles.mealMain} onPress={onPress} activeOpacity={0.75} accessibilityRole="button" accessibilityLabel={`Edit ${slot.title}`}>
         <View style={[styles.mealBullet, { backgroundColor: mark }]} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={styles.mealTitleRow}>
-            <Text style={styles.mealTitle} numberOfLines={1}>
+            <Text style={styles.mealTitle}>
               {slot.title}
             </Text>
             {sourceLabel ? (
@@ -1380,22 +1409,26 @@ function MealRow({
           ) : null}
         </View>
       </TouchableOpacity>
-      <View style={styles.dotGrid}>
+      <View style={{ flexDirection: "row", gap: 4 }}>
         {mask.map((on, i) => {
           const dayId = WEEKDAY_OPTIONS[i].id;
           return (
             <TouchableOpacity
               key={dayId}
+              accessibilityRole="checkbox"
+              aria-checked={on}
+              accessibilityLabel={`${WEEKDAY_OPTIONS[i].label} for ${slot.title}`}
+              accessibilityState={{ checked: on, disabled: !onToggleDay }}
+              disabled={!onToggleDay}
               style={[
-                styles.dotCell,
+                { flex: 1, minHeight: 44, borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center" },
                 { borderColor: theme.border, backgroundColor: theme.surface2 },
                 on ? { borderColor: mark, backgroundColor: `${mark}33` } : null,
               ]}
               onPress={() => onToggleDay?.(slot, dayId)}
-              hitSlop={4}
               activeOpacity={0.7}
             >
-              {on ? <View style={[styles.dotInner, { backgroundColor: mark }]} /> : null}
+              <Text style={{ color: on ? mark : theme.muted, fontSize: 11, fontWeight: "700" }}>{WEEKDAY_OPTIONS[i].short}</Text>
             </TouchableOpacity>
           );
         })}
@@ -1684,7 +1717,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   mealBullet: { width: 6, height: 6, borderRadius: 3 },
-  mealTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  mealTitleRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
   mealTitle: { color: "#fff", fontSize: 14, fontWeight: "700", flexShrink: 1 },
   mealMacros: { color: "#7C8CA0", fontSize: 12, marginTop: 2, fontWeight: "600" },
   uncertainPill: {

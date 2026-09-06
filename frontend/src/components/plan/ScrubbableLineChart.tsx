@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { PanResponder, View, Text, StyleSheet } from "react-native";
 import Svg, { Circle, Line, Polyline, Text as SvgText } from "react-native-svg";
-import { colors } from "../../theme";
+import { colors, spacing, typography, weight } from "../../theme";
 import { type ChartPoint, formatShortDate, trendColor } from "./chartUtils";
 
 type Props = {
@@ -11,8 +11,22 @@ type Props = {
   accent?: string;
   flat?: boolean;
   showAxis?: boolean;
+  /** Dates under the plot (first / mid / last, or every point when few). */
+  showDateAxis?: boolean;
+  /**
+   * `time` — space by calendar date (default, honest for layoffs).
+   * `even` — equal gaps between sessions so the series reads dense.
+   */
+  spacing?: "time" | "even";
+  /** Cap the gap between even-spaced points (px). Keeps short histories compact. */
+  maxPointGap?: number;
   /** Unit suffix for the y-axis labels, e.g. "lb" or "reps". */
   unit?: string;
+  /**
+   * Draw one continuous polyline through every plotted point.
+   * Default breaks the line across layoff/null markers so a gap reads as a gap.
+   */
+  connectGaps?: boolean;
   onScrub?: (point: ChartPoint | null) => void;
 };
 
@@ -21,6 +35,8 @@ const PAD_Y = 10;
 const AXIS_H = 14;
 /** Room for the y-axis value labels on the left. */
 const GUTTER = 34;
+/** Default max px between even-spaced session marks. */
+const DEFAULT_MAX_POINT_GAP = 32;
 /** Gridline positions as a fraction of plot height, top to bottom. */
 const gridRatios = [0, 0.5, 1];
 
@@ -30,7 +46,11 @@ export default function ScrubbableLineChart({
   accent = colors.accentPrimary,
   flat = false,
   showAxis = true,
+  showDateAxis = false,
+  spacing = "time",
+  maxPointGap = DEFAULT_MAX_POINT_GAP,
   unit,
+  connectGaps = false,
   onScrub,
 }: Props) {
   // Nothing is drawn until the real width arrives, so the chart never paints
@@ -61,22 +81,31 @@ export default function ScrubbableLineChart({
     const innerW = Math.max(right - left, 1);
     const innerH = Math.max(height - PAD_Y * 2 - (showAxis ? AXIS_H : 0), 1);
 
-    // Time, not index. Spacing points evenly made a three-month layoff and a
-    // one-week break render identically, which is the opposite of what a
-    // progression-over-time chart is for.
-    const times = plotted.map((p) => p.t).filter((t) => !Number.isNaN(t));
-    const t0 = times.length ? Math.min(...times) : 0;
-    const t1 = times.length ? Math.max(...times) : 0;
-    const tSpan = t1 - t0;
-    const xFor = (point: ChartPoint, fallbackSlot: number) => {
-      if (!tSpan || Number.isNaN(point.t)) {
-        return left + (fallbackSlot / Math.max(plotted.length - 1, 1)) * innerW;
-      }
-      return left + ((point.t - t0) / tSpan) * innerW;
-    };
-
     const slotOf = new Map<string, number>();
     plotted.forEach((p, i) => slotOf.set(p.key, i));
+
+    let xFor: (point: ChartPoint, fallbackSlot: number) => number;
+    if (spacing === "even") {
+      // Equal steps, capped so a handful of sessions sits tight instead of
+      // stretching across the full card width.
+      const gaps = Math.max(plotted.length - 1, 1);
+      const step = Math.min(innerW / gaps, maxPointGap);
+      const used = step * gaps;
+      const start = left + (innerW - used) / 2;
+      xFor = (_point, fallbackSlot) => start + fallbackSlot * step;
+    } else {
+      // Time, not index — a three-month layoff should read longer than a week.
+      const times = plotted.map((p) => p.t).filter((t) => !Number.isNaN(t));
+      const t0 = times.length ? Math.min(...times) : 0;
+      const t1 = times.length ? Math.max(...times) : 0;
+      const tSpan = t1 - t0;
+      xFor = (point, fallbackSlot) => {
+        if (!tSpan || Number.isNaN(point.t)) {
+          return left + (fallbackSlot / Math.max(plotted.length - 1, 1)) * innerW;
+        }
+        return left + ((point.t - t0) / tSpan) * innerW;
+      };
+    }
 
     const coords = points.map((point, index) => {
       if (point.value == null) return { index, x: null, y: null, point };
@@ -86,19 +115,49 @@ export default function ScrubbableLineChart({
     }) as Array<{ index: number; x: number | null; y: number | null; point: ChartPoint }>;
 
     const segments: string[] = [];
-    let current: string[] = [];
-    for (const c of coords) {
-      if (c.x == null || c.y == null) {
-        if (current.length > 1) segments.push(current.join(" "));
-        current = [];
-        continue;
+    if (connectGaps) {
+      const joined = coords
+        .filter((c) => c.x != null && c.y != null)
+        .map((c) => `${c.x},${c.y}`)
+        .join(" ");
+      if (joined) segments.push(joined);
+    } else {
+      let current: string[] = [];
+      for (const c of coords) {
+        if (c.x == null || c.y == null) {
+          if (current.length > 1) segments.push(current.join(" "));
+          current = [];
+          continue;
+        }
+        current.push(`${c.x},${c.y}`);
       }
-      current.push(`${c.x},${c.y}`);
+      if (current.length > 1) segments.push(current.join(" "));
     }
-    if (current.length > 1) segments.push(current.join(" "));
 
-    return { coords, segments, left, right, innerW, innerH, lo, hi };
-  }, [points, plotted, width, height, flat, showAxis]);
+    // Date ticks: every point when the series is short, otherwise ends + middle.
+    const plottedCoords = coords.filter((c) => c.x != null && c.y != null);
+    let dateTicks = plottedCoords;
+    if (plottedCoords.length > 5) {
+      const mid = Math.floor(plottedCoords.length / 2);
+      dateTicks = [
+        plottedCoords[0],
+        plottedCoords[mid],
+        plottedCoords[plottedCoords.length - 1],
+      ];
+    }
+
+    return { coords, segments, left, right, innerW, innerH, lo, hi, dateTicks };
+  }, [
+    points,
+    plotted,
+    width,
+    height,
+    flat,
+    showAxis,
+    connectGaps,
+    spacing,
+    maxPointGap,
+  ]);
 
   const scrubAtRef = useRef<(x: number) => void>(() => {});
   scrubAtRef.current = (x: number) => {
@@ -152,7 +211,8 @@ export default function ScrubbableLineChart({
 
   const active = scrubIndex != null ? geometry.coords[scrubIndex] : null;
   const activePoint = active?.point;
-  const round = (value: number) => (Math.abs(value) >= 100 ? Math.round(value) : Math.round(value * 10) / 10);
+  const round = (value: number) =>
+    Math.abs(value) >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
 
   return (
     <View>
@@ -165,7 +225,7 @@ export default function ScrubbableLineChart({
               x2={geometry.right}
               y1={PAD_Y + geometry.innerH * ratio}
               y2={PAD_Y + geometry.innerH * ratio}
-              stroke="#252529"
+              stroke={colors.borderCool}
               strokeDasharray="3 5"
             />
           ))}
@@ -176,8 +236,8 @@ export default function ScrubbableLineChart({
                   key={`tick-${ratio}`}
                   x={PAD_X}
                   y={PAD_Y + geometry.innerH * ratio + 3}
-                  fill={colors.textMuted}
-                  fontSize="9"
+                  fill={colors.textFaintCool}
+                  fontSize={String(typography.micro)}
                 >
                   {round(geometry.hi - (geometry.hi - geometry.lo) * ratio)}
                 </SvgText>
@@ -189,7 +249,7 @@ export default function ScrubbableLineChart({
               key={i}
               points={segment}
               fill="none"
-              stroke={flat ? colors.textSecondary : accent}
+              stroke={flat ? colors.textMutedCool : accent}
               strokeWidth="2.5"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -206,7 +266,7 @@ export default function ScrubbableLineChart({
                 cx={c.x}
                 cy={c.y}
                 r={selected ? 7 : 4}
-                fill={selected ? "#fff" : stroke}
+                fill={selected ? colors.textPrimary : stroke}
                 stroke={selected ? stroke : "transparent"}
                 strokeWidth={2}
               />
@@ -219,14 +279,34 @@ export default function ScrubbableLineChart({
               x2={active.x}
               y1={PAD_Y}
               y2={PAD_Y + geometry.innerH}
-              stroke={colors.textMuted}
+              stroke={colors.textMutedCool}
               strokeWidth={1}
             />
           ) : null}
         </Svg>
       </View>
 
-      {showAxis ? (
+      {showDateAxis ? (
+        <View style={[styles.dateAxis, { height: 16 }]}>
+          {geometry.dateTicks.map((tick) =>
+            tick.x == null ? null : (
+              <Text
+                key={`date-${tick.point.key}`}
+                style={[
+                  styles.dateTick,
+                  {
+                    left: Math.max(0, tick.x - 22),
+                    width: 44,
+                  },
+                ]}
+                numberOfLines={1}
+              >
+                {formatShortDate(tick.point.date)}
+              </Text>
+            )
+          )}
+        </View>
+      ) : showAxis ? (
         <View style={[styles.axis, { marginLeft: GUTTER }]}>
           <Text style={styles.axisText}>{formatShortDate(plotted[0].date)}</Text>
           <Text style={styles.axisText}>
@@ -254,25 +334,47 @@ export default function ScrubbableLineChart({
 }
 
 const styles = StyleSheet.create({
-  empty: { color: colors.textMuted, fontSize: 11, marginTop: 4 },
+  empty: { color: colors.textFaintCool, fontSize: typography.caption, marginTop: spacing.xs },
   axis: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingHorizontal: 4,
+    paddingHorizontal: spacing.xs,
     marginTop: 2,
   },
-  axisText: { color: colors.textMuted, fontSize: 9 },
-  hint: { color: colors.textMuted, fontSize: 10, marginTop: 4 },
-  scrubBadge: {
-    marginTop: 6,
-    alignSelf: "flex-start",
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+  axisText: { color: colors.textFaintCool, fontSize: typography.micro },
+  dateAxis: {
+    position: "relative",
+    marginTop: 2,
+    marginBottom: 2,
   },
-  scrubDate: { fontSize: 10, fontWeight: "800", color: colors.textMuted },
-  scrubValue: { fontSize: 12, fontWeight: "700", color: colors.textPrimary, marginTop: 2 },
+  dateTick: {
+    position: "absolute",
+    top: 0,
+    textAlign: "center",
+    color: colors.textFaintCool,
+    fontSize: typography.micro,
+    fontWeight: weight.medium,
+  },
+  hint: { color: colors.textFaintCool, fontSize: typography.caption, marginTop: spacing.xs },
+  scrubBadge: {
+    marginTop: spacing.sm,
+    alignSelf: "flex-start",
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderCool,
+    borderRadius: 8,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  scrubDate: {
+    fontSize: typography.caption,
+    fontWeight: weight.heavy,
+    color: colors.textFaintCool,
+  },
+  scrubValue: {
+    fontSize: typography.body,
+    fontWeight: weight.bold,
+    color: colors.textPrimary,
+    marginTop: 2,
+  },
 });

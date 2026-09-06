@@ -410,7 +410,7 @@ export default function LogFoodForm({
       const res = await apiClient.post(
         "/api/macros/estimate-food",
         { query: q },
-        { timeout: 30000 }
+        { timeout: 60000 }
       );
       if (estimateQueryRef.current !== q) return;
       const item = toFoodDbItem(res.data);
@@ -897,8 +897,11 @@ export default function LogFoodForm({
       }
       const res = await apiClient.post(
         "/api/macros/estimate-food",
-        { query: note, name: title || undefined },
-        { timeout: 30000 }
+        { query: note, name: title || undefined, model: aiModel },
+        // A described meal now gets the same two-pass treatment as a
+        // photographed one, so this request may cost two model calls — the
+        // second on a reasoning model. 30s was the old single-cheap-call budget.
+        { timeout: 90000 }
       );
       if (!acceptPhotoEstimate(res.data, title)) {
         setPhotoError("Could not estimate that food. Add more detail.");

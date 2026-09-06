@@ -50,9 +50,13 @@ export default function HistoryStrip({
       <View style={styles.chart}>
         <ScrubbableLineChart
           points={chart.points}
-          height={56}
+          height={64}
           flat={flat}
           showAxis={false}
+          showDateAxis
+          spacing="even"
+          maxPointGap={28}
+          connectGaps
           unit={chart.metric === "reps" ? "reps" : "e1RM"}
           onScrub={onScrub}
         />

@@ -22,19 +22,20 @@ import {
   dismissPlanSuggestions,
   getPlanProjection,
   getPlanSuggestions,
+  updatePlan,
   type CardioWeekPoint,
-  type MuscleGroupDay,
   type PendingPlanSuggestions,
   type PlanProjection,
   type ProjectedDay,
   type ProjectedExercise,
   type WeekPoint,
 } from "../../api/trainingPlan";
-import { borderRadius, colors, spacing } from "../../theme";
+import { borderRadius, colors, spacing, typography, weight } from "../../theme";
 import HistoryStrip from "./HistoryStrip";
 import MuscleGroupCharts from "./MuscleGroupChart";
 import ScrubbableLineChart from "./ScrubbableLineChart";
 import WorkoutDetailCallout from "./WorkoutDetailCallout";
+import WeekScheduleStrip, { swapScheduleDays } from "./WeekScheduleStrip";
 import {
   buildExerciseChart,
   calcE1rm,
@@ -53,6 +54,11 @@ import {
   variantCaption,
   type DayFamily,
 } from "./dayFamilies";
+import {
+  familySessionLabels,
+  groupFamilyExercises,
+  mergeSessionVariants,
+} from "./familyExercises";
 
 type Role = "building" | "maintaining" | "support";
 type DetailTab = "history" | "roadmap";
@@ -85,12 +91,18 @@ export default function PlanHub({
   const [detail, setDetail] = useState<DetailSelection | null>(null);
   const [pending, setPending] = useState<PendingPlanSuggestions | null>(null);
   const [resolving, setResolving] = useState(false);
+  /** Optimistic week calendar while a drag-save is in flight. */
+  const [scheduleDraft, setScheduleDraft] = useState<Record<string, string> | null>(null);
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  /** Within a split: body-part charts vs the lift list. */
+  const [contentTab, setContentTab] = useState<"muscles" | "exercises">("muscles");
 
   const loadProjection = useCallback(
     () =>
       getPlanProjection()
         .then((next) => {
           setProjection(next);
+          setScheduleDraft(null);
           setLoadError(false);
         })
         .catch((error) => {
@@ -151,6 +163,37 @@ export default function PlanHub({
     }
   }, [dayIndex, families.length]);
 
+  const liveSchedule = scheduleDraft || projection?.weekly_schedule || {};
+
+  const handleSwapDays = useCallback(
+    async (from: string, to: string) => {
+      if (!projection?.plan_id || savingSchedule) return;
+      const previous = liveSchedule;
+      const next = swapScheduleDays(previous, from, to);
+      if (next === previous) return;
+
+      setScheduleDraft(next);
+      setProjection((current) =>
+        current ? { ...current, weekly_schedule: next } : current
+      );
+      setSavingSchedule(true);
+      try {
+        await updatePlan(projection.plan_id, { weekly_schedule: next });
+        await loadProjection();
+      } catch (error) {
+        console.error("Could not update weekly schedule:", error);
+        setScheduleDraft(previous);
+        setProjection((current) =>
+          current ? { ...current, weekly_schedule: previous } : current
+        );
+        Alert.alert("Could not move that day", "Your schedule was not changed. Try again.");
+      } finally {
+        setSavingSchedule(false);
+      }
+    },
+    [liveSchedule, loadProjection, projection?.plan_id, savingSchedule]
+  );
+
   if (loading) return <ActivityIndicator style={styles.loader} color={colors.accentPrimary} />;
 
   if (loadError) {
@@ -173,31 +216,44 @@ export default function PlanHub({
   }
 
   const family = families[dayIndex] || families[0];
-  const move = (delta: number) =>
-    setDayIndex((dayIndex + delta + families.length) % families.length);
 
   return (
-    <View>
-      <View style={styles.heroRow}>
-        <View style={styles.heroCopy}>
-          <Text style={styles.eyebrow}>ACTIVE TRAINING PLAN</Text>
-          <Text style={styles.title}>Plan Hub</Text>
-          <Text style={styles.subtitle}>What to lift now—and what you’re building toward.</Text>
-        </View>
-        <View style={styles.heroActions}>
-          <TouchableOpacity style={styles.editButton} onPress={onImport}>
-            <MaterialCommunityIcons name="history" size={16} color={colors.accentPrimary} />
-            <Text style={styles.editText}>Import</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.editButton}
-            onPress={() => onEdit?.("I want to revise one exercise in my active plan. ")}
-          >
-            <MaterialCommunityIcons name="pencil-outline" size={16} color={colors.accentPrimary} />
-            <Text style={styles.editText}>Edit</Text>
-          </TouchableOpacity>
+    <>
+      <View style={styles.splitTabsBar}>
+        <Text style={styles.splitTabsLabel}>SPLIT</Text>
+        <View style={styles.familyPills}>
+          {families.map((item, i) => (
+            <TouchableOpacity
+              key={item.key}
+              onPress={() => setDayIndex(i)}
+              style={[styles.familyPill, i === dayIndex && styles.familyPillActive]}
+              accessibilityRole="button"
+              accessibilityState={{ selected: i === dayIndex }}
+            >
+              <Text
+                numberOfLines={1}
+                style={[styles.familyPillText, i === dayIndex && styles.familyPillTextActive]}
+              >
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
       </View>
+
+      <View>
+      <WeekScheduleStrip
+        schedule={liveSchedule}
+        families={families}
+        saving={savingSchedule}
+        onSelectFamily={(key) => {
+          const index = families.findIndex((item) => item.key === key);
+          if (index >= 0) setDayIndex(index);
+        }}
+        onSwapDays={handleSwapDays}
+        onImport={onImport}
+        onEdit={() => onEdit?.("I want to revise one exercise in my active plan. ")}
+      />
 
       {pending ? (
         <PendingSuggestions
@@ -210,80 +266,116 @@ export default function PlanHub({
 
       {projection ? <ProgramOverview projection={projection} /> : null}
 
-      <View style={styles.pager}>
-        <TouchableOpacity onPress={() => move(-1)} style={styles.arrow}>
-          <MaterialCommunityIcons name="chevron-left" size={24} color={colors.textSecondary} />
-        </TouchableOpacity>
-        <View style={styles.tabs}>
-          {families.map((item, i) => (
+      <FamilySessionMeta family={family} schedule={liveSchedule} />
+
+      <View style={styles.contentTabs}>
+        {(
+          [
+            { id: "muscles" as const, label: "Muscle groups" },
+            { id: "exercises" as const, label: "Exercises" },
+          ] as const
+        ).map((tab) => {
+          const active = contentTab === tab.id;
+          return (
             <TouchableOpacity
-              key={item.key}
-              onPress={() => setDayIndex(i)}
-              style={[styles.tab, i === dayIndex && styles.tabActive]}
+              key={tab.id}
+              style={[styles.contentTab, active && styles.contentTabActive]}
+              onPress={() => setContentTab(tab.id)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
             >
-              <Text numberOfLines={1} style={[styles.tabText, i === dayIndex && styles.tabTextActive]}>
-                {item.label}
+              <Text style={[styles.contentTabText, active && styles.contentTabTextActive]}>
+                {tab.label}
               </Text>
             </TouchableOpacity>
-          ))}
-        </View>
-        <TouchableOpacity onPress={() => move(1)} style={styles.arrow}>
-          <MaterialCommunityIcons name="chevron-right" size={24} color={colors.textSecondary} />
-        </TouchableOpacity>
-      </View>
-
-      <FamilySummary
-        family={family}
-        schedule={projection?.weekly_schedule}
-        muscleHistory={projection?.muscle_group_history}
-      />
-
-      <View style={styles.cards}>
-        {family.days.map((variant) => {
-          const caption = variantCaption(variant.day_name, family.key);
-          const showVariant = family.days.length > 1;
-          return (
-            <View key={variant.day_name} style={styles.variantBlock}>
-              {showVariant ? (
-                <View style={styles.variantHead}>
-                  <Text style={styles.variantTitle}>
-                    {caption ? `Session ${caption}` : variant.day_name}
-                  </Text>
-                  {variant.day_goal || variant.focus ? (
-                    <Text style={styles.variantFocus}>
-                      {variant.day_goal || variant.focus}
-                    </Text>
-                  ) : null}
-                </View>
-              ) : null}
-              {groupExercises(variant.exercises).map((group) =>
-                group.length > 1 ? (
-                  <CombinedExerciseSummary
-                    key={`${variant.day_name}-${group[0].exercise_id}`}
-                    exercises={group}
-                    onPress={() =>
-                      setDetail({
-                        kind: "combined",
-                        exercises: group,
-                        label: (group.find((item) => item.priority === "high") || group[0]).exercise_name.replace(
-                          /^weighted\s+/i,
-                          ""
-                        ),
-                      })
-                    }
-                  />
-                ) : (
-                  <ExerciseSummary
-                    key={`${variant.day_name}-${group[0].exercise_id}`}
-                    exercise={group[0]}
-                    onPress={() => setDetail({ kind: "single", exercise: group[0] })}
-                  />
-                )
-              )}
-            </View>
           );
         })}
       </View>
+
+      {contentTab === "muscles" ? (
+        <View style={styles.section}>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle}>{family.label} stimulus</Text>
+            <Text style={styles.sectionSub}>
+              Rolling volume from your logged sessions — drag a chart to see which lifts drove each day.
+            </Text>
+          </View>
+          <View style={styles.sectionBody}>
+            <MuscleGroupCharts
+              exercises={family.days.flatMap((day) => day.exercises)}
+              history={projection?.muscle_group_history}
+              familyKey={family.key}
+              dayNames={family.days.map((day) => day.day_name)}
+              focus={family.days
+                .map((day) => day.day_goal || day.focus)
+                .filter(Boolean)
+                .join(" ")}
+            />
+          </View>
+        </View>
+      ) : (
+        <View style={styles.section}>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle}>{family.label} exercises</Text>
+            <Text style={styles.sectionSub}>
+              {family.days.length > 1
+                ? `Session ${family.days
+                    .map((day) => variantCaption(day.day_name, family.key) || day.day_name)
+                    .join(" · ")} together — tap a card for the full roadmap.`
+                : "Tap a card for the full roadmap and history."}
+            </Text>
+          </View>
+          <View style={styles.cards}>
+            {groupFamilyExercises(family).map((group) => {
+              if (group.kind === "dual_track") {
+                return (
+                  <CombinedExerciseSummary
+                    key={group.key}
+                    exercises={group.exercises}
+                    onPress={() =>
+                      setDetail({
+                        kind: "combined",
+                        exercises: group.exercises,
+                        label: (
+                          group.exercises.find((item) => item.priority === "high") ||
+                          group.exercises[0]
+                        ).exercise_name.replace(/^weighted\s+/i, ""),
+                      })
+                    }
+                  />
+                );
+              }
+
+              if (group.kind === "session_variants") {
+                const merged = mergeSessionVariants(group.exercises);
+                const sessionLine = familySessionLabels(group.dayNames, family.key);
+                return (
+                  <ExerciseSummary
+                    key={group.key}
+                    exercise={merged}
+                    sessionLine={sessionLine}
+                    onPress={() => setDetail({ kind: "single", exercise: merged })}
+                  />
+                );
+              }
+
+              const only = group.exercises[0];
+              const sessionLine =
+                family.days.length > 1
+                  ? familySessionLabels(group.dayNames, family.key)
+                  : undefined;
+              return (
+                <ExerciseSummary
+                  key={group.key}
+                  exercise={only}
+                  sessionLine={sessionLine}
+                  onPress={() => setDetail({ kind: "single", exercise: only })}
+                />
+              );
+            })}
+          </View>
+        </View>
+      )}
 
       {pending ? null : (
         <View style={styles.reviewNote}>
@@ -301,66 +393,63 @@ export default function PlanHub({
         onEdit={onEdit}
         onSaved={loadProjection}
       />
-    </View>
+      </View>
+    </>
   );
 }
 
-function FamilySummary({
+function FamilySessionMeta({
   family,
   schedule,
-  muscleHistory,
 }: {
   family: DayFamily<ProjectedDay>;
   schedule?: Record<string, string>;
-  muscleHistory?: Record<string, MuscleGroupDay[]>;
 }) {
   const exercises = family.days.flatMap((day) => day.exercises);
-  const dates = exercises.map((e) => e.last_trained).filter(Boolean).sort() as string[];
-  const counts = exercises.reduce(
-    (a, e) => {
-      const role = roleFor(e);
-      if (role === "building") a.building++;
-      if (role === "maintaining") a.maintaining++;
-      return a;
-    },
-    { building: 0, maintaining: 0 }
+  const nextWhen = nextScheduledDetail(
+    family.days.map((day) => day.day_name),
+    schedule
   );
-  const focusBits = family.days
-    .map((day) => day.day_goal || day.focus)
-    .filter(Boolean);
-  const focusLine =
-    family.days.length > 1
-      ? `${family.days.length} sessions · ${[...new Set(focusBits)].join(" · ") || "variants on this page"}`
-      : focusBits[0] || family.label;
+  const roleCounts = exercises.reduce(
+    (acc, exercise) => {
+      const role = roleFor(exercise);
+      acc[role] += 1;
+      return acc;
+    },
+    { building: 0, maintaining: 0, support: 0 }
+  );
 
   return (
-    <View style={styles.summary}>
-      <View style={styles.daySummaryHead}>
-        <Text style={styles.dayName}>{family.label}</Text>
-        <Text style={styles.dayFocus}>{focusLine}</Text>
+    <View style={styles.sessionMeta}>
+      <View style={styles.nextSessionRow}>
+        <Text style={styles.nextSessionLabel}>Next {family.label.toLowerCase()} session</Text>
+        <Text style={styles.nextSessionWhen}>{nextWhen}</Text>
       </View>
-      <View style={styles.metrics}>
-        <Metric label="LAST TRAINED" value={dates.length ? formatDate(dates[dates.length - 1]) : "No session"} />
-        <Metric
-          label="NEXT EXPECTED"
-          value={nextScheduledAny(
-            family.days.map((day) => day.day_name),
-            schedule
-          )}
-        />
-        <Metric label="BUILDING" value={`${counts.building} lifts`} accent />
-        <Metric label="MAINTAINING" value={`${counts.maintaining} lifts`} />
+      <View style={styles.roleLegend}>
+        <LegendDot color={colors.accentPrimary} label="Building" count={roleCounts.building} />
+        <LegendDot color={colors.textFaintCool} label="Support work" count={roleCounts.support} />
+        <LegendDot color={colors.success} label="Maintaining" count={roleCounts.maintaining} />
       </View>
-      <MuscleGroupCharts exercises={exercises} history={muscleHistory} />
     </View>
   );
 }
 
-function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function LegendDot({
+  color,
+  label,
+  count,
+}: {
+  color: string;
+  label: string;
+  count: number;
+}) {
   return (
-    <View style={styles.metric}>
-      <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={[styles.metricValue, accent && styles.accent]}>{value}</Text>
+    <View style={styles.roleLegendItem}>
+      <View style={[styles.roleLegendDot, { backgroundColor: color }]} />
+      <Text style={styles.roleLegendText}>
+        {label}
+        {count > 0 ? ` · ${count}` : ""}
+      </Text>
     </View>
   );
 }
@@ -415,9 +504,12 @@ function CardioSummary({ exercise }: { exercise: ProjectedExercise }) {
 function ExerciseSummary({
   exercise,
   onPress,
+  sessionLine,
 }: {
   exercise: ProjectedExercise;
   onPress: () => void;
+  /** When set, shows which plan sessions this lift belongs to (A · B). */
+  sessionLine?: string;
 }) {
   if (exercise.is_cardio) return <CardioSummary exercise={exercise} />;
   const role = roleFor(exercise);
@@ -434,6 +526,7 @@ function ExerciseSummary({
               <Text style={styles.exerciseName}>{exercise.exercise_name}</Text>
               <RoleBadge role={role} />
             </View>
+            {sessionLine ? <Text style={styles.sessionLine}>{sessionLine}</Text> : null}
             <Text style={styles.goalLine}>{goalLine}</Text>
           </View>
           <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textMuted} />
@@ -1656,7 +1749,7 @@ function formatDate(s: string) {
   return Number.isNaN(d.valueOf()) ? s : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function nextScheduledAny(dayNames: string[], schedule?: Record<string, string>) {
+function nextScheduledDetail(dayNames: string[], schedule?: Record<string, string>) {
   if (!schedule || !dayNames.length) return "Not scheduled";
   const wanted = new Set(dayNames);
   const today = new Date();
@@ -1665,19 +1758,13 @@ function nextScheduledAny(dayNames: string[], schedule?: Record<string, string>)
     d.setDate(today.getDate() + i);
     const key = WEEKDAYS[d.getDay()].toLowerCase();
     if (wanted.has(schedule[key])) {
-      return i === 0 ? "Today" : i === 1 ? "Tomorrow" : WEEKDAYS[d.getDay()];
+      const short = WEEKDAYS[d.getDay()].slice(0, 3);
+      if (i === 0) return `${short} (today)`;
+      if (i === 1) return `${short} (tomorrow)`;
+      return short;
     }
   }
   return "Not scheduled";
-}
-
-function groupExercises(exercises: ProjectedExercise[]) {
-  const groups = new Map<string, ProjectedExercise[]>();
-  exercises.forEach((exercise, index) => {
-    const key = exercise.exercise_id || `${exercise.exercise_name}-${index}`;
-    groups.set(key, [...(groups.get(key) || []), exercise]);
-  });
-  return [...groups.values()];
 }
 
 const styles = StyleSheet.create({
@@ -1724,51 +1811,125 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   loader: { marginVertical: 40 },
-  muted: { color: colors.textSecondary, fontSize: 13 },
-  heroRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 12,
-    marginBottom: 20,
+  muted: { color: colors.textMutedCool, fontSize: typography.body },
+  splitTabsBar: {
+    backgroundColor: colors.background,
+    paddingBottom: spacing.md,
+    marginBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderCool,
+    gap: spacing.sm,
   },
-  heroCopy: { flex: 1 },
-  heroActions: { gap: 6 },
-  eyebrow: { fontSize: 10, fontWeight: "800", letterSpacing: 1.4, color: colors.accentPrimary },
-  title: { fontSize: 30, fontWeight: "800", color: colors.textPrimary, marginTop: 3 },
-  subtitle: { fontSize: 13, lineHeight: 18, color: colors.textSecondary, marginTop: 5 },
-  editButton: {
+  splitTabsLabel: {
+    fontSize: typography.micro,
+    fontWeight: weight.heavy,
+    letterSpacing: 1.2,
+    color: colors.textFaintCool,
+  },
+  familyPills: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  familyPill: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceRaised,
     borderWidth: 1,
-    borderColor: colors.borderHover,
-    borderRadius: borderRadius.md,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    borderColor: colors.borderCoolStrong,
+    minHeight: 44,
+    justifyContent: "center",
   },
-  editText: { color: colors.accentPrimary, fontSize: 11, fontWeight: "700" },
-  pager: { flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 10 },
-  arrow: { width: 34, height: 40, alignItems: "center", justifyContent: "center" },
-  tabs: {
-    flex: 1,
+  familyPillActive: {
+    backgroundColor: colors.accentPrimary,
+    borderColor: colors.accentPrimary,
+  },
+  familyPillText: {
+    color: colors.textPrimary,
+    fontSize: typography.body,
+    fontWeight: weight.bold,
+  },
+  familyPillTextActive: {
+    color: colors.onAccent,
+  },
+  contentTabs: {
     flexDirection: "row",
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceRaised,
     borderRadius: borderRadius.md,
     padding: 4,
-    gap: 3,
+    gap: 4,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.borderCool,
   },
-  tab: { flex: 1, paddingVertical: 9, paddingHorizontal: 4, borderRadius: 9 },
-  tabActive: { backgroundColor: colors.accentPrimary },
-  tabText: { color: colors.textSecondary, textAlign: "center", fontSize: 12, fontWeight: "700" },
-  tabTextActive: { color: colors.onAccent },
+  contentTab: {
+    flex: 1,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: borderRadius.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+  },
+  contentTabActive: {
+    backgroundColor: colors.accentPrimary,
+  },
+  contentTabText: {
+    color: colors.textMutedCool,
+    fontSize: typography.body,
+    fontWeight: weight.bold,
+  },
+  contentTabTextActive: {
+    color: colors.onAccent,
+  },
+  sessionMeta: {
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.borderCool,
+    borderRadius: borderRadius.lg,
+    overflow: "hidden",
+    paddingTop: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  section: {
+    marginBottom: spacing.xl,
+    gap: spacing.md,
+  },
+  sectionHead: {
+    gap: spacing.xs,
+    paddingHorizontal: spacing.xs,
+  },
+  sectionEyebrow: {
+    fontSize: typography.micro,
+    fontWeight: weight.heavy,
+    letterSpacing: 1.2,
+    color: colors.textFaintCool,
+  },
+  sectionTitle: {
+    fontSize: typography.title,
+    fontWeight: weight.heavy,
+    color: colors.textPrimary,
+  },
+  sectionSub: {
+    fontSize: typography.caption,
+    lineHeight: 18,
+    color: colors.textMutedCool,
+  },
+  sectionBody: {
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.borderCool,
+    borderRadius: borderRadius.lg,
+    overflow: "hidden",
+  },
   summary: {
     backgroundColor: colors.cardBackground,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.borderCool,
     borderRadius: borderRadius.lg,
     overflow: "hidden",
+    paddingTop: spacing.md,
   },
   summaryHead: {
     flexDirection: "row",
@@ -1778,38 +1939,46 @@ const styles = StyleSheet.create({
     padding: 14,
     paddingBottom: 10,
   },
-  daySummaryHead: { padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border },
-  dayName: { fontSize: 17, fontWeight: "800", color: colors.textPrimary },
-  dayFocus: { fontSize: 12, color: colors.textSecondary, marginTop: 3 },
-  metrics: { flexDirection: "row", flexWrap: "wrap" },
-  metric: {
-    width: "50%",
-    padding: 14,
-    borderBottomWidth: 1,
-    borderRightWidth: 1,
-    borderColor: colors.border,
+  nextSessionRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
-  metricLabel: { fontSize: 9, fontWeight: "800", letterSpacing: 0.8, color: colors.textMuted },
-  metricValue: { fontSize: 13, fontWeight: "700", color: colors.textPrimary, marginTop: 4 },
-  accent: { color: colors.accentPrimary },
-  cards: { gap: 10, marginTop: 16 },
-  variantBlock: { gap: 10 },
-  variantHead: {
-    paddingHorizontal: 4,
-    paddingTop: 4,
-    paddingBottom: 2,
-    gap: 2,
+  nextSessionLabel: {
+    flex: 1,
+    fontSize: typography.body,
+    color: colors.textMutedCool,
   },
-  variantTitle: {
-    fontSize: 13,
-    fontWeight: "800",
+  nextSessionWhen: {
+    fontSize: typography.body,
+    fontWeight: weight.heavy,
     color: colors.textPrimary,
-    letterSpacing: 0.2,
   },
-  variantFocus: {
-    fontSize: 12,
-    color: colors.textSecondary,
+  roleLegend: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.md,
   },
+  roleLegendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  roleLegendDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+  },
+  roleLegendText: {
+    fontSize: typography.caption,
+    color: colors.textMutedCool,
+  },
+  cards: { gap: 10 },
   summaryCard: {
     backgroundColor: colors.cardBackground,
     borderWidth: 1,
@@ -1821,6 +1990,12 @@ const styles = StyleSheet.create({
   nameRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 7 },
   exerciseName: { color: colors.textPrimary, fontSize: 16, fontWeight: "800" },
   goalLine: { color: colors.textSecondary, fontSize: 12, lineHeight: 17, marginTop: 5 },
+  sessionLine: {
+    color: colors.accentPrimary,
+    fontSize: typography.caption,
+    fontWeight: weight.bold,
+    marginTop: 4,
+  },
   sessionLogs: {
     paddingHorizontal: 14,
     paddingBottom: 14,

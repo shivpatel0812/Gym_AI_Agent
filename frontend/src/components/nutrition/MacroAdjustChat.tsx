@@ -72,6 +72,42 @@ interface RevisedEstimate {
   revision_note?: string | null;
 }
 
+/**
+ * What the revision was made from, in the user's words.
+ *
+ * The photo is re-attached to every turn when it is available — but four
+ * paths reach the chat without it (the meal was typed, the archive write
+ * failed, the log is gone, the read errored) and they all used to look
+ * identical to a revision made by looking at the plate again. Naming the
+ * source is the difference between "the AI forgot my photo" and a chat that
+ * says which evidence it had.
+ */
+function photoSourceNote(
+  attached: boolean | null,
+  status: string | null
+): { text: string; icon: "camera-outline" | "image-off-outline"; tone: "ok" | "warn" } | null {
+  if (attached === null) return null;
+  if (attached) {
+    return {
+      text: "Reading your photo — revisions come from the original image.",
+      icon: "camera-outline",
+      tone: "ok",
+    };
+  }
+  if (status === "no_log" || status === null) {
+    return {
+      text: "No photo on this entry — I'm working from the numbers above.",
+      icon: "image-off-outline",
+      tone: "warn",
+    };
+  }
+  return {
+    text: "Your photo couldn't be loaded, so I'm working from the numbers above rather than the image.",
+    icon: "image-off-outline",
+    tone: "warn",
+  };
+}
+
 interface MacroAdjustChatProps {
   estimate: PhotoEstimate;
   model?: AiModelId;
@@ -287,12 +323,22 @@ export default function MacroAdjustChat({
   const [latestRevision, setLatestRevision] = useState<RevisedEstimate | null>(null);
   const [lastFailedMessage, setLastFailedMessage] = useState<string | null>(null);
   const [logId, setLogId] = useState<string | null>(photoLogId || null);
+  // Whether the last revision actually had the meal photo in front of it.
+  // `null` = not known yet. With no log id there is nothing to re-read, so
+  // that case is known before the first turn; every other case is only
+  // answered by the server, because a log can exist and still hold no image.
+  const [photoAttached, setPhotoAttached] = useState<boolean | null>(
+    photoLogId ? null : false
+  );
+  const [photoStatus, setPhotoStatus] = useState<string | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const inputRef = useRef<TextInput>(null);
   const atLimit = completedTurns >= MAX_TURNS;
 
   useEffect(() => {
     setLogId(photoLogId || null);
+    setPhotoAttached(photoLogId ? null : false);
+    setPhotoStatus(null);
   }, [photoLogId]);
 
   useEffect(() => {
@@ -354,7 +400,11 @@ export default function MacroAdjustChat({
           photo_log_id: logId || undefined,
           model,
         },
-        { timeout: model === "gpt-5.6-sol" ? 120000 : 60000 }
+        // The server runs the correction on at least the model that produced
+        // the estimate, so a 4o request here can still be answered by the
+        // escalated one. Budgeting for 4o would time out the client on
+        // exactly the revisions that took the most care.
+        { timeout: 120000 }
       );
 
       const reply =
@@ -368,6 +418,16 @@ export default function MacroAdjustChat({
         typeof response.data?.photo_log_id === "string"
           ? response.data.photo_log_id
           : null;
+
+      // Report what the revision was actually made from. Every failure to
+      // reload the photo used to be silent, so a correction reasoned from the
+      // ledger alone was indistinguishable from one made by looking again.
+      setPhotoAttached(response.data?.photo_attached === true);
+      setPhotoStatus(
+        typeof response.data?.photo_status === "string"
+          ? response.data.photo_status
+          : null
+      );
 
       if (nextLogId) {
         setLogId(nextLogId);
@@ -408,6 +468,7 @@ export default function MacroAdjustChat({
   };
 
   const refinementsLeft = Math.max(0, MAX_TURNS - completedTurns);
+  const sourceNote = photoSourceNote(photoAttached, photoStatus);
 
   return (
     <Modal
@@ -440,6 +501,31 @@ export default function MacroAdjustChat({
             </View>
             <View style={s.headerSpacer} />
           </View>
+
+          {sourceNote ? (
+            <View
+              style={[
+                s.sourceNote,
+                sourceNote.tone === "warn" && s.sourceNoteWarn,
+              ]}
+              accessibilityRole="text"
+              accessibilityLabel={sourceNote.text}
+            >
+              <MaterialCommunityIcons
+                name={sourceNote.icon}
+                size={15}
+                color={sourceNote.tone === "warn" ? colors.attention : colors.ai}
+              />
+              <Text
+                style={[
+                  s.sourceNoteText,
+                  sourceNote.tone === "warn" && s.sourceNoteTextWarn,
+                ]}
+              >
+                {sourceNote.text}
+              </Text>
+            </View>
+          ) : null}
 
           <ScrollView
             ref={scrollRef}
@@ -673,6 +759,29 @@ const s = StyleSheet.create({
   },
   headerSpacer: {
     width: 42,
+  },
+  sourceNote: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    backgroundColor: "#0B1512",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  sourceNoteWarn: {
+    backgroundColor: "#1A100C",
+  },
+  sourceNoteText: {
+    flex: 1,
+    color: colors.ai,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "600",
+  },
+  sourceNoteTextWarn: {
+    color: colors.attention,
   },
   chatScroll: {
     flex: 1,

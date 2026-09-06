@@ -4,8 +4,16 @@ Estimate macros for a typed food query, e.g. "2 belvita crackers".
 import json
 import math
 from typing import Dict, Optional, Tuple
+from ai_models import ESCALATION_MODEL, completion_kwargs, is_gpt5_family, resolve_model
+
 from .gpt_fallback import get_openai_client
 from .nutrients import NUTRIENT_RULES, optional_nutrients
+from .text_estimate import (
+    build_text_analysis,
+    check_hint,
+    parse_calorie_hint,
+    should_escalate_text,
+)
 
 
 ESTIMATE_RULES = """
@@ -15,12 +23,30 @@ Rules:
 1. Parse quantity carefully: "I had 3", "3 of these", "in total", "x3" means multiply the whole item.
 2. Split the meal into components (wrap/bread, filling, oil, sauce, toppings). Estimate each, then SUM.
    Each component's "calories" field is the TOTAL for that component across all qty, not per-unit.
-3. If the user gives a calorie hint for a PART (e.g. "tortilla was like 150 cal each"), use that for THAT part only. Do NOT treat it as the total for the meal. Add filling, cooking oil, and extras on top.
-4. Aim for the most likely central estimate. Do not systematically overestimate or underestimate.
-5. Include cooking oil only when the user states it or the named preparation normally requires it. Do not infer extra oil merely because a dish is homemade.
-6. If the description is sparse, use a typical preparation as a neutral prior and avoid unusually lean or unusually rich assumptions.
-7. Calories must be at least 4*protein + 4*carbs + 9*fats (within 20 kcal). If not, raise calories to maintain basic consistency.
-8. calories MUST equal the sum of component calories when component calories are provided.
+3. Never list the same food twice — once as the finished dish and again as its parts. Either one
+   "chicken frankie" row, or separate tortilla / filling / oil rows. Not both.
+4. PART calorie hint — the user prices ONE component ("the tortilla was like 150 cal each"): use their
+   figure for THAT component only. Do NOT treat it as the total for the meal. Add filling, cooking oil,
+   and extras on top.
+5. WHOLE-MEAL calorie hint — the user prices the ENTIRE meal ("I think that was about 600 calories",
+   "felt like 600", "maybe 600 total"): their figure already covers everything they described. NEVER
+   add components on top of it, and never treat it as a floor to build up from. Estimate the meal
+   independently, then compare against their figure:
+     - within 25%: your estimate agrees with them; keep it.
+     - more than 25% apart: keep your own estimate — people routinely undercount oil, sauces and
+       portion size — but you MUST fill in "hint_disagreement" naming the specific items or amounts
+       that account for the gap, e.g. "roughly 350 kcal of it is the 3 tbsp of oil a paratha is
+       shallow-fried in". If you cannot name what accounts for the gap, then your estimate is the one
+       that is wrong: revise it toward their figure before answering.
+6. Aim for the most likely central estimate. Do not systematically overestimate or underestimate.
+7. Include cooking oil only when the user states it or the named preparation normally requires it. Do
+   not infer extra oil merely because a dish is homemade.
+8. If the description is sparse, use a typical preparation as a neutral prior and avoid unusually lean
+   or unusually rich assumptions. Push that uncertainty into portion.low_grams / portion.high_grams,
+   never into a smaller central estimate.
+9. Calories must be at least 4*protein + 4*carbs + 9*fats (within 20 kcal). If not, raise calories to
+   maintain basic consistency.
+10. calories MUST equal the sum of component calories when component calories are provided.
 
 Return JSON only with:
 """
@@ -170,7 +196,161 @@ def finalize_estimated_macros(parsed: Dict, query: str = "") -> Tuple[int, float
     )
 
 
-def estimate_food_from_query(query: str, name: Optional[str] = None) -> Optional[Dict]:
+
+
+def _schema_block(name_hint: str) -> str:
+    return f"""{{
+  "name": "short food title for the log",
+  "serving": "the full amount they ate, e.g. 3 frankie wraps",
+  "grams": number,
+  "identity_confidence": "high" | "medium" | "low",
+  "portion": {{"estimated_grams": number, "low_grams": number, "high_grams": number}},
+  "components": [
+    {{"item": "flour tortilla", "qty": 3, "estimated_grams": 150, "calories": 450,
+      "protein": 12, "carbs": 84, "fats": 6, "fiber": 4}},
+    {{"item": "chickpea and pea filling with oil", "qty": 3, "estimated_grams": 300,
+      "calories": 360, "protein": 15, "carbs": 42, "fats": 14, "fiber": 9}}
+  ],
+  "calories": number,
+  "protein": number,
+  "carbs": number,
+  "fats": number,
+  "fiber": number,
+  "sugar": number or null,
+  "sodium": number or null,
+  "hint_disagreement": "why your total differs from the calorie figure the user gave, or null",
+  "assumptions": ["short assumption"],
+  "uncertainties": ["short uncertainty"],
+  "aliases": ["short phrases someone might search"]
+}}
+
+Round calories to a whole number. Round protein, carbs, fats, and fiber to 1 decimal.
+If grams are unknown, estimate. aliases should include the original query and simpler names.
+{name_hint}"""
+
+
+def _build_prompt(query: str, name: Optional[str], hint: Optional[Dict]) -> str:
+    title_line = (
+        f'The logged food title should be: "{name.strip()}". Use that as "name".\n'
+        if (name or "").strip()
+        else ""
+    )
+    # The scope is decided here, deterministically, and stated to the model —
+    # not left for the model to infer. Mis-scoping a whole-meal figure as a
+    # per-part one is the failure this whole path was rebuilt around; a model
+    # that mis-scopes it will also report the mis-scoped reading back.
+    hint_line = ""
+    if hint:
+        if hint["scope"] == "whole":
+            hint_line = (
+                f'\nThe user has given their own figure for the WHOLE meal: '
+                f'{hint["stated_calories"]} kcal ("{hint["text"]}"). Rule 5 applies — that figure '
+                f'already covers everything they described. Do not add components on top of it.\n'
+            )
+        else:
+            hint_line = (
+                f'\nThe user has priced ONE PART of the meal at {hint["stated_calories"]} kcal '
+                f'("{hint["text"]}"). Rule 4 applies — that covers that part only.\n'
+            )
+
+    return f"""The user is logging food.
+
+{title_line}Description of what they ate:
+"{query}"
+{hint_line}
+{ESTIMATE_RULES}
+{NUTRIENT_RULES}
+{_schema_block("")}"""
+
+
+def _one_pass(client, prompt: str, model: str) -> Optional[Dict]:
+    """One JSON completion, with a single retry on unparseable output."""
+    last_error = None
+    for attempt in range(2):
+        try:
+            response = client.chat.completions.create(
+                **completion_kwargs(
+                    model,
+                    # Reasoning tokens come out of this budget, so a flat 700
+                    # truncates the JSON on a reasoning model and the estimate
+                    # silently demotes to nothing. Same lesson as the vision path.
+                    max_tokens=4000 if is_gpt5_family(model) else 1200,
+                    temperature=0.1 if attempt == 0 else 0.0,
+                ),
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+            )
+            parsed = _parse_json(response.choices[0].message.content or "")
+            if parsed and isinstance(parsed, dict):
+                return parsed
+        except Exception as e:
+            last_error = e
+    if last_error:
+        print(f"Error estimating food from query on {model}: {last_error}")
+    return None
+
+
+def _shape(parsed: Dict, query: str, name: Optional[str]) -> Dict:
+    """Turn one raw model response into the saved-food payload plus its evidence."""
+    coherence = assess_macro_coherence(parsed)
+    calories, protein, carbs, fats, fiber = finalize_estimated_macros(parsed, query=query)
+
+    if calories > MAX_CALORIES:
+        print(f"Warning: clamped implausible calories ({calories}) for query: {query!r}")
+        calories = MAX_CALORIES
+
+    logged_name = str((name or "").strip() or parsed.get("name") or query).strip()[:120] or query
+    serving = str(parsed.get("serving") or query).strip()[:80] or query
+    grams = _num(parsed.get("grams"), 100) or 100
+    if grams > MAX_GRAMS:
+        grams = MAX_GRAMS
+    aliases = parsed.get("aliases") if isinstance(parsed.get("aliases"), list) else []
+    alias_strs = [str(a).strip()[:80] for a in aliases if str(a).strip()]
+    if query not in alias_strs:
+        alias_strs.append(query)
+
+    return {
+        "food": {
+            "name": logged_name,
+            "serving": serving,
+            "grams": round(grams, 1),
+            "calories": calories,
+            "protein": protein,
+            "carbs": carbs,
+            "fats": fats,
+            "fiber": fiber,
+            **optional_nutrients(parsed),
+            "aliases": alias_strs[:12],
+        },
+        "parsed": parsed,
+        "coherence": coherence,
+    }
+
+
+def estimate_food_from_query(
+    query: str,
+    name: Optional[str] = None,
+    *,
+    model: Optional[str] = None,
+    allow_escalation: bool = True,
+    has_saved_prior: bool = False,
+) -> Optional[Dict]:
+    """Estimate macros for a typed description, cheap pass first.
+
+    Two passes, not one — the same argument `analyzer.py` makes for photos, and
+    for the same reason: a mixed multi-component meal is where a cheap model
+    shades each part low independently and the errors compound. Until Sep 2026
+    this path ran a single hardcoded `gpt-4o-mini` call, a model not even in
+    `ALLOWED_MODELS`, with no ledger, no confidence and no second opinion,
+    while the photo of the same meal got gpt-4o with escalation to
+    gpt-5.6-sol. A user who typed their meal instead of photographing it was
+    silently on the weakest estimator in the app.
+
+    The returned dict is the saved-food payload plus `analysis` — the evidence
+    behind it, in the same shape the photo path returns, so the results card
+    renders both. Callers persisting the food to the library must not persist
+    `analysis`; it describes one estimate, not the food.
+    """
     client = get_openai_client()
     if not client:
         print("Warning: OPENAI_API_KEY not set. Skipping food estimate.")
@@ -180,90 +360,64 @@ def estimate_food_from_query(query: str, name: Optional[str] = None) -> Optional
     if not q:
         return None
 
-    title_line = (
-        f'The logged food title should be: "{name.strip()}". Use that as "name".\n'
-        if (name or "").strip()
-        else ""
-    )
-    prompt = f"""The user is logging food.
+    hint = parse_calorie_hint(q)
+    prompt = _build_prompt(q, name, hint)
+    first_model = resolve_model(model)
 
-{title_line}Description of what they ate:
-"{q}"
-
-{ESTIMATE_RULES}
-{NUTRIENT_RULES}
-{{
-  "name": "short food title for the log",
-  "serving": "the full amount they ate, e.g. 3 frankie wraps",
-  "grams": number,
-  "components": [
-    {{"item": "flour tortilla", "qty": 3, "calories": 450}},
-    {{"item": "chickpea and pea filling with oil", "qty": 3, "calories": 360}}
-  ],
-  "calories": number,
-  "protein": number,
-  "carbs": number,
-  "fats": number,
-  "fiber": number,
-  "sugar": number or null,
-  "sodium": number or null,
-  "aliases": ["short phrases someone might search"]
-}}
-
-Round calories to a whole number. Round protein, carbs, fats, and fiber to 1 decimal.
-If grams are unknown, estimate. aliases should include the original query and simpler names."""
-
-    parsed = None
-    last_error = None
-    for attempt in range(2):  # one retry on malformed output
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                max_tokens=700,
-                temperature=0.1 if attempt == 0 else 0.0,
-            )
-            parsed = _parse_json(response.choices[0].message.content or "")
-            if parsed and isinstance(parsed, dict):
-                break
-        except Exception as e:
-            last_error = e
-            parsed = None
-
-    if not parsed or not isinstance(parsed, dict):
-        if last_error:
-            print(f"Error estimating food from query: {last_error}")
-        else:
-            print(f"Warning: could not parse model output for query: {q!r}")
+    parsed = _one_pass(client, prompt, first_model)
+    if not parsed:
+        print(f"Warning: could not parse model output for query: {q!r}")
         return None
 
-    calories, protein, carbs, fats, fiber = finalize_estimated_macros(parsed, query=q)
+    shaped = _shape(parsed, q, name)
+    hint_check = check_hint(hint, shaped["food"]["calories"])
+    analysis = build_text_analysis(
+        parsed,
+        query=q,
+        hint=hint,
+        hint_check=hint_check,
+        has_saved_prior=has_saved_prior,
+    )
+    decision = should_escalate_text(
+        analysis,
+        shaped["coherence"],
+        hint_check,
+        calories=shaped["food"]["calories"],
+    )
 
-    # Sanity clamps — guards against hallucinated outliers slipping through.
-    if calories > MAX_CALORIES:
-        print(f"Warning: clamped implausible calories ({calories}) for query: {q!r}")
-        calories = MAX_CALORIES
+    final_model = first_model
+    escalated = False
+    if decision["escalate"] and allow_escalation and first_model != ESCALATION_MODEL:
+        stronger = _one_pass(client, prompt, ESCALATION_MODEL)
+        # A failed second pass is not a failed estimate. Keep the first answer
+        # rather than dropping the log entirely.
+        if stronger:
+            escalated = True
+            final_model = ESCALATION_MODEL
+            shaped = _shape(stronger, q, name)
+            hint_check = check_hint(hint, shaped["food"]["calories"])
+            analysis = build_text_analysis(
+                stronger,
+                query=q,
+                hint=hint,
+                hint_check=hint_check,
+                has_saved_prior=has_saved_prior,
+            )
 
-    logged_name = str((name or "").strip() or parsed.get("name") or q).strip()[:120] or q
-    serving = str(parsed.get("serving") or q).strip()[:80] or q
-    grams = _num(parsed.get("grams"), 100) or 100
-    if grams > MAX_GRAMS:
-        grams = MAX_GRAMS
-    aliases = parsed.get("aliases") if isinstance(parsed.get("aliases"), list) else []
-    alias_strs = [str(a).strip()[:80] for a in aliases if str(a).strip()]
-    if q not in alias_strs:
-        alias_strs.append(q)
+    if hint_check:
+        # Only ever the model's own words about the gap, never a generated
+        # excuse: if it could not name what accounts for the difference, the
+        # card says so plainly rather than manufacturing a reason.
+        hint_check["reason"] = (
+            str(shaped["parsed"].get("hint_disagreement") or "").strip()[:200] or None
+        )
+        analysis["hint_check"] = hint_check
 
-    return {
-        "name": logged_name,
-        "serving": serving,
-        "grams": round(grams, 1),
-        "calories": calories,
-        "protein": protein,
-        "carbs": carbs,
-        "fats": fats,
-        "fiber": fiber,
-        **optional_nutrients(parsed),
-        "aliases": alias_strs[:12],
+    analysis["routing"] = {
+        "first_pass_model": first_model,
+        "final_model": final_model,
+        "escalated": escalated,
+        "triggers": decision["triggers"],
     }
+
+    return {**shaped["food"], "analysis": analysis}

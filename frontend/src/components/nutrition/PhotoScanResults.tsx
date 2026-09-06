@@ -56,12 +56,30 @@ function displayNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
-/** Plain-language read on how well the PHOTO could be measured. */
-function confidenceLabel(level: string) {
+/**
+ * Plain-language read on how well the meal could be measured.
+ *
+ * A described meal is graded on whether the amount was *stated*, not on
+ * whether anything could be seen, so calling a typed entry a "clear photo"
+ * names the wrong evidence — and names evidence that does not exist.
+ */
+function confidenceLabel(level: string, source: "photo" | "text") {
+  if (source === "text") {
+    if (level === "high") return "Clear description";
+    if (level === "medium") return "Reasonably clear description";
+    return "Hard to measure from this description";
+  }
   if (level === "high") return "Clear photo";
   if (level === "medium") return "Reasonably clear photo";
   return "Hard to measure from this photo";
 }
+
+function percentGap(ratio: number) {
+  return Math.abs(Math.round(ratio * 100));
+}
+
+/** Mirrors HINT_DISAGREEMENT_RATIO in backend/nutrition/text_estimate.py. */
+const HINT_DISAGREEMENT_RATIO = 0.25;
 
 export default function PhotoScanResults({
   visible,
@@ -137,6 +155,28 @@ export default function PhotoScanResults({
   ]);
 
   const confidence = estimate.analysis.confidence;
+
+  // Recomputed against what is on screen, not against the figure the server
+  // compared. Bumping servings or accepting a revision changes the total, and
+  // a row still quoting the original gap would be arguing about a number the
+  // user can no longer see. It disappears once they agree.
+  const hint = useMemo(() => {
+    const base = estimate.analysis.hintCheck;
+    if (!base) return null;
+    const ratio = (displayed.calories - base.statedCalories) / base.statedCalories;
+    return {
+      ...base,
+      estimatedCalories: displayed.calories,
+      differenceRatio: ratio,
+      direction: ratio > 0 ? ("higher" as const) : ("lower" as const),
+      disagrees: Math.abs(ratio) >= HINT_DISAGREEMENT_RATIO,
+      // The model explained the gap it produced. Once the user has scaled the
+      // portion the gap is a different one, so the explanation no longer
+      // covers it and showing it would misattribute their own edit.
+      reason:
+        displayed.calories === base.estimatedCalories ? base.reason : undefined,
+    };
+  }, [estimate.analysis.hintCheck, displayed.calories]);
 
   const handleAcceptRevision = (revised: RevisedEstimate) => {
     onEstimateChange({
@@ -295,6 +335,32 @@ export default function PhotoScanResults({
             </Text>
           )}
 
+          {hint && hint.disagrees ? (
+            // The user is the only witness to this meal, and they gave a
+            // figure. Answering it with a silently different number leaves a
+            // corrected underestimate and a bug looking identical from here.
+            <TouchableOpacity
+              style={styles.hintRow}
+              onPress={() => setShowChat(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`You guessed ${hint.statedCalories} calories, this estimate is ${hint.estimatedCalories}. Tap to discuss it.`}
+            >
+              <MaterialCommunityIcons
+                name="scale-balance"
+                size={15}
+                color={colors.attentionOnLight}
+              />
+              <Text style={styles.uncountedText}>
+                <Text style={styles.uncountedLead}>
+                  You guessed {hint.statedCalories} kcal ·{" "}
+                </Text>
+                this comes to {hint.estimatedCalories}, {percentGap(hint.differenceRatio)}%{" "}
+                {hint.direction}
+                {hint.reason ? ` — ${hint.reason}` : ""}. Tap if that's not your portion.
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+
           {estimate.analysis.uncounted.length ? (
             // The omission made visible. Silence here is the exact failure
             // this list exists to end: a side dish the model saw, did not
@@ -317,12 +383,18 @@ export default function PhotoScanResults({
 
           <View style={styles.confidenceRow}>
             <MaterialCommunityIcons
-              name={confidence.level === "high" ? "camera-outline" : "camera-off-outline"}
+              name={
+                estimate.analysis.source === "text"
+                  ? "text-box-outline"
+                  : confidence.level === "high"
+                    ? "camera-outline"
+                    : "camera-off-outline"
+              }
               size={14}
               color="#8A8A8E"
             />
             <Text style={styles.confidenceText}>
-              {confidenceLabel(confidence.level)}
+              {confidenceLabel(confidence.level, estimate.analysis.source)}
               {confidence.reasons[0] && confidence.level !== "high"
                 ? ` · ${confidence.reasons[0]}`
                 : ""}
@@ -526,6 +598,14 @@ const styles = StyleSheet.create({
     color: "#6B6B70",
     fontSize: 12,
     lineHeight: 16,
+  },
+  hintRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: colors.attentionOnLightSoft,
   },
   uncountedRow: {
     flexDirection: "row",

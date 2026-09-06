@@ -3,7 +3,7 @@ from time import perf_counter
 from starlette.concurrency import run_in_threadpool
 
 from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File, Form
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from io import BytesIO
 import tempfile
@@ -18,9 +18,10 @@ from models import (
     SavedFood,
     SavedFoodUpdate,
 )
+from ai_models import stronger_model
 from nutrition.gpt_food_lookup import estimate_food_from_query
 from nutrition.adjust_estimate import adjust_macro_estimate
-from nutrition.fit_score import score_day, score_food
+from nutrition.fit_score import score_day, score_day_totals, score_food
 from nutrition.logged_meals import slot_for_meal
 from nutrition.meal_timing import stamp_logged_at, summarize_meal_timing
 from nutrition.photo_estimate import normalize_cooking_style
@@ -31,6 +32,8 @@ from nutrition.photo_log_store import (
     create_photo_log,
     compress_image_for_archive,
     load_archived_image,
+    load_archived_image_result,
+    PHOTO_READ_ERROR,
     record_accepted_estimate,
 )
 import re
@@ -154,6 +157,22 @@ def _food_search_blob(food: dict) -> str:
     parts = [food.get("name") or "", food.get("serving") or ""]
     parts.extend(food.get("aliases") or [])
     return " ".join(_normalize_food_text(p) for p in parts if p)
+
+
+# A typed entry stops being a lookup key and starts being a statement about one
+# meal somewhere around here: a quantity, a preparation, or the user's own
+# calorie figure means they are describing today's plate, not naming a food.
+_DESCRIPTION_MARKERS = (
+    " with ", " and ", " plus ", "calorie", "cal ", "kcal", " fried",
+    " grilled", " baked", " boiled", " roasted", " homemade", " leftover",
+)
+
+
+def _reads_as_description(query: str) -> bool:
+    text = " " + _normalize_food_text(query) + " "
+    if len(text.split()) >= 8:
+        return True
+    return any(marker in text for marker in _DESCRIPTION_MARKERS)
 
 
 def _food_matches_query(food: dict, query: str) -> bool:
@@ -357,10 +376,12 @@ async def get_daily_macro_history(
     user_id: str = Depends(get_user_id),
 ):
     """
-    One row per logged day — totals only, no food items.
+    One row per logged day — totals plus a composite day score.
 
-    Built for the Nutrition History chart. Dumping every meal for a 90-day
-    scrub is a multi-megabyte response for no plot benefit.
+    The score folds calories/protein/carbs/fats/fiber against the plan (protein
+    first). Without plan targets it falls back to protein density so the chart
+    still has a line. Dumping every meal for a 90-day scrub is a multi-megabyte
+    response for no plot benefit, so food items stay out.
     """
     try:
         cutoff = user_now(db, user_id) - timedelta(days=days)
@@ -402,18 +423,58 @@ async def get_daily_macro_history(
         bucket["fats"] += float(fats or 0)
         bucket["fiber"] += float(fiber or 0)
 
-    series = [
-        {
-            "date": day,
-            "calories": round(totals["calories"]),
-            "protein": round(totals["protein"], 1),
-            "carbs": round(totals["carbs"], 1),
-            "fats": round(totals["fats"], 1),
-            "fiber": round(totals["fiber"], 1),
+    context = _fit_context(user_id)
+    goal = (context or {}).get("goal") or ""
+    # Prefer the full targets dict from the plan when present; _fit_context only
+    # keeps cal/protein for food-level scoring.
+    plan_targets: Dict[str, Any] = {}
+    try:
+        plan = NutritionPlanStore(db, user_id).get_active() or {}
+        plan_targets = dict(plan.get("targets") or {})
+        if not goal:
+            goal = plan.get("goal") or ""
+    except Exception:
+        plan_targets = {
+            "calories": (context or {}).get("daily_calories"),
+            "protein": (context or {}).get("daily_protein"),
         }
-        for day, totals in sorted(by_day.items())
-    ]
-    return {"days": days, "series": series}
+
+    series = []
+    for day, totals in sorted(by_day.items()):
+        scored = score_day_totals(totals, goal=goal, targets=plan_targets)
+        series.append(
+            {
+                "date": day,
+                "calories": round(totals["calories"]),
+                "protein": round(totals["protein"], 1),
+                "carbs": round(totals["carbs"], 1),
+                "fats": round(totals["fats"], 1),
+                "fiber": round(totals["fiber"], 1),
+                "score": scored.get("score"),
+                "band": scored.get("band"),
+                "score_source": scored.get("source"),
+                "score_reason": scored.get("reason"),
+                "score_parts": scored.get("parts") or {},
+            }
+        )
+
+    return {
+        "days": days,
+        "series": series,
+        "targets": {
+            "calories": plan_targets.get("calories"),
+            "protein": plan_targets.get("protein"),
+            "carbs": plan_targets.get("carbs"),
+            "fats": plan_targets.get("fats"),
+            "fiber": plan_targets.get("fiber"),
+        },
+        "goal": goal or None,
+        "scoring": (
+            "plan"
+            if plan_targets.get("calories") and plan_targets.get("protein")
+            else "density"
+        ),
+    }
 
 
 @router.get("/meal-timing")
@@ -763,25 +824,46 @@ async def estimate_food(payload: FoodEstimateRequest, user_id: str = Depends(get
 
     saved = [_serialize_food(doc) for doc in _foods_ref(user_id).stream()]
     matches = [f for f in saved if _food_matches_query(f, query)]
-    if matches:
+    # A search-box entry ("belvita") should reuse the library; a described meal
+    # ("2 parathas with dahi, shallow fried, felt like 600") must not. The
+    # library row is keyed on a name, and returning it silently discards the
+    # quantity, preparation and calorie figure the user just took the trouble
+    # to type — the same entry answered by a stale number no matter what they
+    # said about today's portion.
+    if matches and not _reads_as_description(query):
         matches.sort(key=lambda f: f.get("last_used_at") or "", reverse=True)
         best = matches[0]
         best["from_cache"] = True
         return best
 
-    estimated = estimate_food_from_query(query, name=payload.name)
+    estimated = estimate_food_from_query(
+        query,
+        name=payload.name,
+        model=payload.model,
+        has_saved_prior=bool(matches),
+    )
     if not estimated:
         raise HTTPException(
             status_code=502,
             detail="Could not estimate that food. Try a clearer name or log it as custom.",
         )
 
+    # `analysis` describes THIS estimate — its confidence, its ledger, the
+    # disagreement with what the user guessed. The library stores a food, so it
+    # never gets a copy; a saved row carrying one estimate's confidence would
+    # keep reporting it against every future portion.
+    analysis = estimated.pop("analysis", None)
     estimated["created_at"] = datetime.now().isoformat()
     estimated["updated_at"] = estimated["created_at"]
     estimated["last_used_at"] = estimated["created_at"]
     doc_ref = _foods_ref(user_id).document()
     doc_ref.set(estimated)
-    return {"id": doc_ref.id, **estimated, "from_cache": False}
+    return {
+        "id": doc_ref.id,
+        **estimated,
+        "analysis": analysis,
+        "from_cache": False,
+    }
 
 
 @router.post("/fit-preview")
@@ -843,18 +925,25 @@ async def adjust_estimate_endpoint(
 
     # The upload itself is deleted after the first estimate, so re-read the
     # archived copy. Without it the revision can only nudge a number it has
-    # never seen.
+    # never seen — so when it is missing, say why rather than revising blind
+    # behind a UI that looks identical either way.
     try:
-        image_data_url = load_archived_image(db, user_id, payload.photo_log_id)
+        photo = load_archived_image_result(db, user_id, payload.photo_log_id)
     except Exception as exc:
         print(f"Warning: could not reload photo for adjustment: {exc}")
-        image_data_url = None
+        photo = {"data_url": None, "status": PHOTO_READ_ERROR, "model": None}
+    image_data_url = photo.get("data_url")
+
+    # The estimate being corrected may have come from an escalated pass. Run
+    # the correction on at least that model: handing it back to the weaker one
+    # the picker happens to hold makes the fix worse than what it is fixing.
+    model = stronger_model(payload.model, photo.get("model"))
 
     result = adjust_macro_estimate(
         current_estimate=payload.current_estimate,
         user_message=message,
         history=history,
-        model=payload.model,
+        model=model,
         image_data_url=image_data_url,
     )
     if not result:
@@ -880,4 +969,6 @@ async def adjust_estimate_endpoint(
     except Exception as exc:
         print(f"Warning: adjust chat log failed: {exc}")
 
+    result["photo_attached"] = bool(image_data_url)
+    result["photo_status"] = photo.get("status")
     return result

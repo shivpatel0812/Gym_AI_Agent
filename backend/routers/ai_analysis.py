@@ -17,7 +17,7 @@ import user_time
 from auth import get_user_id
 from db import db
 from ai_analysis import FitnessDataAnalyzer, FitnessAICoach, get_user_profile_for_ai
-from ai_analysis.coach_tools import CoachToolbox
+from ai_analysis.coach_tools import CoachToolbox, asks_to_see_a_meal_photo
 from ai_analysis.conversation_store import ConversationStore
 
 router = APIRouter(prefix="/api/ai-analysis", tags=["ai-analysis"])
@@ -520,7 +520,11 @@ async def chat_with_ai(
         split_context = _split_context_for_plan(user_id) if mode == "plan" else None
         nutrition_context = _nutrition_context_for_chat(user_id) if mode == "nutrition" else None
         toolbox = CoachToolbox(
-            db, user_id, mode=mode, conversation_id=request.conversation_id
+            db, user_id, mode=mode, conversation_id=request.conversation_id,
+            # Opening a meal photograph happens because the user asked for it
+            # in this message, never because the model judged it might help.
+            # Withheld from the toolset entirely when this is False.
+            allow_photo_view=asks_to_see_a_meal_photo(request.message),
         )
 
         # Get chat response, with tools so the coach can look up specifics
@@ -658,7 +662,11 @@ async def chat_with_ai_stream(
         )
         mode = _chat_mode(request)
         toolbox = CoachToolbox(
-            db, user_id, mode=mode, conversation_id=request.conversation_id
+            db, user_id, mode=mode, conversation_id=request.conversation_id,
+            # Opening a meal photograph happens because the user asked for it
+            # in this message, never because the model judged it might help.
+            # Withheld from the toolset entirely when this is False.
+            allow_photo_view=asks_to_see_a_meal_photo(request.message),
         )
 
         store = ConversationStore(db, user_id)

@@ -31,6 +31,7 @@ import { normalizeMealLabel } from "../../lib/recentMeals";
 import { foodQuantity, scaleFoodItem } from "../../lib/foodQuantity";
 import { planItemAppliesToday, todayWeekdayKey } from "../../lib/mealSlots";
 import ProgressTopBar from "./ProgressTopBar";
+import DailyCoach from "./DailyCoach";
 import QuickLogBars from "./QuickLogBars";
 import TodayFoodLog from "./TodayFoodLog";
 import {
@@ -51,6 +52,7 @@ type Routine = {
   icon?: string;
   sort_order?: number;
   completed_dates?: string[];
+  scheduled_days?: string[];
 };
 
 const ROUTINE_ICONS: { name: keyof typeof MaterialCommunityIcons.glyphMap; label: string }[] = [
@@ -113,6 +115,10 @@ function Sheet({
 export default function Home() {
   const navigation = useNavigation<any>();
   const date = todayKey();
+  const [coachRevision, setCoachRevision] = useState(0);
+  const homeScroll = useRef<ScrollView>(null);
+  const waterPosition = useRef(0);
+  const routinePosition = useRef(0);
   const [sleepHours, setSleepHours] = useState<number | null>(null);
   const [sleepQuality, setSleepQuality] = useState<number | null>(null);
   const [sleepId, setSleepId] = useState<string | null>(null);
@@ -155,6 +161,7 @@ export default function Home() {
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
   const [routineName, setRoutineName] = useState("");
   const [routineDesc, setRoutineDesc] = useState("");
+  const [routineDays, setRoutineDays] = useState<string[]>([]);
   const [routineIcon, setRoutineIcon] = useState<string>("briefcase-outline");
   const macrosWriteChain = useRef(Promise.resolve());
   const todayMacroIdRef = useRef<string | null>(null);
@@ -207,15 +214,18 @@ export default function Home() {
         if (!toWrite.length) {
           if (id) {
             await apiClient.delete(`/api/macros/${id}`);
+            setCoachRevision(v => v + 1);
             todayMacroIdRef.current = null;
           }
           return;
         }
         if (id) {
           await apiClient.put(`/api/macros/${id}`, { date, food_items: toWrite });
+          setCoachRevision(v => v + 1);
           return;
         }
         const res = await apiClient.post("/api/macros", { date, food_items: toWrite });
+        setCoachRevision(v => v + 1);
         const newId = res.data?.id ? String(res.data.id) : null;
         if (!newId) return;
         todayMacroIdRef.current = newId;
@@ -342,6 +352,7 @@ export default function Home() {
         } }));
       }
     }));
+    setCoachRevision(v => v + 1);
   }, [date]);
 
   useEffect(() => {
@@ -394,6 +405,7 @@ export default function Home() {
     setEditingRoutine(null);
     setRoutineName("");
     setRoutineDesc("");
+    setRoutineDays([]);
     setRoutineIcon("briefcase-outline");
     setSheet("routine");
   };
@@ -401,6 +413,7 @@ export default function Home() {
     setEditingRoutine(routine);
     setRoutineName(routine.name);
     setRoutineDesc(routine.description || "");
+    setRoutineDays(routine.scheduled_days || []);
     setRoutineIcon(routine.icon || "briefcase-outline");
     setSheet("routine");
   };
@@ -485,6 +498,7 @@ export default function Home() {
         const res = await apiClient.post("/api/sleep", payload);
         setSleepId(res.data?.id || null);
       }
+      setCoachRevision(v => v + 1);
       setSleepHours(hours);
       setDraftSleep(hours);
       setSleepRows((prev) => {
@@ -508,6 +522,7 @@ export default function Home() {
         const res = await apiClient.post("/api/stress", payload);
         setStressId(res.data?.id || null);
       }
+      setCoachRevision(v => v + 1);
       setStressLevel(level);
       setDraftStress(level);
       setStressRows((prev) => {
@@ -529,6 +544,7 @@ export default function Home() {
         const res = await apiClient.post("/api/hydration", payload);
         setWaterId(res.data?.id || null);
       }
+      setCoachRevision(v => v + 1);
     } catch (error) {
       console.error("Error saving hydration:", error);
     }
@@ -763,6 +779,7 @@ export default function Home() {
       const payload = {
         name: routineName.trim(),
         description: routineDesc.trim() || undefined,
+        scheduled_days: routineDays,
         icon: routineIcon,
         sort_order: editingRoutine?.sort_order ?? routines.length,
         completed_dates: editingRoutine?.completed_dates || [],
@@ -817,6 +834,7 @@ export default function Home() {
 
   return (
     <ScrollView
+      ref={homeScroll}
       style={styles.container}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
@@ -827,6 +845,12 @@ export default function Home() {
         <Text style={styles.dateLine}>{dateLabel}</Text>
       </View>
 
+      <DailyCoach date={date} revision={coachRevision} onAction={action => {
+        if (action === "workout") navigation.navigate("Workouts");
+        else if (action === "nutrition") navigation.navigate("Nutrition");
+        else if (action === "wellness") openWellness();
+        else homeScroll.current?.scrollTo({ y: action === "water" ? waterPosition.current : routinePosition.current, animated: true });
+      }} />
       <ProgressTopBar />
 
       {(() => {
@@ -875,6 +899,7 @@ export default function Home() {
         );
       })()}
 
+      <View onLayout={event => { waterPosition.current = event.nativeEvent.layout.y; }} />
       <QuickLogBars
         available={{ sleep: Boolean(available("Sleep")), stress: Boolean(available("Stress")),
           wellness: Boolean(available("Wellness") && available("Body feelings")),
@@ -909,6 +934,7 @@ export default function Home() {
         onBumpFood={bumpFoodQuantity}
       /> : null}
 
+      <View onLayout={event => { routinePosition.current = event.nativeEvent.layout.y; }} />
       {available("Routines") ? <>
       <View style={styles.routinesHead}>
         <Text style={styles.sectionLabel}>Routines</Text>
@@ -1076,6 +1102,7 @@ export default function Home() {
       </Sheet>
 
       <Sheet visible={sheet === "routine"} title={editingRoutine ? "Edit routine" : "Add routine"} onClose={() => setSheet(null)}>
+        <ScrollView style={{ maxHeight: 500 }} keyboardShouldPersistTaps="handled">
         <Text style={styles.fieldLabel}>Name</Text>
         <TextInput
           value={routineName}
@@ -1093,6 +1120,16 @@ export default function Home() {
           style={[styles.input, { height: 80, textAlignVertical: "top" }]}
           multiline
         />
+        <Text style={styles.fieldLabel}>Which days? (optional)</Text>
+        <Text style={{ color: colors.textMutedCool, fontSize: 12, marginBottom: 8 }}>Set office, commute or other routine days for your daily coach.</Text>
+        <View style={{ flexDirection: "row", gap: 4, marginBottom: 12 }}>
+          {["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map(day => <TouchableOpacity key={day}
+            accessibilityRole="checkbox" accessibilityLabel={`${day} routine`} accessibilityState={{ checked: routineDays.includes(day) }}
+            onPress={() => setRoutineDays(days => days.includes(day) ? days.filter(d => d !== day) : [...days, day])}
+            style={{ flex: 1, paddingVertical: 12, borderRadius: 8, backgroundColor: routineDays.includes(day) ? colors.accentPrimary : colors.surface }}>
+            <Text style={{ textAlign: "center", color: routineDays.includes(day) ? colors.onAccent : colors.textSecondary, fontSize: 11 }}>{day}</Text>
+          </TouchableOpacity>)}
+        </View>
         <Text style={styles.fieldLabel}>Icon</Text>
         <View style={styles.iconGrid}>
           {ROUTINE_ICONS.map((item) => {
@@ -1115,6 +1152,7 @@ export default function Home() {
         >
           <Text style={styles.saveText}>{saving ? "Saving..." : editingRoutine ? "Save changes" : "Add routine"}</Text>
         </TouchableOpacity>
+        </ScrollView>
         {editingRoutine ? (
           <TouchableOpacity style={styles.deleteBtn} onPress={deleteRoutine}>
             <Text style={styles.deleteText}>Delete</Text>

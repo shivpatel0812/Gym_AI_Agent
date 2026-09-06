@@ -742,6 +742,15 @@ async def get_plan_projection(
     all_workout_sessions = recommender.data_fetcher.get_all_workout_sessions()
     user_goal = profile.get("primary_goal") or "Build Muscle"
 
+    # How fast this lifter can plausibly add load, and whether they are eating
+    # to support it. Without these the walk spent the novice rate on everyone
+    # and ignored the plan's own nutrition goal, so a maintenance eater years
+    # past their newbie window was projected a beginner's bulk.
+    experience_level = profile.get("experience_level")
+    energy_balance = plan.get("nutrition_goal") or (
+        (plan.get("nutrition_companion") or {}).get("goal")
+    )
+
     # Each day is its own exposure: a heavy session and a volume session must
     # not each simulate both weekly occurrences using the same prescription.
     day_frequency: dict = {}
@@ -803,6 +812,8 @@ async def get_plan_projection(
                 target_weight=exercise.get("target_weight"),
                 target_reps=exercise.get("target_reps"),
                 target_weeks=exercise.get("target_weeks"),
+                experience_level=experience_level,
+                energy_balance=energy_balance,
             )
             # The chart's backward axis and the engine's input are different
             # questions. `projection_history` is what the engine may reason from:

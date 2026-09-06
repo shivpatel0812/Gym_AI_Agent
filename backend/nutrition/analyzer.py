@@ -134,7 +134,9 @@ def analyze_food_image(
     # turn a detected bowl/cup/bottle into an arbitrary USDA food result.
     fallback_query = (description or title or "").strip()
     if fallback_query:
-        fallback = estimate_food_from_query(fallback_query, name=title)
+        fallback = estimate_food_from_query(
+            fallback_query, name=title, model=model
+        )
         if fallback:
             item = {
                 "name": fallback["name"],
@@ -147,10 +149,24 @@ def analyze_food_image(
                 "sodium": fallback.get("sodium"),
                 "amount": fallback.get("serving"),
             }
-            analysis = empty_photo_analysis(
+            # The description path now returns real evidence of its own — a
+            # ledger, a portion range, a confidence built on what the sentence
+            # pinned down. Discarding it for an empty shell told the user
+            # nothing about an estimate they still had to accept or correct.
+            analysis = fallback.get("analysis") or empty_photo_analysis(
                 "The photo could not be read; this uses the written description only.",
                 cooking_style,
             )
+            analysis = {
+                **analysis,
+                "confidence": {
+                    **analysis["confidence"],
+                    "reasons": [
+                        "The photo could not be read; this is from your description only",
+                        *analysis["confidence"].get("reasons", []),
+                    ][:5],
+                },
+            }
             return {
                 "foods": [item["name"]],
                 "food_items": [item],

@@ -22,9 +22,27 @@ from PIL import Image
 COLLECTION = "food_photo_logs"
 
 # Keep well under Firestore's 1MB doc limit after JSON overhead.
+#
+# The cap is on *raw* JPEG bytes, but the doc stores base64, which is 4/3 the
+# size. At the old 700_000 the encoded string alone was ~933 KB against a
+# 1,048,576 byte document ceiling, leaving ~115 KB for the estimate, the
+# component ledger, the chat and the conversation history. A big multi-course
+# estimate could push the write over, `doc_ref.set()` would raise, and the log
+# — and with it the photo the Fix Results chat re-reads — was lost entirely.
 ARCHIVE_MAX_EDGE = 1024
 ARCHIVE_JPEG_QUALITY = 72
-ARCHIVE_MAX_BYTES = 700_000
+ARCHIVE_MAX_BYTES = 480_000
+# What the encoded image is allowed to occupy, leaving the rest of the budget
+# for text. Checked against the base64 length, not the raw length.
+ARCHIVE_MAX_ENCODED_BYTES = 660_000
+
+# Why a log holds no photo. Reported to the client so a correction chat can
+# say it is working from numbers alone instead of implying it looked again.
+PHOTO_OK = "ok"
+PHOTO_NO_LOG = "no_log"
+PHOTO_LOG_MISSING = "log_missing"
+PHOTO_NOT_ARCHIVED = "not_archived"
+PHOTO_READ_ERROR = "read_error"
 
 
 def _now() -> str:
@@ -64,8 +82,19 @@ def compress_image_for_archive(image_path: str) -> Optional[Dict[str, Any]]:
                 payload = buffer.getvalue()
             if not payload:
                 return None
+            encoded = base64.b64encode(payload).decode("ascii")
+            if len(encoded) > ARCHIVE_MAX_ENCODED_BYTES:
+                # Still too big to sit in a document alongside the estimate.
+                # Returning it anyway means the whole write fails and the log
+                # disappears; dropping it here keeps the log and lets the
+                # chat say the photo was not kept.
+                print(
+                    "Warning: archived food photo exceeds the document budget "
+                    f"({len(encoded)} b64 bytes); storing the log without it"
+                )
+                return None
             return {
-                "image_base64": base64.b64encode(payload).decode("ascii"),
+                "image_base64": encoded,
                 "image_content_type": "image/jpeg",
                 "image_bytes": len(payload),
                 "image_width": image.width,
@@ -76,28 +105,50 @@ def compress_image_for_archive(image_path: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def load_archived_image(db, user_id: str, log_id: Optional[str]) -> Optional[str]:
-    """Return the archived meal photo as a data URL, or None.
+def load_archived_image_result(
+    db, user_id: str, log_id: Optional[str]
+) -> Dict[str, Any]:
+    """Return the archived meal photo as a data URL **and why, if not**.
 
     The temp upload is deleted right after the first estimate, so the Fix
     Results chat re-reads the photo from this archive instead of revising a
-    number it cannot see.
+    number it cannot see. Every way that can fail used to return a bare None,
+    which the chat then treated as "no photo" without telling anyone — so a
+    revision made from the ledger alone was indistinguishable from one made by
+    looking at the plate again. The reason travels with the answer now.
+
+    ``model`` comes back from the same read: it is the model that actually
+    produced the stored estimate (escalation makes that differ from what the
+    client asked for), and the correction chat needs it. Fetching it
+    separately would be a second round trip for a document already in hand.
+
+    Returns ``{"data_url": str | None, "status": str, "model": str | None}``.
     """
     if not log_id:
-        return None
+        return {"data_url": None, "status": PHOTO_NO_LOG, "model": None}
     try:
         snap = _collection(db, user_id).document(log_id).get()
         if not snap.exists:
-            return None
+            return {"data_url": None, "status": PHOTO_LOG_MISSING, "model": None}
         data = snap.to_dict() or {}
+        model = data.get("model")
         encoded = data.get("image_base64")
         if not encoded or not data.get("has_image"):
-            return None
+            return {"data_url": None, "status": PHOTO_NOT_ARCHIVED, "model": model}
         mime = str(data.get("image_content_type") or "image/jpeg")
-        return f"data:{mime};base64,{encoded}"
+        return {
+            "data_url": f"data:{mime};base64,{encoded}",
+            "status": PHOTO_OK,
+            "model": model,
+        }
     except Exception as exc:
         print(f"Warning: could not load archived food photo: {exc}")
-        return None
+        return {"data_url": None, "status": PHOTO_READ_ERROR, "model": None}
+
+
+def load_archived_image(db, user_id: str, log_id: Optional[str]) -> Optional[str]:
+    """The data URL alone, for callers that only need the image."""
+    return load_archived_image_result(db, user_id, log_id).get("data_url")
 
 
 def create_photo_log(
@@ -138,7 +189,27 @@ def create_photo_log(
             payload["has_image"] = False
 
         doc_ref = _collection(db, user_id).document()
-        doc_ref.set(payload)
+        try:
+            doc_ref.set(payload)
+        except Exception as exc:
+            if not payload.get("has_image"):
+                raise
+            # Almost always the document size limit. Losing the whole log also
+            # loses the chat linkage and the accepted-estimate label, which is
+            # a worse outcome than losing the image: keep the log, record that
+            # the photo did not survive, and let the chat say so.
+            print(f"Warning: photo log write failed with image ({exc}); retrying without it")
+            for key in (
+                "image_base64",
+                "image_content_type",
+                "image_bytes",
+                "image_width",
+                "image_height",
+            ):
+                payload.pop(key, None)
+            payload["has_image"] = False
+            payload["archive_dropped"] = "write_failed"
+            doc_ref.set(payload)
         return doc_ref.id
     except Exception as exc:
         print(f"Warning: could not create food photo log: {exc}")

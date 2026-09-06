@@ -157,7 +157,29 @@ def _build_messages(
                 "role": "system",
                 "content": (
                     "The original meal photo is attached to the user's latest "
-                    "message. Re-read it before revising."
+                    "message. Re-read it before revising. Base the revision on "
+                    "what you can see in it, not on the numbers in the ledger "
+                    "above — the ledger is what you are correcting."
+                ),
+            }
+        )
+    else:
+        # Silence here is what made a blind revision indistinguishable from a
+        # sighted one. Several paths reach this point with a meal that *was*
+        # photographed — the archive write failed, or the doc could not be
+        # read — and a model left to assume produces confident prose about a
+        # plate it never received.
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "NO PHOTO IS AVAILABLE for this meal. Revise from the "
+                    "component ledger and what the user tells you. Do not "
+                    "claim or imply that you looked at, re-checked, counted, "
+                    "or can see anything in a photo. If the correction cannot "
+                    "be resolved without seeing the meal, say plainly that you "
+                    "are working from the numbers and ask the user for the "
+                    "detail you need."
                 ),
             }
         )
@@ -225,7 +247,8 @@ def adjust_macro_estimate(
     Run a short adjustment chat and return the revised estimate + reply text.
 
     Returns:
-        {"reply": str, "revised_estimate": dict, "conversation_history": list}
+        {"reply": str, "revised_estimate": dict, "conversation_history": list,
+         "photo_attached": bool, "model_used": str}
     """
     client = get_openai_client()
     if not client:
@@ -259,6 +282,8 @@ def adjust_macro_estimate(
             "reply": reply,
             "revised_estimate": revised,
             "conversation_history": out_history,
+            "photo_attached": bool(image_data_url),
+            "model_used": resolved,
         }
     except Exception as exc:
         print(f"Error adjusting estimate: {exc}")

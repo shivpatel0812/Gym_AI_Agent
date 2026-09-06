@@ -575,12 +575,25 @@ export async function toggleUsual(usualId: string, date?: string): Promise<Usual
   return res.data?.usuals ?? EMPTY_USUALS;
 }
 
+// Serialize writes per plan: ignoring stale responses alone cannot prevent an
+// older whole-list PATCH from overwriting a newer edit in the database.
+const pendingPlanWrites = new Map<string, Promise<unknown>>();
+
 export async function updateNutritionPlan(
   planId: string,
   patch: Partial<NutritionPlan>
 ): Promise<NutritionPlan> {
-  const res = await apiClient.patch(`/api/nutrition-plan/${planId}`, patch);
-  return res.data.plan;
+  const previous = pendingPlanWrites.get(planId) ?? Promise.resolve();
+  const write = previous.catch(() => undefined).then(async () => {
+    const res = await apiClient.patch(`/api/nutrition-plan/${planId}`, patch);
+    return res.data.plan as NutritionPlan;
+  });
+  pendingPlanWrites.set(planId, write);
+  try {
+    return await write;
+  } finally {
+    if (pendingPlanWrites.get(planId) === write) pendingPlanWrites.delete(planId);
+  }
 }
 
 /** A meal the user has actually logged in this slot, scored against its target. */

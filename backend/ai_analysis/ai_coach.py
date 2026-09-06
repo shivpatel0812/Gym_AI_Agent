@@ -163,6 +163,48 @@ def required_tool_for_turn(
     return None
 
 
+def attach_pending_images(messages: List[Dict[str, Any]], toolbox: Any) -> int:
+    """Move any images a tool opened into the model's actual view.
+
+    A `role: "tool"` message is a string, so an image cannot travel in a tool
+    result — base64 in there is a megabyte the model reads as gibberish. The
+    toolbox parks them on `pending_images` and they are appended here as a
+    real image message once the tool results are in place.
+
+    These messages are internal to the round trip. Only user/assistant text is
+    returned to the client, so a photo never lands in stored history.
+    """
+    pending = list(getattr(toolbox, "pending_images", None) or [])
+    if not pending:
+        return 0
+    toolbox.pending_images = []
+
+    content: List[Dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                "The meal photo(s) you asked to open are attached, in the order "
+                "requested. Report only what is visible in them."
+            ),
+        }
+    ]
+    for image in pending:
+        label = image.get("label") or "meal"
+        when = f" ({image['date']})" if image.get("date") else ""
+        content.append({"type": "text", "text": f"{label}{when}:"})
+        content.append(
+            {
+                "type": "image_url",
+                # Same fidelity the estimate itself was made at — looking again
+                # at lower detail than the original pass would make the coach
+                # worse at the one job this tool exists for.
+                "image_url": {"url": image["data_url"], "detail": "high"},
+            }
+        )
+    messages.append({"role": "user", "content": content})
+    return len(pending)
+
+
 def clean_for_json(obj: Any) -> Any:
     """Recursively remove None values and ensure all values are JSON-serializable."""
     if obj is None:
@@ -820,7 +862,10 @@ from them."""
         )
         kwargs["messages"] = messages
         if use_tools:
-            kwargs["tools"] = tools_for_mode(mode)
+            kwargs["tools"] = tools_for_mode(
+                mode,
+                allow_photo_view=getattr(toolbox, "allow_photo_view", False),
+            )
             # Prompting alone made these reads probabilistic: the model could
             # decide a rolling average was close enough and skip food or a
             # workout logged minutes ago. Requiring a tool on the first round
@@ -931,6 +976,11 @@ from them."""
                         "tool_call_id": tool_call.id,
                         "content": json.dumps(result, default=str),
                     })
+
+                # After every tool result for this round, so the image message
+                # never splits an assistant tool_calls entry from its results.
+                if toolbox:
+                    attach_pending_images(messages, toolbox)
 
             # Unreachable in practice: the last round is sent without tools, so
             # the model has nothing to call and must answer in text.
@@ -1070,6 +1120,11 @@ from them."""
                         "tool_call_id": call["id"],
                         "content": json.dumps(result, default=str),
                     })
+
+                if toolbox:
+                    attached = attach_pending_images(messages, toolbox)
+                    if attached:
+                        yield {"type": "photo_attached", "count": attached}
 
             # Unreachable in practice: the last round is sent without tools.
             yield {

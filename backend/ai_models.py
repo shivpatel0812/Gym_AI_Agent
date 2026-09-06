@@ -64,3 +64,27 @@ def completion_kwargs(
         kwargs["max_tokens"] = max_tokens
         kwargs["temperature"] = temperature
     return kwargs
+
+
+# Strength order, weakest first. Used when two parts of a flow disagree about
+# which model to run — a correction handled by a weaker model than the one that
+# produced the estimate is a downgrade wearing the name of a fix.
+_STRENGTH = {name: rank for rank, name in enumerate(("gpt-4o", "gpt-5.6-sol"))}
+
+
+def stronger_model(*candidates: Optional[str]) -> str:
+    """Return the strongest allowlisted model among the candidates.
+
+    The Fix Results chat is asked to correct an estimate that may have come
+    from an escalated pass. Running the correction on the client's picker
+    value alone puts the *weaker* model in charge of fixing what the stronger
+    one produced.
+    """
+    best = DEFAULT_MODEL
+    for candidate in candidates:
+        if not candidate:
+            continue
+        resolved = resolve_model(candidate, default=DEFAULT_MODEL)
+        if _STRENGTH.get(resolved, -1) > _STRENGTH.get(best, -1):
+            best = resolved
+    return best

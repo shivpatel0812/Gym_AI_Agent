@@ -10,6 +10,7 @@ Layering note: this module talks to Firestore directly rather than importing
 the routers, because routers/ already imports ai_analysis/.
 """
 
+import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
@@ -31,6 +32,49 @@ MAX_FOODS_PER_DAY = 12
 MAX_1RM_REPS = 12
 
 DAYS_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+# How many archived meal photos one chat turn may put in front of the model.
+# Each is a full-detail image; the point of the tool is to look at the meal the
+# user is asking about, not to re-read the album.
+MAX_PHOTO_VIEWS_PER_TURN = 2
+
+_PHOTO_NOUN = r"(?:photo(?:graph)?s?|pics?|pictures?|images?)"
+_VIEW_VERB = (
+    r"(?:look(?:ing)?\s+at|look|see|view|viewing|check|inspect|examine|"
+    r"pull\s+up|open|show|read|zoom(?:\s+in)?|analy[sz]e|re-?read)"
+)
+_PHOTO_VIEW_RE = re.compile(
+    # "look at the photo", "can you see my lunch picture", "pull up that image"
+    rf"\b{_VIEW_VERB}\b[^.?!]{{0,45}}\b{_PHOTO_NOUN}\b"
+    # "the photo shows", "what does the picture say", "in the photo, was there"
+    rf"|\b{_PHOTO_NOUN}\b[^.?!]{{0,25}}\b(?:show|shows|showed|say|says|look|"
+    rf"looks|again|yourself|directly)\b"
+    # "based on the photo", "from the picture"
+    rf"|\b(?:based\s+on|from|in|using)\s+(?:the|my|that|this)\s+{_PHOTO_NOUN}\b",
+    re.IGNORECASE,
+)
+
+
+def asks_to_see_a_meal_photo(message: str) -> bool:
+    """Did the user actually ask the coach to LOOK at a meal photo?
+
+    The archive holds every meal image the user has ever logged, and the coach
+    reads the same archive for macros through `get_meal_photo_history`. Those
+    are different acts: reading back what was logged is answering a question
+    about their diet, while opening the image is looking at a photograph of
+    them and their table. The second one happens because they asked for it,
+    not because the model judged it might help.
+
+    So the tool is not merely *described* as opt-in — it is withheld from the
+    toolset entirely unless this returns True, and refused at dispatch if a
+    replayed call slips through. Prompt instructions are advisory; a tool that
+    was never offered cannot be called.
+
+    Gated on the current message alone. A follow-up that does not mention the
+    photo is answered from the stored ledger, which is the right default —
+    and in practice a question *about* a photo names it.
+    """
+    return bool(_PHOTO_VIEW_RE.search(str(message or "")))
 
 
 def estimated_1rm(weight: float, reps: int) -> Optional[float]:
@@ -160,7 +204,14 @@ def _exercise_history_context(
 class CoachToolbox:
     """Executes the coach's tool calls against the user's Firestore data."""
 
-    def __init__(self, db, user_id: str, mode: str = "coach", conversation_id: Optional[str] = None):
+    def __init__(
+        self,
+        db,
+        user_id: str,
+        mode: str = "coach",
+        conversation_id: Optional[str] = None,
+        allow_photo_view: bool = False,
+    ):
         self.db = db
         self.user_id = user_id
         # Which toolset the chat turn is allowed to use. Nutrition and plan
@@ -172,6 +223,14 @@ class CoachToolbox:
         # Structured results the client should render as more than chat text
         # (a suggestion card, say). Read by the chat routers after the turn.
         self.artifacts: List[Dict[str, Any]] = []
+        # Whether this turn may open a meal photograph. Set from the user's own
+        # words (`asks_to_see_a_meal_photo`), never inferred by the model.
+        self.allow_photo_view = bool(allow_photo_view)
+        # Images the chat loop should attach to the model's view after the tool
+        # results. They travel here rather than inside the tool's JSON result:
+        # a tool message is a string, so an image in it would be a wasted
+        # megabyte of base64 the model cannot actually see.
+        self.pending_images: List[Dict[str, Any]] = []
 
     # --- internal helpers -------------------------------------------------
 
@@ -309,6 +368,117 @@ class CoachToolbox:
         hub = build_photo_hub(logs, axis, limit=max(1, min(int(limit or 20), 60)))
         hub.pop("by_week", None)
         return hub
+
+    def view_meal_photo(
+        self,
+        log_id: Optional[str] = None,
+        date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Open one archived meal photograph and put it in front of the model.
+
+        Only callable when the user asked for it in this turn — see
+        `asks_to_see_a_meal_photo`. Everything else about their food is
+        answerable from `get_meal_photo_history`, which reads the same archive
+        without opening the image.
+
+        Body scan photos are NOT here and never will be: `body_scan/store.py`
+        writes `photos_retained: False` and the router clears the upload the
+        moment the vision pass returns. Only meal photos are archived, and
+        only because the estimate has to be re-checkable against them.
+        """
+        if not self.allow_photo_view:
+            return {
+                "error": "not_permitted",
+                "message": (
+                    "Opening a meal photo needs the user to ask for it in "
+                    "their own words. Answer from get_meal_photo_history "
+                    "instead, and offer to look at the photo if they want."
+                ),
+            }
+        if len(self.pending_images) >= MAX_PHOTO_VIEWS_PER_TURN:
+            return {
+                "error": "limit_reached",
+                "message": (
+                    f"Already viewing {MAX_PHOTO_VIEWS_PER_TURN} photos this "
+                    "turn. Answer from those, or ask which meal they mean."
+                ),
+            }
+
+        from progress.photo_hub import summarize_log
+
+        try:
+            docs = self._collection("food_photo_logs").limit(300).stream()
+            logs = [{"id": d.id, **(d.to_dict() or {})} for d in docs]
+        except Exception as exc:
+            return {"error": f"Could not read the photo archive: {exc}"}
+
+        with_images = [log for log in logs if log.get("has_image") and log.get("image_base64")]
+        if not with_images:
+            return {
+                "status": "no_photos",
+                "message": (
+                    "No meal photo is stored. Some logs keep no image — the "
+                    "meal was typed rather than photographed, or the archive "
+                    "could not hold it."
+                ),
+            }
+
+        target = None
+        if log_id:
+            target = next((log for log in with_images if log.get("id") == log_id), None)
+            if target is None:
+                return {
+                    "status": "not_found",
+                    "message": (
+                        f"No stored photo for log {log_id}. Call "
+                        "get_meal_photo_history for ids that have one "
+                        "(`has_image` is true)."
+                    ),
+                }
+        else:
+            rows = sorted(
+                ((summarize_log(log), log) for log in with_images),
+                key=lambda pair: pair[0].get("date") or "",
+                reverse=True,
+            )
+            if date:
+                rows = [pair for pair in rows if pair[0].get("date") == date] or []
+                if not rows:
+                    return {
+                        "status": "not_found",
+                        "message": f"No stored meal photo for {date}.",
+                    }
+            # Newest photo is the one "my last meal" means.
+            target = rows[0][1]
+
+        summary = summarize_log(target)
+        mime = str(target.get("image_content_type") or "image/jpeg")
+        self.pending_images.append(
+            {
+                "log_id": summary.get("id"),
+                "label": summary.get("title") or "meal photo",
+                "date": summary.get("date"),
+                "data_url": f"data:{mime};base64,{target['image_base64']}",
+            }
+        )
+        return {
+            "status": "ok",
+            "attached": True,
+            "log_id": summary.get("id"),
+            "date": summary.get("date"),
+            "title": summary.get("title"),
+            # What the user committed, which is the only figure that is what
+            # they ate. Null when they never accepted an estimate for it.
+            "logged": summary.get("logged"),
+            "first_guess_calories": summary.get("first_guess_calories"),
+            "was_corrected": summary.get("was_corrected"),
+            "message": (
+                "The photo is attached to the next message. Describe only what "
+                "you can actually see in it; if it is unclear, say so rather "
+                "than filling the gap from the logged macros."
+            ),
+        }
 
     def propose_progress_goal(
         self,
@@ -1132,6 +1302,18 @@ class CoachToolbox:
             # modes that allow them, but a replayed tool call must not slip past.
             return {"error": f"{name} is not available in this conversation."}
 
+        if name in PHOTO_VIEW_TOOLS and not self.allow_photo_view:
+            # The schema is withheld when the user did not ask, so reaching
+            # here means a replayed or hallucinated call. `view_meal_photo`
+            # refuses on the same flag, but opening someone's photograph
+            # because a model decided to is worth stopping twice.
+            return {
+                "error": (
+                    f"{name} is only available when the user asks to look at "
+                    "a photo. Use get_meal_photo_history instead."
+                )
+            }
+
         handler = {
             "get_recent_activity": self.get_recent_activity,
             "get_recent_sessions": self.get_recent_sessions,
@@ -1151,6 +1333,7 @@ class CoachToolbox:
             "get_lift_positions": self.get_lift_positions,
             "get_progress_goals": self.get_progress_goals,
             "get_meal_photo_history": self.get_meal_photo_history,
+            "view_meal_photo": self.view_meal_photo,
             "propose_progress_goal": self.propose_progress_goal,
             "propose_nutrition_edits": self.propose_nutrition_edits,
             "propose_plan_edits": self.propose_plan_edits,
@@ -1494,6 +1677,53 @@ TOOL_SCHEMAS = [
 ]
 
 
+# --- opt-in photo viewing -------------------------------------------------
+#
+# Offered only when the user asked, in this turn, to look at a photo. The
+# description below tells the model what the tool is for; the *guarantee* that
+# it is not called unprompted is `asks_to_see_a_meal_photo` withholding the
+# schema, not this prose.
+
+PHOTO_VIEW_TOOLS = {"view_meal_photo"}
+
+PHOTO_VIEW_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "view_meal_photo",
+            "description": (
+                "Open one archived MEAL photo and actually look at it. The user "
+                "has asked you to in this turn — this tool is not offered "
+                "otherwise, so if you can see it, you may use it. Prefer "
+                "get_meal_photo_history for anything answerable from the logged "
+                "macros; use this only to report what is visibly in the frame "
+                "(portion size, a component that was or was not counted, how the "
+                "plate was actually filled). Describe only what you can see — if "
+                "the image is unclear, say so rather than filling the gap from "
+                "the logged numbers. Body scan / progress photos are NOT "
+                "available and are never stored; say so if asked for those."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "log_id": {
+                        "type": "string",
+                        "description": (
+                            "Photo log id from get_meal_photo_history (one whose "
+                            "`has_image` is true). Omit for the most recent photo."
+                        ),
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD to pick that day's newest photo.",
+                    },
+                },
+            },
+        },
+    },
+]
+
+
 # --- write tools ----------------------------------------------------------
 #
 # Everything above reads. This one stages a proposal against the live
@@ -1723,16 +1953,23 @@ PROGRESS_WRITE_SCHEMAS = [
 ]
 
 
-def tools_for_mode(mode: str = "coach") -> List[Dict[str, Any]]:
+def tools_for_mode(
+    mode: str = "coach",
+    allow_photo_view: bool = False,
+) -> List[Dict[str, Any]]:
     """
     The toolset a chat turn may use.
 
     Nutrition writes stay in nutrition mode. Training-plan writes are available
     in plan mode and coach mode because every proposal is staged for review —
     "improve my plan" must be able to stage patches without a mode toggle.
+
+    `allow_photo_view` adds the meal-photo viewer, and defaults to off in every
+    mode. Opening a photograph of the user's table is not a reasoning step the
+    model gets to choose; it is withheld from the toolset until they ask.
     """
     if mode == "nutrition":
-        return READ_TOOL_SCHEMAS + NUTRITION_WRITE_SCHEMAS + PROGRESS_WRITE_SCHEMAS
-    if mode == "plan":
-        return READ_TOOL_SCHEMAS + PLAN_WRITE_SCHEMAS + PROGRESS_WRITE_SCHEMAS
-    return READ_TOOL_SCHEMAS + PLAN_WRITE_SCHEMAS + PROGRESS_WRITE_SCHEMAS
+        base = READ_TOOL_SCHEMAS + NUTRITION_WRITE_SCHEMAS + PROGRESS_WRITE_SCHEMAS
+    else:
+        base = READ_TOOL_SCHEMAS + PLAN_WRITE_SCHEMAS + PROGRESS_WRITE_SCHEMAS
+    return base + PHOTO_VIEW_SCHEMAS if allow_photo_view else base

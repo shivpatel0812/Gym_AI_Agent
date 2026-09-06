@@ -89,6 +89,7 @@ export default function PlanTab({ onAskCoach, onOpenPlanMode }: Props) {
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
+        stickyHeaderIndices={plan ? [1] : undefined}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}

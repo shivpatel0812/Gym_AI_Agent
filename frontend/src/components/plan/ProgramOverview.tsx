@@ -26,8 +26,9 @@ export default function ProgramOverview({ projection }: { projection: PlanProjec
   const [expanded, setExpanded] = useState(false);
   const selectedWeek = Math.min(week, projection.weeks);
   const startWeek = projection.progress.current_week || 1;
+  // Nutrition companion stays on the projection payload and MacroSummary stays
+  // exported — surface it on the nutrition plan page, not here.
   return <View>
-    <MacroSummary value={projection.nutrition_companion} />
     <View style={styles.card}>
       <TouchableOpacity accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded(!expanded)}>
         <Text style={styles.title}>{expanded ? "▾" : "▸"} Full weekly program · {projection.weeks} weeks ahead</Text>

@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Literal
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -145,6 +145,9 @@ class SavedFoodUpdate(BaseModel):
 class FoodEstimateRequest(BaseModel):
     query: str
     name: Optional[str] = None
+    # The scan screen's model picker applied to the photo path only; a typed
+    # description of the same meal was pinned to the cheapest model in the app.
+    model: Optional[str] = None
 
 
 class FitPreviewRequest(BaseModel):
@@ -228,6 +231,7 @@ class DailyRoutine(BaseModel):
     icon: Optional[str] = "checkbox-marked-circle-outline"
     sort_order: Optional[int] = 0
     completed_dates: Optional[List[str]] = None
+    scheduled_days: Optional[List[Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]]] = None
 
 
 class HydrationEntry(BaseModel):

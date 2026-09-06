@@ -24,8 +24,8 @@ export default function WorkoutDetailCallout({
             {formatShortDate(session.date)} · {session.exerciseName}
           </Text>
           {session.sets.length ? (
-            session.sets.map((set) => (
-              <Text key={`${session.key}-${set.setNumber}`} style={styles.setLine}>
+            session.sets.map((set, index) => (
+              <Text key={`${session.key}-${index}-${set.setNumber}`} style={styles.setLine}>
                 Set {set.setNumber}: {formatSetLine(set)}
               </Text>
             ))

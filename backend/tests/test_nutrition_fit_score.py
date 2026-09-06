@@ -181,3 +181,47 @@ def test_pre_workout_label_aliases_resolve():
         **CUT,
     )
     assert result["items"][0]["reason"] == "Solid training fuel"
+
+
+# --- day totals composite (History chart) ----------------------------------
+
+from nutrition.fit_score import score_day_totals
+
+PLAN = {"calories": 2000, "protein": 150, "carbs": 200, "fats": 65, "fiber": 30}
+
+
+def test_day_on_target_is_excellent():
+    result = score_day_totals(
+        {"calories": 2000, "protein": 150, "carbs": 200, "fats": 65, "fiber": 30},
+        goal="fat_loss",
+        targets=PLAN,
+    )
+    assert result["score"] == 100
+    assert result["source"] == "plan"
+    assert result["band"] == "excellent"
+
+
+def test_a_cut_day_low_on_calories_is_not_automatically_best():
+    """'Low cal / high protein / high carb' is not a universal win — carbs and
+    fats still have to land near the plan, and a surplus goal punishes the
+    calorie gap harder than a cut does."""
+    day = {"calories": 1600, "protein": 180, "carbs": 250, "fats": 40, "fiber": 25}
+    cut = score_day_totals(day, goal="fat_loss", targets=PLAN)
+    bulk = score_day_totals(
+        day,
+        goal="lean_bulk",
+        targets={**PLAN, "calories": 2800, "protein": 190},
+    )
+    assert cut["score"] > bulk["score"]
+    assert cut["score"] < 100
+
+
+def test_no_plan_falls_back_to_protein_density():
+    result = score_day_totals(
+        {"calories": 2000, "protein": 160, "carbs": 0, "fats": 0, "fiber": 20},
+        goal="",
+        targets={},
+    )
+    assert result["source"] == "density"
+    assert result["score"] is not None
+    assert result["score"] >= 80

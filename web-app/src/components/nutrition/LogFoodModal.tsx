@@ -225,7 +225,7 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       const res = await apiClient.post(
         "/api/macros/estimate-food",
         { query: q },
-        { timeout: 30000 }
+        { timeout: 60000 }
       );
       if (estimateQueryRef.current !== q) return;
       const item = toFoodDbItem(res.data);
@@ -404,8 +404,10 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
 
       const res = await apiClient.post(
         "/api/macros/estimate-food",
-        { query: note, name: title || undefined },
-        { timeout: 30000 }
+        { query: note, name: title || undefined, model: aiModel },
+        // Two passes are possible on a described meal now, the second on a
+        // reasoning model, so this is no longer a single cheap call.
+        { timeout: 90000 }
       );
       const item = toFoodDbItem(res.data);
       if (!item.name) {

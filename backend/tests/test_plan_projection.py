@@ -15,11 +15,15 @@ import pytest
 
 from ai_analysis.plan_projection import (
     DEFAULT_ADHERENCE,
+    DEFAULT_EXPERIENCE_LEVEL,
+    EXPERIENCE_WEEKLY_E1RM_GAIN,
     MIN_SESSIONS_FOR_ADHERENCE,
     PlanProjector,
     e1rm,
     exercise_sessions_per_week,
     measure_adherence,
+    pace_to_destination,
+    plausible_weekly_gain,
 )
 from nutrition.trajectory import (
     build_trajectory,
@@ -90,16 +94,31 @@ class TestStrengthProjection:
 
     def test_training_a_lift_twice_a_week_projects_faster(self, projector):
         """
+        Sooner, not higher — the same claim TestPlausibilityCeiling makes.
+
         Compared on load, not estimated 1RM. e1RM dips on the session a weight
         jump lands, so the curve that is *further ahead* can show the lower
-        e1RM purely because it just reset into a new range — which is exactly
-        what happens here at eight weeks.
+        e1RM purely because it just reset into a new range.
+
+        This used to assert a higher peak load, which only passed while the
+        plausibility ceiling was loose enough never to bind. It cannot be true
+        in general: the ceiling is a budget over time, so training more often
+        spends that budget earlier and arrives at the same place first. A
+        frequency that raised the ceiling would mean pressing six days a week
+        projects a bigger twelve-week gain than pressing twice, which is the
+        opposite of what recovery does.
         """
         once = project(projector, [session(50, [8, 8, 8])], sessions_per_week=1)
         twice = project(projector, [session(50, [8, 8, 8])], sessions_per_week=2)
-        assert max(p.weight for p in twice.best_case) > max(
-            p.weight for p in once.best_case
-        )
+
+        def first_week_at(result, load):
+            return next(
+                (p.week for p in result.best_case if p.weight >= load), None
+            )
+
+        peak = max(p.weight for p in once.best_case)
+        assert max(p.weight for p in twice.best_case) == peak
+        assert first_week_at(twice, peak) < first_week_at(once, peak)
 
     def test_current_point_comes_from_real_history(self, projector):
         result = project(projector, [session(50, [8, 8, 8])])
@@ -552,3 +571,157 @@ class TestExerciseSessionsPerWeek:
         assert sessions == [1, 2]
         week_one = [p for p in result.schedule if p.week == 1]
         assert len(week_one) == 2
+
+
+class TestRateOfGainAssumptions:
+    """
+    Spending the novice rate on everyone was the single reason a twelve-week
+    chart promised a 24% estimated-1RM gain on an incline press that had not
+    moved in seven months. Training age and energy balance both bound it.
+    """
+
+    def test_training_age_slows_the_ceiling(self):
+        rates = [
+            plausible_weekly_gain("novice"),
+            plausible_weekly_gain("intermediate"),
+            plausible_weekly_gain("advanced"),
+        ]
+        assert rates == sorted(rates, reverse=True)
+
+    def test_unknown_experience_is_not_treated_as_a_beginner(self):
+        """The optimistic error is the one this module exists to avoid."""
+        assert DEFAULT_EXPERIENCE_LEVEL == "intermediate"
+        assert plausible_weekly_gain(None) == plausible_weekly_gain("intermediate")
+        assert plausible_weekly_gain(None) < plausible_weekly_gain("novice")
+
+    def test_unrecognised_experience_falls_back_rather_than_crashing(self):
+        assert plausible_weekly_gain("wizard") == plausible_weekly_gain(
+            DEFAULT_EXPERIENCE_LEVEL
+        )
+
+    def test_eating_to_maintain_projects_less_than_bulking(self):
+        """Strength is built out of surplus; the chart has to know the diet."""
+        gaining = plausible_weekly_gain("intermediate", "gain")
+        holding = plausible_weekly_gain("intermediate", "maintain")
+        cutting = plausible_weekly_gain("intermediate", "lose")
+        assert gaining > holding > cutting
+
+    def test_a_cut_still_progresses(self):
+        """Strength is retained in a deficit; it stops running, it does not stop."""
+        assert plausible_weekly_gain("intermediate", "lose") > 0
+
+    def test_no_stated_diet_is_not_read_as_a_deficit(self):
+        assert plausible_weekly_gain("advanced", None) == plausible_weekly_gain(
+            "advanced", "gain"
+        )
+
+    def test_an_advanced_maintainer_is_not_projected_a_beginners_bulk(self, projector):
+        """
+        The regression this whole class exists for. 80x6 dumbbells, advanced,
+        eating at maintenance: the old flat cap allowed 105x4 in twelve weeks.
+        """
+        result = project(
+            projector,
+            [session(80, [6, 4, 6])],
+            weeks=12,
+            experience_level="advanced",
+            energy_balance="maintain",
+        )
+        start = result.current.e1rm
+        peak = max(p.e1rm for p in result.best_case)
+        assert (peak - start) / start < 0.10, (
+            f"{start} -> {peak} is a bulking novice's twelve weeks"
+        )
+
+    def test_the_curve_still_moves_for_an_advanced_maintainer(self, projector):
+        """
+        A ceiling that flatlines is not a fix. Load is indivisible, so reps are
+        what move when the next dumbbell costs more than the whole horizon.
+        """
+        result = project(
+            projector,
+            [session(80, [6, 4, 6])],
+            weeks=12,
+            experience_level="advanced",
+            energy_balance="maintain",
+        )
+        assert max(p.e1rm for p in result.best_case) > result.current.e1rm
+
+    def test_assumptions_are_reported_not_applied_silently(self, projector):
+        result = project(
+            projector,
+            [session(80, [6, 4, 6])],
+            weeks=12,
+            experience_level="advanced",
+            energy_balance="maintain",
+        )
+        assumed = result.to_dict()["assumptions"]
+        assert assumed["experience_level"] == "advanced"
+        assert assumed["energy_balance"] == "maintain"
+        assert assumed["experience_assumed"] is False
+        assert 0 < assumed["horizon_gain_pct"] < 10
+
+    def test_an_assumed_experience_level_says_so(self, projector):
+        result = project(projector, [session(80, [6, 4, 6])], weeks=12)
+        assert result.to_dict()["assumptions"]["experience_assumed"] is True
+
+
+class TestDestinationPacing:
+    """
+    A goal set for week twelve is a week-twelve target. Sprinting to it in week
+    two and holding draws a plan with nothing left to do, and overshooting it
+    ends the chart above the heaviest dumbbell the user ever asked for.
+    """
+
+    def test_a_reachable_goal_is_paced_across_the_horizon(self):
+        rate = pace_to_destination(
+            baseline_e1rm=96.0, destination_e1rm=102.0, weeks=12, plausible_rate=0.02
+        )
+        assert rate < 0.02
+        assert 96.0 * ((1 + rate) ** 12) == pytest.approx(102.0, rel=1e-6)
+
+    def test_a_goal_beyond_reach_is_not_sped_up_to_meet_it(self):
+        """The gap is the finding; `reachable` is where it gets reported."""
+        rate = pace_to_destination(
+            baseline_e1rm=96.0, destination_e1rm=200.0, weeks=12, plausible_rate=0.004
+        )
+        assert rate == 0.004
+
+    def test_no_destination_leaves_the_rate_alone(self):
+        assert pace_to_destination(96.0, None, 12, 0.008) == 0.008
+
+    def test_a_goal_already_met_leaves_the_rate_alone(self):
+        assert pace_to_destination(96.0, 90.0, 12, 0.008) == 0.008
+
+    def test_projection_does_not_overshoot_the_users_own_goal(self, projector):
+        """
+        Without this the walk ran open-loop past the finish line and ended
+        fifteen pounds above the heaviest dumbbell the user had named.
+        """
+        result = project(
+            projector,
+            [session(80, [6, 4, 6])],
+            weeks=12,
+            target_weight=85,
+            target_reps=6,
+            target_weeks=12,
+            experience_level="intermediate",
+            energy_balance="maintain",
+        )
+        assert max(p.weight for p in result.best_case) <= 85
+
+    def test_an_out_of_reach_goal_reports_false_rather_than_drawing_a_line_to_it(
+        self, projector
+    ):
+        result = project(
+            projector,
+            [session(80, [6, 4, 6])],
+            weeks=12,
+            target_weight=150,
+            target_reps=8,
+            target_weeks=12,
+            experience_level="advanced",
+            energy_balance="maintain",
+        )
+        assert result.reachable is False
+        assert result.arrived_week is None

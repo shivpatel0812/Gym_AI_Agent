@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -59,6 +59,8 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
   const [savedFoods, setSavedFoods] = useState<FoodDbItem[]>([]);
   const [showCustom, setShowCustom] = useState(false);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const close = () => { if (!savingRef.current) onClose(); };
 
   useEffect(() => {
     if (!visible) return;
@@ -127,7 +129,8 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
   };
 
   const handleSave = async () => {
-    if (!draft.name.trim() || saving) return;
+    if (!draft.name.trim() || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       await onSave({
@@ -144,6 +147,7 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
         notes: draft.notes?.trim() || null,
       });
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -155,19 +159,19 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
     (Number(draft.fats) || 0) > 0;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={close}>
       <View style={styles.backdrop}>
         <View style={styles.sheet}>
           <View style={styles.header}>
             <Text style={styles.title}>{item?.id ? "Edit go-to item" : "Add go-to item"}</Text>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+            <TouchableOpacity onPress={close} disabled={saving} style={styles.closeBtn}>
               <MaterialCommunityIcons name="close" size={20} color={bp.muted} />
             </TouchableOpacity>
           </View>
 
           <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
             <Text style={styles.label}>Search your food database</Text>
-            <Text style={styles.hint}>Pick from saved foods or the built-in catalog, then tweak the serving.</Text>
+            <Text style={styles.hint}>Choose a food, check its serving and days, then tap Save go-to item below.</Text>
 
             <View style={styles.searchBox}>
               <MaterialCommunityIcons name="magnify" size={18} color={bp.muted2} />
@@ -316,11 +320,11 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
 
           <View style={styles.actions}>
             {onDelete ? (
-              <TouchableOpacity style={styles.deleteBtn} onPress={onDelete}>
+              <TouchableOpacity style={styles.deleteBtn} onPress={onDelete} disabled={saving}>
                 <Text style={styles.deleteText}>Remove</Text>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity style={styles.secondary} onPress={onClose}>
+              <TouchableOpacity style={styles.secondary} onPress={close} disabled={saving}>
                 <Text style={styles.secondaryText}>Cancel</Text>
               </TouchableOpacity>
             )}
@@ -332,7 +336,7 @@ export default function EditGoToItemModal({ visible, item, onClose, onSave, onDe
               {saving ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.primaryText}>Save</Text>
+                <Text style={styles.primaryText}>Save go-to item</Text>
               )}
             </TouchableOpacity>
           </View>

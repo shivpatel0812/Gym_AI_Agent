@@ -2,11 +2,11 @@ import { useMemo, useState } from "react";
 import { View, Text, StyleSheet } from "react-native";
 import type { MuscleGroupDay, ProjectedExercise } from "../../api/trainingPlan";
 import { MUSCLE_GROUP_LABELS } from "../workouts/sessionLogic";
-import { colors } from "../../theme";
+import { borderRadius, colors, spacing, typography, weight } from "../../theme";
 import {
   buildMuscleGroupPoints,
   buildMuscleGroupPointsFromExercises,
-  muscleGroupsForDay,
+  muscleGroupsForPlanFamily,
   sessionsForPoint,
   type ChartPoint,
   type CustomExercise,
@@ -19,27 +19,42 @@ export default function MuscleGroupCharts({
   exercises,
   history,
   customExercises,
+  familyKey,
+  dayNames,
+  focus,
 }: {
   exercises: ProjectedExercise[];
   /** Whole-log stimulus by muscle group, keyed by catalog category. */
   history?: Record<string, MuscleGroupDay[]>;
   customExercises?: CustomExercise[];
+  /** Plan Hub family — "pull" → Back + Biceps, never Shoulders. */
+  familyKey?: string;
+  dayNames?: string[];
+  focus?: string;
 }) {
-  // Which groups this day trains comes from the plan; the numbers behind them
-  // come from the whole log. Every group the day touches gets a chart — the
-  // old cap of three silently hid a muscle with no indication it existed.
+  // Which groups this day trains comes from the split family when we know it;
+  // exercise categories alone would put Face Pulls' SHOULDERS chart on Pull.
   const groups = useMemo(
-    () => muscleGroupsForDay(exercises, customExercises),
-    [exercises, customExercises]
+    () =>
+      muscleGroupsForPlanFamily(familyKey || "", exercises, {
+        dayNames,
+        focus,
+        customExercises,
+      }),
+    [familyKey, exercises, dayNames, focus, customExercises]
   );
-  if (!groups.length) return null;
+  if (!groups.length) {
+    return (
+      <View style={styles.empty}>
+        <Text style={styles.emptyText}>
+          No muscle groups mapped for this day yet. Open an exercise to see its roadmap.
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.heading}>Muscle-group stimulus</Text>
-      <Text style={styles.sub}>
-        Rolling volume across every logged session — drag to see which lifts drove each day
-      </Text>
       {groups.map((group) => (
         <MuscleGroupBlock
           key={group}
@@ -99,21 +114,29 @@ function MuscleGroupBlock({
 
 const styles = StyleSheet.create({
   wrap: {
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    gap: 10,
+    padding: spacing.md,
+    gap: spacing.md,
   },
-  heading: { fontSize: 10, fontWeight: "800", letterSpacing: 0.8, color: colors.textMuted },
-  sub: { fontSize: 11, color: colors.textSecondary, marginTop: -4, marginBottom: 4 },
+  empty: {
+    padding: spacing.md,
+  },
+  emptyText: {
+    fontSize: typography.caption,
+    lineHeight: 18,
+    color: colors.textMutedCool,
+  },
   block: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceRaised,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    padding: 12,
-    gap: 4,
+    borderColor: colors.borderCool,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    gap: spacing.xs,
   },
-  groupLabel: { fontSize: 13, fontWeight: "800", color: colors.textPrimary, marginBottom: 4 },
+  groupLabel: {
+    fontSize: typography.body,
+    fontWeight: weight.heavy,
+    color: colors.textPrimary,
+    marginBottom: spacing.xs,
+  },
 });

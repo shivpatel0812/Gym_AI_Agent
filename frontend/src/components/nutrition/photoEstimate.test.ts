@@ -18,6 +18,7 @@ const estimate: PhotoEstimate = {
   fats: 20,
   fiber: 8,
   analysis: {
+    source: "photo",
     confidence: { score: 65, level: "medium", reasons: [], shouldNudge: false },
     cookingStyle: "normal",
     oilGrams: 10,
@@ -33,6 +34,58 @@ const estimate: PhotoEstimate = {
     ],
   },
 };
+
+describe("the user's own calorie figure", () => {
+  it("carries a whole-meal disagreement through to the card", () => {
+    const parsed = toPhotoEstimate({
+      food: { name: "Frankie wraps", calories: 1100, protein: 30, carbs: 90, fats: 55, fiber: 8 },
+      analysis: {
+        source: "text",
+        hint_check: {
+          stated_calories: 600,
+          estimated_calories: 1100,
+          difference_ratio: 0.833,
+          direction: "higher",
+          disagrees: true,
+          reason: "about 400 kcal of it is the frying oil",
+        },
+      },
+    });
+
+    expect(parsed?.analysis.source).toBe("text");
+    expect(parsed?.analysis.hintCheck?.statedCalories).toBe(600);
+    expect(parsed?.analysis.hintCheck?.disagrees).toBe(true);
+    expect(parsed?.analysis.hintCheck?.reason).toContain("frying oil");
+  });
+
+  it("leaves the field absent when the user gave no figure", () => {
+    const parsed = toPhotoEstimate({
+      food: { name: "Rice", calories: 200, protein: 4 },
+      analysis: { source: "photo" },
+    });
+    expect(parsed?.analysis.hintCheck).toBeUndefined();
+    expect(parsed?.analysis.source).toBe("photo");
+  });
+
+  it("drops an unexplained gap rather than inventing a reason for it", () => {
+    const parsed = toPhotoEstimate({
+      food: { name: "Thali", calories: 900, protein: 30 },
+      analysis: {
+        source: "text",
+        hint_check: {
+          stated_calories: 600,
+          estimated_calories: 900,
+          difference_ratio: 0.5,
+          direction: "higher",
+          disagrees: true,
+          reason: "",
+        },
+      },
+    });
+    expect(parsed?.analysis.hintCheck?.disagrees).toBe(true);
+    expect(parsed?.analysis.hintCheck?.reason).toBeUndefined();
+  });
+});
 
 describe("photo estimate normalization", () => {
   it("preserves backend confidence and portion metadata", () => {

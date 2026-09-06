@@ -1,4 +1,4 @@
-import { exerciseMatchesMuscleGroup, resolveExerciseCategory } from "../workouts/sessionLogic";
+import { exerciseMatchesMuscleGroup, muscleGroupsForSplitDay, resolveExerciseCategory } from "../workouts/sessionLogic";
 import type { MuscleGroupDay, ProjectedExercise } from "../../api/trainingPlan";
 
 export type WorkoutSet = {
@@ -175,6 +175,20 @@ export function rawSessionsFor(exercise: ProjectedExercise): RawSession[] {
   );
 }
 
+/** True when `incoming` is already present as a contiguous block in `existing`. */
+function sameSetPayload(existing: RawSet[], incoming: RawSet[]): boolean {
+  if (!incoming.length) return true;
+  if (existing.length !== incoming.length) return false;
+  return incoming.every((set, index) => {
+    const other = existing[index];
+    return (
+      (other?.weight || 0) === (set.weight || 0) &&
+      (other?.reps || 0) === (set.reps || 0) &&
+      (other?.set_number || index + 1) === (set.set_number || index + 1)
+    );
+  });
+}
+
 export function getSessionRecords(exercise: ProjectedExercise): LoggedSession[] {
   const byDate = new Map<string, RawSet[]>();
   const topByDate = new Map<string, { weight: number; reps: number }>();
@@ -183,9 +197,13 @@ export function getSessionRecords(exercise: ProjectedExercise): LoggedSession[] 
   for (const session of rawSessionsFor(exercise)) {
     const date = String(session.date);
     // Two entries on one date are the same day's work for this lift, so their
-    // sets join rather than one replacing the other.
+    // sets join rather than one replacing the other — unless the second entry
+    // is an identical copy (A/B plan rows sharing one history payload).
     const sets = byDate.get(date) || [];
-    sets.push(...(session.sets || []));
+    const incoming = session.sets || [];
+    if (!sameSetPayload(sets, incoming)) {
+      sets.push(...incoming);
+    }
     byDate.set(date, sets);
 
     if (session.session_id && !idByDate.has(date)) {
@@ -464,6 +482,37 @@ export function muscleGroupsForDay(
     if (category) groups.add(category);
   }
   return [...groups];
+}
+
+/**
+ * Which body-part charts belong on a Push / Pull / Legs page.
+ *
+ * Exercise categories alone are the wrong source: Face Pulls are catalogued as
+ * SHOULDERS but live on Pull days, which put a Shoulders chart under Pull.
+ * The family name is the intent — Pull is Back + Biceps, Push carries Shoulders.
+ */
+export function muscleGroupsForPlanFamily(
+  familyKey: string,
+  exercises: ProjectedExercise[],
+  options: {
+    dayNames?: string[];
+    focus?: string;
+    customExercises?: CustomExercise[];
+  } = {}
+): string[] {
+  const fromFamily = muscleGroupsForSplitDay(
+    familyKey,
+    undefined,
+    options.focus
+  );
+  if (fromFamily.length) return fromFamily;
+
+  for (const name of options.dayNames || []) {
+    const fromDay = muscleGroupsForSplitDay(name, undefined, options.focus);
+    if (fromDay.length) return fromDay;
+  }
+
+  return muscleGroupsForDay(exercises, options.customExercises || []);
 }
 
 export function formatShortDate(value: string) {

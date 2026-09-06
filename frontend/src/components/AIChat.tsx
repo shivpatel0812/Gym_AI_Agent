@@ -12,6 +12,7 @@ import {
   Animated,
   Modal,
   ActivityIndicator,
+  Image,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -34,7 +35,7 @@ import {
   renameConversation,
   deleteConversation,
 } from "../api/conversations";
-import { colors, spacing, borderRadius, shadows } from "../theme";
+import { colors, spacing, borderRadius, shadows, typography, weight } from "../theme";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   AI_MODEL_OPTIONS,
@@ -115,6 +116,14 @@ const TOOL_LABELS: Record<string, string> = {
   propose_plan_edits: "Drafting plan updates...",
   get_wellness_log: "Reviewing your sleep and recovery...",
   get_personal_records: "Looking up your personal bests...",
+  get_meal_photo_history: "Reviewing your meal photo history...",
+  get_progress_index: "Checking your progress...",
+  get_lift_positions: "Looking at your lifts...",
+  get_progress_goals: "Checking your goals...",
+  // Says "opening", not "reviewing": the coach is only handed this tool when
+  // the user asked it to look, and the status line should make it visible
+  // that a photo is actually being opened rather than read back as numbers.
+  view_meal_photo: "Opening your meal photo...",
 };
 
 type ChatMode = "coach" | "plan" | "nutrition";
@@ -400,14 +409,15 @@ export default function AIChat({
     }
   };
 
-  const sendMessage = () => {
-    if (!inputMessage.trim() || loading) return;
+  const sendMessage = (override?: string) => {
+    const drafted = (typeof override === "string" ? override : inputMessage).trim();
+    if (!drafted || loading) return;
     if (outOfQuota) {
       setRequestAccessOpen(true);
       return;
     }
 
-    const messageToSend = inputMessage.trim();
+    const messageToSend = drafted;
     const forcePlanMode =
       chatMode === "coach" && looksLikeStrongPlanEdit(messageToSend);
     const modeForSend: ChatMode = forcePlanMode ? "plan" : chatMode;
@@ -586,37 +596,92 @@ export default function AIChat({
     );
   };
 
-  const renderEmpty = () => (
-    <View style={styles.emptyState}>
-      <MaterialCommunityIcons
-        name={chatMode === "plan" ? "target" : chatMode === "nutrition" ? "food-apple" : "robot"}
-        size={80}
-        color={colors.accentPrimary}
-      />
-      <Text style={styles.emptyTitle}>
-        {chatMode === "plan"
-          ? "Let's design your plan"
-          : chatMode === "nutrition"
-            ? "Let's design how you eat"
-            : "Start a conversation with your AI coach"}
-      </Text>
-      <Text style={styles.emptySubtitle}>
-        {chatMode === "plan"
-          ? "Tell me what you want this block to achieve. I'll look at your split and recent workouts, then ask follow-ups until we can build a program that fits."
-          : chatMode === "nutrition"
-            ? "Tell me how you actually eat and what your training is for. I'll ask follow-ups, then we can save a nutrition plan that supports your workouts."
-            : "Ask questions about your fitness progress, get personalized advice, or tap Plan / Nutrition to design a program."}
-      </Text>
-      <View style={styles.emptyDisclaimer}>
-        <MaterialCommunityIcons
-          name="information-outline"
-          size={14}
-          color={colors.textMuted}
-        />
-        <Text style={styles.emptyDisclaimerText}>{AI_DISCLAIMER}</Text>
+  const renderEmpty = () => {
+    const copy =
+      chatMode === "plan"
+        ? {
+            eyebrow: "PLAN MODE",
+            title: "Design your next block",
+            subtitle:
+              "Say what this block should achieve. The coach reads your split and recent work, then asks until a program fits.",
+            prompts: [
+              "I want a 4-day strength plan",
+              "Improve my current push/pull/legs",
+              "Build around squat and bench",
+            ],
+          }
+        : chatMode === "nutrition"
+          ? {
+              eyebrow: "NUTRITION",
+              title: "Design how you eat",
+              subtitle:
+                "Describe how you actually eat and what training needs. The coach asks follow-ups, then you can save a plan.",
+              prompts: [
+                "Help me hit protein on a cut",
+                "Build meals around my training days",
+                "I need something realistic for work nights",
+              ],
+            }
+          : {
+              eyebrow: "COACH",
+              title: "Ask anything about your training",
+              subtitle:
+                "Progress, today’s workout, food, recovery — or open Plan / Food to design a program.",
+              prompts: [
+                "How am I progressing this month?",
+                "What should I train today?",
+                "Review my nutrition this week",
+              ],
+            };
+
+    return (
+      <View style={styles.emptyState}>
+        <LinearGradient
+          colors={[colors.surfaceRaised, colors.surfaceSunken]}
+          style={styles.emptyHero}
+        >
+          <View style={styles.emptyHeroGlow} pointerEvents="none" />
+          <Image
+            source={require("../../assets/icon.png")}
+            style={styles.emptyHeroImage}
+            accessibilityIgnoresInvertColors
+          />
+          <Text style={styles.emptyEyebrow}>{copy.eyebrow}</Text>
+          <Text style={styles.emptyTitle}>{copy.title}</Text>
+          <Text style={styles.emptySubtitle}>{copy.subtitle}</Text>
+        </LinearGradient>
+
+        <View style={styles.emptyPrompts}>
+          {copy.prompts.map((prompt) => (
+            <TouchableOpacity
+              key={prompt}
+              style={styles.emptyPromptChip}
+              onPress={() => sendMessage(prompt)}
+              disabled={loading || outOfQuota}
+              accessibilityRole="button"
+              accessibilityLabel={`Ask: ${prompt}`}
+            >
+              <Text style={styles.emptyPromptText}>{prompt}</Text>
+              <MaterialCommunityIcons
+                name="arrow-top-right"
+                size={16}
+                color={colors.accentPrimary}
+              />
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <View style={styles.emptyDisclaimer}>
+          <MaterialCommunityIcons
+            name="information-outline"
+            size={14}
+            color={colors.textFaintCool}
+          />
+          <Text style={styles.emptyDisclaimerText}>{AI_DISCLAIMER}</Text>
+        </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   const renderLoadingIndicator = () => (
     <View style={[styles.messageContainer, styles.assistantMessageContainer]}>
@@ -852,13 +917,13 @@ export default function AIChat({
                   ? "How do you actually eat — and what should food support?"
                   : "Ask your AI coach a question..."
             }
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.textFaintCool}
             multiline
             maxLength={chatMode === "coach" ? 500 : 800}
             editable={!loading && !outOfQuota}
           />
           <TouchableOpacity
-            onPress={sendMessage}
+            onPress={() => sendMessage()}
             style={[
               styles.sendButton,
               (!inputMessage.trim() || loading || outOfQuota) && styles.sendButtonDisabled,
@@ -866,12 +931,12 @@ export default function AIChat({
             disabled={!inputMessage.trim() || loading || outOfQuota}
           >
             <MaterialCommunityIcons
-              name="send"
-              size={24}
+              name="arrow-up"
+              size={20}
               color={
                 !inputMessage.trim() || loading || outOfQuota
-                  ? colors.textSecondary
-                  : colors.accentPrimary
+                  ? colors.textFaintCool
+                  : colors.onAccent
               }
             />
           </TouchableOpacity>
@@ -1055,16 +1120,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: spacing.sm,
     alignItems: "flex-start",
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderCool,
     padding: spacing.md,
-    marginTop: spacing.xl,
+    marginTop: spacing.lg,
+    width: "100%",
   },
   emptyDisclaimerText: {
     flex: 1,
-    color: colors.textMuted,
-    fontSize: 11,
-    lineHeight: 16,
+    color: colors.textFaintCool,
+    fontSize: typography.micro,
+    lineHeight: 15,
   },
   quotaBanner: {
     flexDirection: "row",
@@ -1151,24 +1219,81 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   emptyState: {
-    alignItems: "center",
+    alignItems: "stretch",
     justifyContent: "center",
-    paddingVertical: spacing["3xl"],
-    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.sm,
+    gap: spacing.md,
+  },
+  emptyHero: {
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: colors.borderCool,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.lg,
+    overflow: "hidden",
+    alignItems: "flex-start",
+  },
+  emptyHeroGlow: {
+    position: "absolute",
+    top: -40,
+    right: -20,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: colors.accentPrimary,
+    opacity: 0.12,
+  },
+  emptyHeroImage: {
+    width: 56,
+    height: 56,
+    borderRadius: borderRadius.lg,
+    marginBottom: spacing.md,
+  },
+  emptyEyebrow: {
+    color: colors.ai,
+    fontSize: typography.micro,
+    fontWeight: weight.bold,
+    letterSpacing: 1.4,
+    marginBottom: spacing.xs,
   },
   emptyTitle: {
-    fontSize: 20,
-    fontWeight: "700",
+    fontSize: typography.heading,
+    fontWeight: weight.heavy,
     color: colors.textPrimary,
-    marginTop: spacing.lg,
     marginBottom: spacing.sm,
-    textAlign: "center",
+    textAlign: "left",
+    lineHeight: 26,
   },
   emptySubtitle: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    textAlign: "center",
+    fontSize: typography.body,
+    color: colors.textMutedCool,
+    textAlign: "left",
     lineHeight: 20,
+  },
+  emptyPrompts: {
+    gap: spacing.sm,
+  },
+  emptyPromptChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.borderCool,
+  },
+  emptyPromptText: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: typography.body,
+    fontWeight: weight.medium,
+    lineHeight: 18,
   },
   messageContainer: {
     marginBottom: spacing.md,
@@ -1380,35 +1505,41 @@ const styles = StyleSheet.create({
     backgroundColor: colors.textSecondary,
   },
   inputContainer: {
-    padding: spacing.lg,
-    backgroundColor: colors.cardBackground,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    backgroundColor: colors.background,
     borderTopWidth: 1,
-    borderTopColor: colors.border,
+    borderTopColor: colors.borderCool,
   },
   inputWrapper: {
     flexDirection: "row",
     alignItems: "flex-end",
-    backgroundColor: colors.background,
+    backgroundColor: colors.cardBackground,
     borderRadius: borderRadius.xl,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.borderCoolStrong,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     gap: spacing.sm,
   },
   input: {
     flex: 1,
-    fontSize: 16,
+    fontSize: typography.title,
     color: colors.textPrimary,
     maxHeight: 100,
     paddingVertical: spacing.sm,
   },
   sendButton: {
-    padding: spacing.sm,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: colors.accentPrimary,
   },
   sendButtonDisabled: {
-    opacity: 0.5,
+    backgroundColor: colors.surfaceSunken,
+    opacity: 1,
   },
 });

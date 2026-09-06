@@ -215,7 +215,7 @@ def test_unreadable_photo_still_falls_back_to_the_description(monkeypatch):
     monkeypatch.setattr(
         analyzer,
         "estimate_food_from_query",
-        lambda query, name=None: {
+        lambda query, name=None, **kwargs: {
             "name": "Thali", "calories": 600, "protein": 20, "serving": "1 tray"
         },
     )

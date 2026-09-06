@@ -293,3 +293,197 @@ def score_day(
         "day_score": day_score,
         "day_band": _band(day_score) if day_score is not None else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Day totals vs plan — the History chart composite
+# ---------------------------------------------------------------------------
+#
+# Food-level `score_day` asks whether each item fit its slot. The history line
+# asks a different question: did the *day* land where the plan asked, across
+# the macros that matter. Protein is the spine (body-composition goals live
+# or die on it); calories are next; carbs/fats/fiber join when the plan has
+# targets for them. Missing targets drop out of the weight sum rather than
+# inventing a default — same stance as body without weigh-ins.
+#
+# Direction tilt on calories: a cut is dinged harder for going over; a surplus
+# is dinged harder for coming in light. "Low cal high protein high carb" is
+# not a universal virtue — on a lean bulk that day would score poorly.
+
+DAY_PROTEIN_POINTS = 40
+DAY_CALORIE_POINTS = 30
+DAY_CARB_POINTS = 15
+DAY_FAT_POINTS = 10
+DAY_FIBER_POINTS = 5
+
+DAY_HIT_BAND = 0.10
+DAY_ZERO_AT = 0.45
+
+
+def _tent(actual: float, target: float, *, full_band: float = DAY_HIT_BAND, zero_at: float = DAY_ZERO_AT) -> Optional[float]:
+    if target <= 0:
+        return None
+    err = abs(actual - target) / target
+    if err <= full_band:
+        return 1.0
+    if err >= zero_at:
+        return 0.0
+    return 1.0 - (err - full_band) / (zero_at - full_band)
+
+
+def _protein_day(actual: float, target: float) -> Optional[float]:
+    """Hitting protein is good; modest overshoot still full marks."""
+    if target <= 0:
+        return None
+    ratio = actual / target
+    if ratio >= 0.90:
+        return 1.0
+    return max(0.0, ratio / 0.90)
+
+
+def _calorie_day(actual: float, target: float, goal: str) -> Optional[float]:
+    """Tent around target, tilted by goal direction."""
+    base = _tent(actual, target)
+    if base is None:
+        return None
+    if target <= 0:
+        return None
+    signed = (actual - target) / target
+    if goal in DEFICIT_GOALS and signed > DAY_HIT_BAND:
+        # Overshoot on a cut costs more than the symmetric tent alone.
+        return max(0.0, base * 0.75)
+    if goal in SURPLUS_GOALS and signed < -DAY_HIT_BAND:
+        return max(0.0, base * 0.75)
+    return base
+
+
+def _density_fallback(calories: float, protein: float, fiber: float) -> Dict[str, Any]:
+    """
+    No plan targets — score protein density only, never invent a calorie goal.
+
+    ~2g protein / 100 kcal is thin; ~4g+ is strong. Fiber adds a small bonus.
+    """
+    if calories < TRIVIAL_CALORIES:
+        return {
+            "score": None,
+            "band": None,
+            "source": "density",
+            "reason": "Too little logged to score",
+            "parts": {},
+        }
+    density = (protein / calories) * 100.0  # g per 100 kcal
+    # 2.0 → 40, 4.0 → 100, linear clamp
+    raw = (density - 2.0) / 2.0 * 60.0 + 40.0
+    fiber_bonus = min(10.0, (fiber / max(calories / 100.0, 1.0)) * 4.0)
+    score = max(0, min(100, int(round(raw + fiber_bonus))))
+    return {
+        "score": score,
+        "band": _band(score),
+        "source": "density",
+        "reason": "Protein density (no plan targets yet)",
+        "parts": {
+            "protein_density": round(density, 2),
+            "fiber_bonus": round(fiber_bonus, 1),
+        },
+    }
+
+
+def score_day_totals(
+    totals: Dict[str, Any],
+    *,
+    goal: str = "",
+    targets: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    One 0–100 figure for a day's macro totals against the plan.
+
+    Renormalizes over whichever of calories/protein/carbs/fats/fiber the plan
+    actually specifies. Returns a density fallback when there are no targets.
+    """
+    calories = _num(totals.get("calories"))
+    protein = _num(totals.get("protein"))
+    carbs = _num(totals.get("carbs"))
+    fats = _num(totals.get("fats"))
+    fiber = _num(totals.get("fiber"))
+    goal_key = str(goal or "").strip().lower()
+    t = targets or {}
+
+    cal_t = _num(t.get("calories"))
+    pro_t = _num(t.get("protein"))
+    carb_t = _num(t.get("carbs"))
+    fat_t = _num(t.get("fats"))
+    fiber_t = _num(t.get("fiber"))
+
+    if cal_t <= 0 or pro_t <= 0:
+        return _density_fallback(calories, protein, fiber)
+
+    parts: Dict[str, float] = {}
+    weighted = 0.0
+    weight = 0.0
+
+    p = _protein_day(protein, pro_t)
+    if p is not None:
+        parts["protein"] = round(p * DAY_PROTEIN_POINTS, 1)
+        weighted += p * DAY_PROTEIN_POINTS
+        weight += DAY_PROTEIN_POINTS
+
+    c = _calorie_day(calories, cal_t, goal_key)
+    if c is not None:
+        parts["calories"] = round(c * DAY_CALORIE_POINTS, 1)
+        weighted += c * DAY_CALORIE_POINTS
+        weight += DAY_CALORIE_POINTS
+
+    if carb_t > 0:
+        k = _tent(carbs, carb_t)
+        if k is not None:
+            parts["carbs"] = round(k * DAY_CARB_POINTS, 1)
+            weighted += k * DAY_CARB_POINTS
+            weight += DAY_CARB_POINTS
+
+    if fat_t > 0:
+        f = _tent(fats, fat_t)
+        if f is not None:
+            parts["fats"] = round(f * DAY_FAT_POINTS, 1)
+            weighted += f * DAY_FAT_POINTS
+            weight += DAY_FAT_POINTS
+
+    if fiber_t > 0:
+        fib = min(1.0, fiber / fiber_t)
+        parts["fiber"] = round(fib * DAY_FIBER_POINTS, 1)
+        weighted += fib * DAY_FIBER_POINTS
+        weight += DAY_FIBER_POINTS
+
+    if weight <= 0:
+        return _density_fallback(calories, protein, fiber)
+
+    # Scale to 0–100 even when carbs/fats/fiber targets are absent.
+    score = max(0, min(100, int(round(weighted / weight * 100))))
+
+    # Name the weakest part so the scrub card can say why the day landed here.
+    weakest = min(parts.items(), key=lambda kv: kv[1] / {
+        "protein": DAY_PROTEIN_POINTS,
+        "calories": DAY_CALORIE_POINTS,
+        "carbs": DAY_CARB_POINTS,
+        "fats": DAY_FAT_POINTS,
+        "fiber": DAY_FIBER_POINTS,
+    }.get(kv[0], 1)) if parts else None
+    reason = {
+        "protein": "Protein short of target",
+        "calories": "Calories off target",
+        "carbs": "Carbs off target",
+        "fats": "Fats off target",
+        "fiber": "Fiber short of target",
+    }.get(weakest[0], "On track") if weakest and weakest[1] < (
+        {"protein": DAY_PROTEIN_POINTS, "calories": DAY_CALORIE_POINTS,
+         "carbs": DAY_CARB_POINTS, "fats": DAY_FAT_POINTS,
+         "fiber": DAY_FIBER_POINTS}.get(weakest[0], 1) * 0.85
+    ) else "Solid day against the plan"
+
+    return {
+        "score": score,
+        "band": _band(score),
+        "source": "plan",
+        "reason": reason,
+        "parts": parts,
+        "goal": goal_key,
+    }

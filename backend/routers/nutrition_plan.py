@@ -639,7 +639,9 @@ async def update_nutrition_plan(
 
 
 @router.post("/{plan_id}/suggest-slot")
-async def suggest_slot(
+# This route uses synchronous database/model clients. FastAPI runs a synchronous
+# endpoint in its worker pool so preloading ideas cannot block plan saves.
+def suggest_slot(
     plan_id: str,
     request: SuggestSlotRequest,
     user_id: str = Depends(get_user_id),

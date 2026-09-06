@@ -310,6 +310,43 @@ total: portion scales every line, a cooking-style change books its own oil line
 rather than being smeared across the other items, and a manual macro override
 hides the ledger entirely since it no longer explains the number.
 
+#### When it does not have the photo, it says so (Sep 2026)
+Re-attaching the photo is the *intent*; four paths reached the chat without it
+and every one of them was silent. The meal was typed; the archive write
+dropped the image; the log was gone; the read threw. All four returned a bare
+`None` from `load_archived_image`, the "photo is attached" system message was
+simply omitted, and the model wrote confident prose about a plate it had never
+been sent. The user's report — "sometimes it feels like it doesn't remember
+the picture" — was a correct reading of a real failure, not a
+misunderstanding.
+
+`load_archived_image_result` returns the reason alongside the data URL
+(`ok` / `no_log` / `log_missing` / `not_archived` / `read_error`), the endpoint
+returns `photo_attached` and `photo_status`, and the chat renders which
+evidence it had. `load_archived_image` stays as a thin wrapper for callers
+that only want the image.
+
+**Silence was the bug, so the prompt gets the negative case explicitly.** With
+no image the model is told no photo is available and forbidden from claiming
+it looked, counted, or can see anything — an omitted instruction is not an
+instruction, and a model handed a fully-itemised ledger will otherwise narrate
+a plate to match it.
+
+Losing the image must never cost the log. `ARCHIVE_MAX_BYTES` capped *raw*
+JPEG bytes at 700 KB, but the document stores base64 at 4/3 that — ~933 KB
+against Firestore's 1,048,576 byte ceiling, leaving ~115 KB for the estimate,
+ledger, chat and history. A large estimate pushed `set()` over, the exception
+was swallowed, and the whole log vanished — taking the chat linkage and the
+`accepted_estimate` label, which is the archive's only real ground truth. The
+budget is now checked against the **encoded** length, and a write that fails
+with an image retries without it rather than losing everything.
+
+The correction runs on `stronger_model(client_pick, estimate_model)`. An
+estimate that escalated to `gpt-5.6-sol` was being corrected by the `gpt-4o`
+the picker happened to hold — the weaker model fixing the stronger one's work.
+The client's timeout is unconditionally 120s for the same reason: budgeting for
+4o would time out exactly the revisions that took the most care.
+
 ### Fit score, not health score
 `fit_score.py` scores **goal fit**, never absolute healthiness. The same kadhi
 is a good fit on a lean bulk and a poor one on a cut; a scorer where that isn't
@@ -337,6 +374,76 @@ with, and neither is evidence the user agreed.
 `photo_log_store.py` was untracked in git until Sep 2026, so nothing was ever
 archived and the harness has no history to replay. Prompt and model changes
 before that point were never measured.
+
+### Typing the meal instead of photographing it
+
+The same meal described in words used to get a materially worse estimate than
+the same meal photographed. `/estimate-food` ran a single hardcoded
+`gpt-4o-mini` call — a model not even in `ALLOWED_MODELS` — with no component
+ledger, no confidence, no escalation and no second opinion, while the photo of
+that plate got gpt-4o with routing to gpt-5.6-sol. `text_estimate.py` is the
+text-side counterpart of `photo_estimate.py` and returns the same analysis
+shape, so the scan results card renders both paths.
+
+**A sentence is graded on whether the amount was stated, not on whether the
+food can be seen.** "some rice" and "180 g of rice, boiled" are equally legible
+strings and nothing like equally estimable, and no score built on image quality
+tells them apart. An unquantified description is capped below `high` however
+confidently the model names the dish — knowing it is biryani does not say
+whether it was a cup or a platter, and the portion is where the calories are.
+
+#### The user's own calorie figure
+A typed description often carries a number the photo path never has. It is
+evidence — they saw the food and ate it — but weak evidence, because
+self-reported intake runs low and correcting that bias is the point of the
+feature. So it is never clamped to, and never used as a floor.
+
+Never a floor is the whole bug. The prompt had exactly one rule about user
+calorie figures and it described a *part* hint ("the tortilla was 150 cal each
+… add filling, cooking oil, and extras on top"). With no rule for the other
+case, "I think the whole thing was about 600" read the same way and the model
+stacked the filling and the oil on top of it. That is how a 600 kcal guess
+comes back as 1100.
+
+`parse_calorie_hint` decides the scope **deterministically and states it in the
+prompt**, rather than asking — a model that has already mis-scoped the number
+will report the mis-scoped reading back. Scope is read from the figure's own
+clause, so "6 rotis in total, each one about 120 calories" is a part hint;
+unmarked figures default to whole-meal, which is where they far more often
+belong. The calorie figure's digits are blanked before portion detection, or
+"maybe 600 calories" would score as the user having said how much they ate.
+
+`check_hint` compares only whole-meal figures — a part figure is *meant* to
+come out far below the total, so comparing it would fire on every correctly
+handled hint. A gap past `HINT_DISAGREEMENT_RATIO` (25%) buys a stronger second
+pass, and if it survives that pass it is shown on the card with the model's own
+account of the gap, or with no reason at all when it could not name one. Never
+a generated excuse. Showing it is the point: a user who typed "felt like 600"
+and got 1100 with no explanation cannot tell a corrected underestimate from a
+bug, and both happen. The card recomputes the gap against what is currently
+displayed, so scaling the servings updates it and agreement makes it disappear.
+
+#### Routing
+Same stance as the photo path: escalate on *the model being wrong*, not on
+*the description being vague*. A one-word entry scores low confidence and is
+the case a stronger model helps with least — there is nothing more to extract
+from "rice". Triggers are a surviving hint disagreement, three or more
+components, a coherence repair on calories or protein, a portion range too wide
+to log, and a calorie density outside anything edible (the cheap
+model-independent absurdity check the photo path gets from the image itself).
+The component threshold is **inherited from the photo path, not calibrated on
+text** — `photo_log_store` only archives the photo path, so there are no
+accepted labels to replay here yet.
+
+Rule 3 of `ESTIMATE_RULES` forbids listing a dish and its own parts. The
+reconciler in `assess_macro_coherence` only ever raises, which is right when
+the failure mode is omission (vision) and wrong when it is duplication — and on
+a typed description the user has already enumerated the meal, so duplication is
+the live risk.
+
+`/estimate-food` also stopped answering a *described* meal from the saved-food
+library. That row is keyed on a name, so returning it discarded the quantity,
+preparation and calorie figure the user had just typed.
 
 ## Meal Timing (Sep 2026)
 
@@ -548,6 +655,46 @@ poor training, a softening position is disuse rather than measured loss, and a
 null `on_track` must be reported as such. `propose_progress_goal` is staged
 like every other write tool — a goal the user never accepted is one they would
 be measured against without choosing it.
+
+### Looking at a meal photo is opt-in (Sep 2026)
+`get_meal_photo_history` reads the archive's macros; `view_meal_photo` opens
+the image. Those are different acts. Reading back what was logged answers a
+question about someone's diet; opening the photograph is looking at a picture
+of them and their table, and that happens because they asked for it — not
+because the model judged it might help.
+
+**Withheld, not discouraged.** `asks_to_see_a_meal_photo` reads the intent
+from the user's own words (same deterministic-regex stance as
+`fresh_log_tool`), the router passes it to `CoachToolbox(allow_photo_view=)`,
+and `tools_for_mode` omits the schema entirely when it is False — in every
+mode, by default. A prompt instruction is advisory and a model that ignores it
+still gets to make the call; a tool that was never offered cannot be called at
+all. `dispatch` refuses it a second time on the same flag, because a replayed
+tool call must not be the one exception.
+
+Gated on the *current* message. A follow-up that does not mention the photo is
+answered from the stored ledger — the right default, and a question about a
+photo names it in practice.
+
+**The image cannot ride in the tool result.** A `role: "tool"` message is a
+string, so base64 in there is a megabyte of context the model reads as
+gibberish. `view_meal_photo` returns metadata only and parks the data URL on
+`toolbox.pending_images`; `attach_pending_images` appends it as a real image
+message after every tool result for that round — after, so the image never
+splits an assistant `tool_calls` entry from its results. Attached at
+`detail: "high"`, since looking again at lower fidelity than the estimate was
+made at loses the one job the tool exists for. It is drained on attach, so a
+later round cannot re-send the same photo, and `MAX_PHOTO_VIEWS_PER_TURN` (2)
+stops a turn paging through the album.
+
+Only user/assistant text goes back to the client, so a photo never lands in
+stored conversation history.
+
+**Body scan photos are not here and never will be.** `body_scan/store.py`
+writes `photos_retained: False` and the router clears the upload the moment
+the vision pass returns. Only meal photos are archived, and only because the
+estimate has to be re-checkable against them. The tool description says so, so
+"look at my progress photos" gets a straight answer instead of a search.
 
 ### Not built
 Planned-low weeks are sourced only from the live pacing style, which has no

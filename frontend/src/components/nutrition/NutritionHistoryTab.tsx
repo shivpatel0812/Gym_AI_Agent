@@ -13,6 +13,7 @@ import {
   borderRadius,
   colors,
   macro,
+  series as chartSeries,
   spacing,
   typography,
   weight,
@@ -21,10 +22,11 @@ import ScrubbableLineChart from "../plan/ScrubbableLineChart";
 import { type ChartPoint, formatShortDate, parseDate } from "../plan/chartUtils";
 
 /**
- * Nutrition history — one chart of daily totals.
+ * Nutrition history — one composite day score over time.
  *
- * Lives under the Nutrition hub as a sibling of Today. Not Progress Hub: that
- * screen scores goal adherence weekly; this one is the raw day line.
+ * The line is not calories alone. Each day is scored against the plan
+ * (protein first, then calories, then carbs/fats/fiber when targets exist).
+ * Without a plan it falls back to protein density so the chart still works.
  */
 
 type DailyRow = {
@@ -34,9 +36,20 @@ type DailyRow = {
   carbs: number;
   fats: number;
   fiber: number;
+  score: number | null;
+  band: string | null;
+  score_source?: string;
+  score_reason?: string;
+  score_parts?: Record<string, number>;
 };
 
-type Metric = "calories" | "protein";
+type Targets = {
+  calories?: number | null;
+  protein?: number | null;
+  carbs?: number | null;
+  fats?: number | null;
+  fiber?: number | null;
+};
 
 const RANGES = [
   { label: "2W", days: 14 },
@@ -44,15 +57,19 @@ const RANGES = [
   { label: "3M", days: 90 },
 ] as const;
 
-const METRICS: { key: Metric; label: string; unit: string; color: string }[] = [
-  { key: "calories", label: "Calories", unit: "kcal", color: macro.calories },
-  { key: "protein", label: "Protein", unit: "g", color: macro.protein },
+const MACRO_ROWS: { key: keyof DailyRow; label: string; color: string; unit: string }[] = [
+  { key: "calories", label: "Calories", color: macro.calories, unit: "kcal" },
+  { key: "protein", label: "Protein", color: macro.protein, unit: "g" },
+  { key: "carbs", label: "Carbs", color: macro.carbs, unit: "g" },
+  { key: "fats", label: "Fats", color: macro.fats, unit: "g" },
+  { key: "fiber", label: "Fiber", color: macro.fiber, unit: "g" },
 ];
 
 export default function NutritionHistoryTab() {
   const [days, setDays] = useState(30);
-  const [metric, setMetric] = useState<Metric>("calories");
   const [series, setSeries] = useState<DailyRow[]>([]);
+  const [targets, setTargets] = useState<Targets>({});
+  const [scoring, setScoring] = useState<"plan" | "density">("density");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scrub, setScrub] = useState<ChartPoint | null>(null);
@@ -66,6 +83,8 @@ export default function NutritionHistoryTab() {
         params: { days: horizon },
       });
       setSeries(Array.isArray(res.data?.series) ? res.data.series : []);
+      setTargets(res.data?.targets || {});
+      setScoring(res.data?.scoring === "plan" ? "plan" : "density");
     } catch {
       setError("Could not load nutrition history.");
       setSeries([]);
@@ -80,32 +99,33 @@ export default function NutritionHistoryTab() {
     }, [days, load])
   );
 
-  const meta = METRICS.find((m) => m.key === metric) ?? METRICS[0];
-
   const points: ChartPoint[] = useMemo(
     () =>
-      series.map((row) => ({
-        key: row.date,
-        date: row.date,
-        t: parseDate(row.date),
-        value: row[metric],
-        scrubText: `${Math.round(row[metric])}${meta.unit === "kcal" ? "" : meta.unit} · ${formatShortDate(row.date)}`,
-        label: formatShortDate(row.date),
-      })),
-    [series, metric, meta.unit]
+      series
+        .filter((row) => row.score != null)
+        .map((row) => ({
+          key: row.date,
+          date: row.date,
+          t: parseDate(row.date),
+          value: row.score,
+          scrubText: `${Math.round(row.score!)} · ${formatShortDate(row.date)}`,
+          label: formatShortDate(row.date),
+        })),
+    [series]
   );
 
-  const latest = series.length ? series[series.length - 1] : null;
-  const active = scrub?.value != null
-    ? scrub
-    : points.length
-      ? points[points.length - 1]
-      : null;
+  const activeRow = useMemo(() => {
+    if (!series.length) return null;
+    if (scrub?.date) {
+      return series.find((r) => r.date === scrub.date) ?? series[series.length - 1];
+    }
+    return series[series.length - 1];
+  }, [series, scrub]);
 
   const avg =
-    series.length > 0
+    points.length > 0
       ? Math.round(
-          series.reduce((sum, row) => sum + row[metric], 0) / series.length
+          points.reduce((sum, p) => sum + (p.value ?? 0), 0) / points.length
         )
       : null;
 
@@ -116,7 +136,11 @@ export default function NutritionHistoryTab() {
       showsVerticalScrollIndicator={false}
     >
       <Text style={styles.title}>History</Text>
-      <Text style={styles.sub}>Daily totals for days you logged food.</Text>
+      <Text style={styles.sub}>
+        {scoring === "plan"
+          ? "One score per day — protein, calories, carbs, fats, and fiber against your plan. Protein counts most."
+          : "One score per day from protein density until you have a nutrition plan to score against."}
+      </Text>
 
       <View style={styles.chipRow}>
         {RANGES.map((range) => {
@@ -131,28 +155,6 @@ export default function NutritionHistoryTab() {
             >
               <Text style={[styles.chipText, on && styles.chipTextOn]}>
                 {range.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      <View style={styles.chipRow}>
-        {METRICS.map((m) => {
-          const on = m.key === metric;
-          return (
-            <TouchableOpacity
-              key={m.key}
-              onPress={() => {
-                setMetric(m.key);
-                setScrub(null);
-              }}
-              style={[styles.chip, on && styles.chipOn]}
-              accessibilityRole="button"
-              accessibilityState={{ selected: on }}
-            >
-              <Text style={[styles.chipText, on && styles.chipTextOn]}>
-                {m.label}
               </Text>
             </TouchableOpacity>
           );
@@ -184,31 +186,57 @@ export default function NutritionHistoryTab() {
         <View style={styles.card}>
           <View style={styles.readout}>
             <Text style={styles.readoutValue}>
-              {active?.value != null ? Math.round(active.value) : "—"}
-              <Text style={styles.readoutUnit}>
-                {meta.unit === "kcal" ? "" : ` ${meta.unit}`}
-              </Text>
+              {activeRow?.score != null ? Math.round(activeRow.score) : "—"}
             </Text>
             <Text style={styles.readoutLabel}>
-              {active?.date ? formatShortDate(active.date) : meta.label}
+              {activeRow?.band ? `${activeRow.band} · ` : ""}
+              {activeRow?.date ? formatShortDate(activeRow.date) : "Day score"}
               {avg != null ? ` · avg ${avg}` : ""}
             </Text>
+            {activeRow?.score_reason ? (
+              <Text style={styles.readoutReason}>{activeRow.score_reason}</Text>
+            ) : null}
           </View>
 
           <ScrubbableLineChart
             points={points}
             height={168}
-            accent={meta.color}
-            unit={meta.unit === "kcal" ? undefined : meta.unit}
+            accent={chartSeries.mark}
             onScrub={setScrub}
           />
 
-          {latest ? (
-            <Text style={styles.footnote}>
-              {series.length} day{series.length === 1 ? "" : "s"} logged · last{" "}
-              {formatShortDate(latest.date)}
-            </Text>
+          {activeRow ? (
+            <View style={styles.macroGrid}>
+              <Text style={styles.macroHead}>THAT DAY</Text>
+              {MACRO_ROWS.map((row) => {
+                const value = activeRow[row.key];
+                if (typeof value !== "number") return null;
+                const target = targets[row.key as keyof Targets];
+                return (
+                  <View key={row.key} style={styles.macroRow}>
+                    <View style={styles.macroLeft}>
+                      <View style={[styles.swatch, { backgroundColor: row.color }]} />
+                      <Text style={styles.macroLabel}>{row.label}</Text>
+                    </View>
+                    <Text style={styles.macroValue}>
+                      {row.key === "calories" ? Math.round(value) : value.toFixed(0)}
+                      {row.unit === "kcal" ? "" : row.unit}
+                      {target != null && Number(target) > 0
+                        ? ` / ${Math.round(Number(target))}`
+                        : ""}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
           ) : null}
+
+          <Text style={styles.footnote}>
+            {scoring === "plan"
+              ? "Score = how close the day landed to your targets. Protein 40 · calories 30 · carbs 15 · fats 10 · fiber 5 (missing targets drop out)."
+              : "No calorie/protein targets on the plan — scoring protein per calorie until a plan is active."}{" "}
+            {series.length} day{series.length === 1 ? "" : "s"} logged.
+          </Text>
         </View>
       )}
     </ScrollView>
@@ -232,6 +260,7 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
     marginTop: spacing.xs,
     marginBottom: spacing.lg,
+    lineHeight: 18,
   },
   chipRow: {
     flexDirection: "row",
@@ -293,19 +322,52 @@ const styles = StyleSheet.create({
     fontSize: typography.display,
     fontWeight: weight.heavy,
   },
-  readoutUnit: {
-    color: colors.textMutedCool,
-    fontSize: typography.title,
-    fontWeight: weight.medium,
-  },
   readoutLabel: {
     color: colors.textMutedCool,
     fontSize: typography.caption,
     marginTop: spacing.xs,
   },
+  readoutReason: {
+    color: colors.textPrimary,
+    fontSize: typography.caption,
+    marginTop: spacing.xs,
+    fontWeight: weight.medium,
+  },
+  macroGrid: {
+    marginTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm,
+  },
+  macroHead: {
+    color: colors.textFaintCool,
+    fontSize: typography.micro,
+    fontWeight: weight.bold,
+    letterSpacing: 1.2,
+    marginBottom: spacing.xs,
+  },
+  macroRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.xs,
+  },
+  macroLeft: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  swatch: { width: 8, height: 8, borderRadius: 2 },
+  macroLabel: {
+    color: colors.textPrimary,
+    fontSize: typography.caption,
+    fontWeight: weight.medium,
+  },
+  macroValue: {
+    color: colors.textMutedCool,
+    fontSize: typography.caption,
+    fontVariant: ["tabular-nums"],
+  },
   footnote: {
     color: colors.textFaintCool,
     fontSize: typography.micro,
     marginTop: spacing.md,
+    lineHeight: 15,
   },
 });

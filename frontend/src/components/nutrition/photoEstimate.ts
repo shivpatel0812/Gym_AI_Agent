@@ -32,11 +32,33 @@ export type PhotoConfidence = {
   shouldNudge: boolean;
 };
 
+/**
+ * What the user themselves said the meal came to, against what the estimate
+ * came to.
+ *
+ * Only ever present when the user typed a figure for the WHOLE meal — a
+ * per-part figure ("the tortilla was 150 cal each") is meant to be built on
+ * top of, so comparing it to the total would flag every correct answer.
+ * `reason` is the model's own account of the gap, or null when it could not
+ * name one; it is never filled in with a generated excuse.
+ */
+export type HintCheck = {
+  statedCalories: number;
+  estimatedCalories: number;
+  differenceRatio: number;
+  direction: "higher" | "lower" | "same";
+  disagrees: boolean;
+  reason?: string;
+};
+
 export type PhotoEstimate = MacroValues & {
   name: string;
   amount?: string;
   estimatedGrams?: number;
   analysis: {
+    /** Which path produced this — a photo, or a typed description. */
+    source: "photo" | "text";
+    hintCheck?: HintCheck;
     confidence: PhotoConfidence;
     cookingStyle: CookingStyle;
     oilGrams: number;
@@ -119,6 +141,25 @@ export function normalizeCookingStyle(value: unknown): CookingStyle {
   return value === "light" || value === "generous" ? value : "normal";
 }
 
+function hintCheck(value: unknown): HintCheck | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const stated = finiteNumber(raw.stated_calories);
+  const estimated = finiteNumber(raw.estimated_calories);
+  if (stated <= 0 || estimated <= 0) return undefined;
+  const direction =
+    raw.direction === "higher" || raw.direction === "lower" ? raw.direction : "same";
+  const reason = String(raw.reason || "").trim();
+  return {
+    statedCalories: Math.round(stated),
+    estimatedCalories: Math.round(estimated),
+    differenceRatio: Number(raw.difference_ratio) || 0,
+    direction,
+    disagrees: Boolean(raw.disagrees),
+    reason: reason || undefined,
+  };
+}
+
 export function toPhotoEstimate(raw: any, titleFallback = ""): PhotoEstimate | null {
   const item = raw?.food || raw?.food_items?.[0] || raw;
   if (!item || typeof item !== "object" || !String(item.name || titleFallback).trim()) {
@@ -147,6 +188,8 @@ export function toPhotoEstimate(raw: any, titleFallback = ""): PhotoEstimate | n
     sodium: optionalNutrient(item.sodium),
     estimatedGrams: finiteNumber(portion.estimated_grams) || undefined,
     analysis: {
+      source: analysis.source === "text" ? "text" : "photo",
+      hintCheck: hintCheck(analysis.hint_check),
       confidence: {
         score: Math.min(100, Math.round(finiteNumber(confidenceRaw.score))),
         level,

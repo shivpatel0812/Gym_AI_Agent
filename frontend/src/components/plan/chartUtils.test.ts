@@ -6,6 +6,7 @@ import {
   compareSessions,
   daysBetween,
   getSessionRecords,
+  muscleGroupsForPlanFamily,
   parseDate,
   rollingAverage,
   sessionStimulus,
@@ -97,6 +98,17 @@ describe("getSessionRecords", () => {
 
   it("drops a session with neither usable sets nor a top set", () => {
     expect(getSessionRecords(exercise([{ date: "2026-08-01", sets: [] }]))).toHaveLength(0);
+  });
+
+  it("does not double identical same-date history payloads", () => {
+    const sets = [s(80, 6), s(80, 4), s(75, 6), s(70, 7)];
+    const [record] = getSessionRecords(
+      exercise([
+        { date: "2026-09-04", sets },
+        { date: "2026-09-04", sets },
+      ])
+    );
+    expect(record.sets).toHaveLength(4);
   });
 
   it("preserves the logged set number when an earlier set is hidden", () => {
@@ -375,5 +387,33 @@ describe("trendColor", () => {
 
   it("distinguishes a stall from progress", () => {
     expect(trendColor("stall")).not.toBe(trendColor("progress"));
+  });
+});
+
+describe("muscleGroupsForPlanFamily", () => {
+  it("keeps Shoulders off Pull even when Face Pulls are on the day", () => {
+    const groups = muscleGroupsForPlanFamily(
+      "pull",
+      [
+        exercise([], {
+          exercise_id: "default-back-bw-pullups",
+          exercise_name: "Pull-Ups",
+        }),
+        exercise([], {
+          exercise_id: "default-shoulders-cable-face-pulls",
+          exercise_name: "Face Pulls",
+        }),
+      ]
+    );
+    expect(groups).toEqual(["BACK", "BICEPS"]);
+    expect(groups).not.toContain("SHOULDERS");
+  });
+
+  it("puts Shoulders on Push", () => {
+    expect(muscleGroupsForPlanFamily("push", [])).toEqual([
+      "CHEST",
+      "SHOULDERS",
+      "TRICEPS",
+    ]);
   });
 });

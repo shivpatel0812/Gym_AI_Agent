@@ -161,6 +161,7 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
    * state back.
    */
   const saveSeq = useRef(0);
+  const planScroll = useRef<ScrollView>(null);
 
   const savePatch = async (patch: Partial<NutritionPlan>) => {
     if (!plan) return false;
@@ -221,9 +222,7 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
       });
       return true;
     } catch (error: any) {
-      // A newer save is already in flight — let it own the outcome instead of
-      // reloading the plan out from under it.
-      if (seq !== saveSeq.current) return true;
+      // Another queued edit succeeding does not mean this edit was saved.
       // The server explains limits ("a plan holds up to 24 meal anchors") —
       // showing that beats a generic failure the user cannot act on.
       const detail = error?.response?.data?.detail;
@@ -371,6 +370,19 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
       };
       setPlan((prev) => (prev ? { ...prev, meal_anchors: anchors } : prev));
       const ok = await savePatch({ meal_anchors: anchors });
+      if (!ok) await load();
+      return;
+    }
+    if (slot.kind === "flexible") {
+      const idx = findFlexIndex(slot);
+      if (idx < 0 || !plan.flexible_meals[idx]) return;
+      const meal = plan.flexible_meals[idx];
+      const current = normDays(slot.days?.length ? slot.days : meal.days);
+      const nextDays = current.includes(day) ? current.filter(d => d !== day) : [...current, day];
+      const meals = [...plan.flexible_meals];
+      meals[idx] = { ...meal, days: nextDays, frequency: nextDays.length === 7 ? "daily" : "most_days" };
+      setPlan(prev => prev ? { ...prev, flexible_meals: meals } : prev);
+      const ok = await savePatch({ flexible_meals: meals });
       if (!ok) await load();
       return;
     }
@@ -1013,6 +1025,7 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
   return (
     <View style={styles.container}>
       <ScrollView
+        ref={planScroll}
         contentContainerStyle={styles.scroll}
         refreshControl={
           <RefreshControl
@@ -1072,6 +1085,7 @@ export default function NutritionPlanTab({ onAskCoach, onOpenSuggestions }: Prop
 
         {dayMap ? (
           <DayMap
+            onNavigate={() => planScroll.current?.scrollTo({ y: 0, animated: false })}
             key={plan.id}
             map={dayMap}
             planRevision={ideaContext}
