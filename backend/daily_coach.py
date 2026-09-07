@@ -188,9 +188,9 @@ Unscheduled routines are not evidence of today's schedule. Missing logs are unkn
 Use the user's current calorie/protein/water targets; never compensate for yesterday by restricting food, overeating, or prescribing extra exercise.
 Respect preferences, allergies, pain and recovery notes. No diagnosis, medication advice, new hydration targets, or unsupported lifting loads/PRs.
 Reference today's actual exercise sets/reps only if supplied; acknowledge completed workouts. Meal anchors/options are choices, do not add all options together.
-Give a friendly 2-3 sentence briefing connecting training, food and routine, one sentence about yesterday, and 3-5 concrete priorities.
+Give a punchy 1-2 sentence briefing connecting training, food and routine, one short sentence about yesterday, and 2-4 concrete priorities.
 Return JSON: {"summary":string,"yesterday":string,"priorities":[{"id":string,"title":string,"detail":string,"action":"workout"|"nutrition"|"water"|"wellness"|"routine"}]}.
-Keep each priority under 45 words and summary under 100 words. Never claim that plans or logs have been changed."""
+The summary must stand alone in its first sentence, since it may be shown truncated to that sentence. Keep each priority detail under 20 words and summary under 45 words. Never claim that plans or logs have been changed."""
 
 
 def generate_brief(context):
@@ -209,9 +209,9 @@ def generate_brief(context):
         if not isinstance(priorities, list) or not 1 <= len(priorities) <= 5:
             return brief
         if not all(isinstance(p, dict) and p.get("action") in actions and
-                   all(isinstance(p.get(k), str) and 0 < len(p[k]) <= limit for k, limit in (("title", 120), ("detail", 600))) for p in priorities):
+                   all(isinstance(p.get(k), str) and 0 < len(p[k]) <= limit for k, limit in (("title", 80), ("detail", 220))) for p in priorities):
             return brief
-        if not all(isinstance(raw.get(k), str) and 0 < len(raw[k]) <= 1200 for k in ("summary", "yesterday")):
+        if not all(isinstance(raw.get(k), str) and 0 < len(raw[k]) <= 400 for k in ("summary", "yesterday")):
             return brief
         brief.update(summary=raw["summary"], yesterday=raw["yesterday"], source="ai",
                      priorities=[{**compact(p, ("title", "detail", "action")), "id": str(i)} for i, p in enumerate(priorities)])
