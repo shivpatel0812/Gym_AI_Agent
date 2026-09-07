@@ -41,8 +41,157 @@ from ai_analysis.workout_recommender.exercise_metadata import resolve_exercise_m
 from nutrition.plan_store import NutritionPlanStore
 from nutrition.pacing import build_paced_trajectory
 from nutrition.training_macros import build_training_macros
+from nutrition.energy_balance import (
+    INTAKE_WINDOW_DAYS,
+    complete_intake_days,
+    resolve_energy_balance,
+)
 
 router = APIRouter(prefix="/api/training-plan", tags=["training-plan"])
+
+
+def _dated_rows(user_id: str, collection: str, days: int) -> list:
+    """Recent rows from one dated collection, or [] if the read fails.
+
+    A database hiccup must not be read as "this user has no weigh-ins", which
+    would silently demote the energy-balance cascade to a weaker rung.
+    """
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    try:
+        docs = (
+            db.collection("users").document(user_id).collection(collection)
+            .where("date", ">=", since).stream()
+        )
+        return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
+    except Exception as e:
+        print(f"Warning: could not read {collection} for energy balance: {e}")
+        return []
+
+
+def _recent_weigh_ins(user_id: str, days: int = 120) -> list:
+    """A wider window than intake: a bodyweight trend needs weeks to exist."""
+    return _dated_rows(user_id, "weigh_ins", days)
+
+
+def _recent_macro_days(user_id: str, days: int = INTAKE_WINDOW_DAYS) -> list:
+    return _dated_rows(user_id, "macros", days)
+
+
+def _goal_text(request, conversation: list) -> str:
+    """The sentence a finish line might be stated in.
+
+    The explicit goal statement first, then the plan's own summary of it, then
+    the user's turns newest-first — a goal is usually named when it is set and
+    then referred to obliquely, so an early turn can carry numbers no later one
+    repeats.
+    """
+    parts = [getattr(request, "goal_statement", None) or ""]
+    parts += [
+        str(m.get("content") or "")
+        for m in reversed(conversation or [])
+        if isinstance(m, dict) and m.get("role") == "user"
+    ]
+    return "\n".join(p for p in parts if p.strip())
+
+
+def _attach_goal_destination(user_id: str, plan: dict, request, conversation: list) -> None:
+    """
+    Stamp a stated finish line onto the lift it is about, and say what it takes.
+
+    The goal was only ever stored as prose in `primary_goal`, so "90s for 3 in
+    12 weeks" could not be paced toward, checked for reachability, or noticed
+    when the plan never prescribed a triple. `PlanExercise` has carried
+    target_weight / target_reps / target_weeks the whole time; nothing filled
+    them in.
+
+    Failure here must not cost the user their plan — the plan is the product
+    and this is an annotation on it.
+    """
+    try:
+        from ai_analysis.goal_feasibility import (
+            assess_goal,
+            destination_for_plan,
+            match_exercise,
+            parse_lift_goal,
+        )
+
+        goal = parse_lift_goal(_goal_text(request, conversation)) or parse_lift_goal(
+            plan.get("primary_goal")
+        )
+        if not goal:
+            return
+
+        exercises = [
+            exercise
+            for day in plan.get("days") or []
+            for exercise in day.get("exercises") or []
+        ]
+        target = match_exercise(goal.exercise_hint, exercises)
+        if target is None:
+            return
+
+        horizon = goal.weeks or plan.get("duration_weeks") or 12
+        target.update(destination_for_plan(goal, horizon))
+        # A finish line the plan never trains is the N6 failure: a goal naming
+        # a triple beside a band that bottoms out at 6. Marking it high
+        # priority at least puts it first in the day it matters.
+        target.setdefault("priority", "high")
+
+        profile = db.collection("users").document(user_id).collection(
+            "user_profile"
+        ).document("profile").get()
+        profile = (profile.to_dict() or {}) if profile.exists else {}
+
+        energy = resolve_energy_balance(
+            profile=profile,
+            plan=plan,
+            weigh_ins=_recent_weigh_ins(user_id),
+            macro_days=_recent_macro_days(user_id),
+        )
+
+        recommender = _recommender(user_id)
+        history = recommender._get_exercise_history(
+            target.get("exercise_id") or "", days=60
+        )
+        baseline = 0.0
+        for logged in history or []:
+            for s in logged.get("sets") or []:
+                baseline = max(baseline, _set_e1rm(s))
+
+        intake = complete_intake_days(
+            _recent_macro_days(user_id),
+            ((plan.get("nutrition_companion") or {}).get("targets") or {}).get("calories"),
+        )
+
+        assessment = assess_goal(
+            goal=goal,
+            baseline_e1rm=baseline or None,
+            profile=profile,
+            energy_balance=energy.balance,
+            current_calories=intake.get("mean_calories"),
+            default_weeks=horizon,
+        )
+        plan["goal_assessment"] = {
+            **assessment.to_dict(),
+            "exercise_id": target.get("exercise_id"),
+            "exercise_name": target.get("exercise_name"),
+            "energy_balance": energy.to_dict(),
+        }
+    except Exception as e:
+        print(f"Warning: could not assess the plan's goal: {e}")
+
+
+def _set_e1rm(logged_set: dict) -> float:
+    try:
+        weight = float(logged_set.get("weight") or 0)
+        reps = int(float(logged_set.get("reps") or 0))
+    except (TypeError, ValueError):
+        return 0.0
+    # Epley runs away past about a dozen reps; the projection skips those for
+    # the same reason.
+    if weight <= 0 or reps <= 0 or reps > 12:
+        return 0.0
+    return weight * (1 + reps / 30.0)
 
 HISTORY_WINDOW_DAYS = 28
 
@@ -317,26 +466,69 @@ MONTHS = {
 }
 
 
-def _referenced_workout_dates(conversation: list) -> list:
-    """Resolve every explicitly named calendar date, preserving request order."""
-    user_text = "\n".join(
-        str(message.get("content") or "")
-        for message in conversation
-        if message.get("role") == "user"
+# Adopting the sessions the coach has put on the table. Deterministic, like
+# `fresh_log_tool` — whether a plan is built from a logged workout must not
+# depend on a model's reading of enthusiasm.
+#
+# Explicit intent to *use* something. This is the strong signal and it can
+# appear in a sentence of any length.
+_USE_INTENT_RE = re.compile(
+    r"\b(?:use\s+(?:th(?:ose|is|ese|at)|it|them|my|the)"
+    r"|make\s+the\s+plan|build\s+(?:it|that|the\s+plan)|go\s+ahead|do\s+it"
+    r"|let'?s\s+do\s+(?:it|that|this))\b",
+    re.I,
+)
+
+# A bare agreement. Only counted when the turn is *short*, because agreement
+# is the whole message: "yes" adopts what was proposed, while "ok that makes
+# sense, what should I focus on?" is the conversation continuing and adopted a
+# date the coach had only mentioned in passing.
+_BARE_AGREE_RE = re.compile(
+    r"^\W*(?:ye[sa]h?|yeah|yep|yup|yah|sure|ok(?:ay)?|perfect|exactly"
+    r"|sounds?\s+good|that\s+works|correct)\b",
+    re.I,
+)
+BARE_AGREEMENT_MAX_WORDS = 6
+
+# Taking a proposal back off the table.
+_REJECTS_RE = re.compile(
+    r"\b(?:no|nope|don'?t|do\s+not|instead|rather|not\s+th(?:ose|at|is|ese)"
+    r"|something\s+(?:else|new)|start\s+over|from\s+scratch)\b",
+    re.I,
+)
+
+
+def _adopts_proposal(text: str) -> bool:
+    if _USE_INTENT_RE.search(text or ""):
+        return True
+    return bool(
+        _BARE_AGREE_RE.search(text or "")
+        and len(str(text or "").split()) <= BARE_AGREEMENT_MAX_WORDS
     )
+
+
+def _scan_dates(text: str) -> list:
+    """(position, ISO date) for every calendar date named in one string.
+
+    Position and text are kept by the caller so a mention can be tied back to
+    the sentence it appeared in. Searching for the *ISO* form in a transcript
+    is what broke day targeting: a chat says "August 17, 2026" and never
+    "2026-08-17", so the lookup missed every time.
+    """
     found = []
-    for match in re.finditer(r"\b(20\d{2})-(\d{2})-(\d{2})\b", user_text):
+    for match in re.finditer(r"\b(20\d{2})-(\d{2})-(\d{2})\b", text or ""):
         try:
-            found.append((match.start(), datetime.strptime(match.group(0), "%Y-%m-%d").strftime("%Y-%m-%d")))
+            found.append(
+                (match.start(), datetime.strptime(match.group(0), "%Y-%m-%d").strftime("%Y-%m-%d"))
+            )
         except ValueError:
             pass
     month_names = "|".join(MONTHS)
-    matches = list(re.finditer(
+    for match in re.finditer(
         rf"\b({month_names})\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(20\d{{2}}))?\b",
-        user_text,
+        text or "",
         flags=re.IGNORECASE,
-    ))
-    for match in matches:
+    ):
         month, day = MONTHS[match.group(1).lower()], int(match.group(2))
         today = datetime.now()
         year = int(match.group(3)) if match.group(3) else today.year
@@ -347,35 +539,151 @@ def _referenced_workout_dates(conversation: list) -> list:
         if not match.group(3) and candidate.date() > today.date():
             candidate = candidate.replace(year=year - 1)
         found.append((match.start(), candidate.strftime("%Y-%m-%d")))
-    ordered = []
-    for _, date in sorted(found):
-        if date not in ordered:
-            ordered.append(date)
-    return ordered
+    return found
+
+
+def _referenced_workout_mentions(conversation: list) -> list:
+    """
+    Every logged workout this request points at, in the order it was raised.
+
+    Reading only the user's own turns missed the ordinary shape of a plan
+    interview. The coach is the one holding the log, so the coach is who says
+    "your August 17 pull session had lat pulldowns, weighted pull-ups and
+    rows — use that for Pull A?", and the user answers "yah, use those". One
+    real conversation settled on two logged sessions exactly that way; no date
+    ever appeared in a user turn, the referenced-workout path was skipped
+    entirely, and the plan came back with four exercises on a day whose source
+    session had seven.
+
+    A date the coach named counts once the user adopts it, and adoption takes
+    everything still on the table — not only the last turn. An interview
+    converges across many turns: the coach offered August 17 for Pull A early,
+    the user spent the next turns refining it ("add rear flies after the
+    rows"), and only later said "use these logged templates". Crediting just
+    the preceding turn picked up the two sessions named in it and silently
+    dropped the pull template the whole conversation had been about.
+
+    An explicit rejection clears the table, and a passing mention is not a
+    proposal a user can accidentally accept — see `_adopts_proposal`.
+    """
+    accepted: list = []
+    # Dates the coach has raised that the user has neither adopted nor refused.
+    on_the_table: list = []
+    order = 0
+
+    for message in conversation or []:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").lower()
+        content = str(message.get("content") or "")
+
+        if role == "assistant":
+            for _, date in _scan_dates(content):
+                order += 1
+                on_the_table.append((order, date, content))
+        elif role == "user":
+            for _, date in _scan_dates(content):
+                order += 1
+                accepted.append((order, date, content))
+            if _REJECTS_RE.search(content):
+                on_the_table = []
+            elif on_the_table and _adopts_proposal(content):
+                accepted.extend(on_the_table)
+                on_the_table = []
+
+    mentions = []
+    seen = set()
+    for _, date, context in sorted(accepted, key=lambda item: item[0]):
+        if date in seen:
+            continue
+        seen.add(date)
+        # The turn the date was raised in, kept so day targeting can read the
+        # sentence around it rather than the whole conversation.
+        mentions.append({"date": date, "context": context})
+    return mentions
+
+
+def _referenced_workout_dates(conversation: list) -> list:
+    """Just the dates, in the order they were raised."""
+    return [mention["date"] for mention in _referenced_workout_mentions(conversation)]
+
+
+def _resolve_target_day(
+    source: dict, context: str, known_days: list, claimed: set
+) -> Optional[str]:
+    """
+    Which plan day a logged session should be copied onto.
+
+    The session's own `split_day` is the authority on *what kind* of day it
+    was — a Legs session is a legs session whatever the chat says around it.
+    Previously this was only a fallback behind a transcript scan that searched
+    for the ISO date in a chat that writes "August 17, 2026", so the scan
+    matched nothing, fell back to reading the *entire* conversation, and
+    returned the first day name mentioned anywhere in it. Every referenced
+    session — push, pull and legs alike — resolved to "Pull A", and a pull day
+    ended up holding hack squats.
+
+    Chat context is kept for the one thing it is good for: choosing between
+    days of the same kind. "Use August 17 for Pull A" is how a user says which
+    of Pull A and Pull B they mean.
+    """
+    split_day = str(source.get("split_day") or "").strip()
+    lowered = str(context or "").lower()
+
+    candidates = [
+        name for name in known_days
+        if split_day and str(name).strip().lower().startswith(split_day.lower())
+    ]
+    if not candidates:
+        # No day of that kind in the split. Fall back to a day the surrounding
+        # sentence names, then to the session's own label so the caller can
+        # create the day rather than dropping the import.
+        named = [name for name in known_days if str(name).strip().lower() in lowered]
+        return named[0] if named else (split_day or None)
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # Several days of this kind: prefer one the sentence names explicitly.
+    named = [name for name in candidates if str(name).strip().lower() in lowered]
+    for name in named:
+        if name not in claimed:
+            return name
+    if named:
+        return named[0]
+
+    # Otherwise fill them in order, so two pull sessions become Pull A and
+    # Pull B rather than both landing on Pull A.
+    for name in candidates:
+        if name not in claimed:
+            return name
+    return candidates[0]
 
 
 def _attach_referenced_workout(user_id: str, split_context: dict, conversation: list) -> dict:
     """Attach and merge every exact workout a Plan Mode request names."""
-    dates = _referenced_workout_dates(conversation)
-    if not dates:
+    mentions = _referenced_workout_mentions(conversation)
+    if not mentions:
         return split_context
-    transcript = " ".join(str(m.get("content") or "") for m in conversation).lower()
     known_days = [day.get("day_name") for day in split_context.get("days", []) if day.get("day_name")]
     enriched = {**split_context, "days": [dict(day) for day in split_context.get("days", [])]}
     references = []
     imported_by_day = {}
+    claimed_days: set = set()
     sessions_ref = db.collection("users").document(user_id).collection("workout_sessions")
-    for date in dates:
+    for mention in mentions:
+        date = mention["date"]
         docs = sessions_ref.where("date", "==", date).stream()
         sessions = [{"id": doc.id, **(doc.to_dict() or {})} for doc in docs]
         if not sessions:
             references.append({"date": date, "found": False})
             continue
         source = sessions[-1]
-        position = transcript.find(date.lower())
-        local_request = transcript[position:position + 180] if position >= 0 else transcript
-        target_day = next((name for name in known_days if name.lower() in local_request), None)
-        target_day = target_day or source.get("split_day")
+        target_day = _resolve_target_day(
+            source, mention.get("context") or "", known_days, claimed_days
+        )
+        if target_day:
+            claimed_days.add(target_day)
         exercises = [{
             "exercise_id": exercise.get("exercise_id"),
             "exercise_name": exercise.get("exercise_name") or exercise.get("name") or "Exercise",
@@ -530,6 +838,7 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
         plan["nutrition_goal"] = request.nutrition_goal
     plan["nutrition_companion"] = _nutrition_companion(user_id, plan)
     plan["source_split_id"] = split_context.get("split_id")
+    _attach_goal_destination(user_id, plan, request, conversation)
     # The Active Plan references the Current Split; it never overwrites it
     plan["owns_linked_split"] = False
     # Computed from the stored plans, not narrated by the model, so the review
@@ -744,12 +1053,20 @@ async def get_plan_projection(
 
     # How fast this lifter can plausibly add load, and whether they are eating
     # to support it. Without these the walk spent the novice rate on everyone
-    # and ignored the plan's own nutrition goal, so a maintenance eater years
-    # past their newbie window was projected a beginner's bulk.
+    # and ignored nutrition entirely, so a lifter in a deficit years past their
+    # newbie window was projected a beginner's bulk.
+    #
+    # Energy balance is resolved from evidence, not from the plan's stated
+    # goal: that string is intent, and one real plan carried "maintain" beside
+    # a calorie target 310 kcal under the user's estimated maintenance.
     experience_level = profile.get("experience_level")
-    energy_balance = plan.get("nutrition_goal") or (
-        (plan.get("nutrition_companion") or {}).get("goal")
+    energy = resolve_energy_balance(
+        profile=profile,
+        plan=plan,
+        weigh_ins=_recent_weigh_ins(user_id),
+        macro_days=_recent_macro_days(user_id),
     )
+    energy_balance = energy.balance
 
     # Each day is its own exposure: a heavy session and a volume session must
     # not each simulate both weekly occurrences using the same prescription.
@@ -882,6 +1199,10 @@ async def get_plan_projection(
             "weekly_schedule": plan.get("weekly_schedule") or {},
             "progress": progress,
             "adherence": adherence.to_dict(),
+            # Which rung of the cascade actually answered, so the chart can
+            # say "measured from your weigh-ins" or "from the plan's stated
+            # goal" rather than presenting both with the same confidence.
+            "energy_balance": energy.to_dict(),
             "days": days_out,
             "muscle_group_history": _muscle_group_history(all_workout_sessions),
             "nutrition": nutrition,
@@ -981,26 +1302,43 @@ async def get_plan_suggestions(user_id: str = Depends(get_user_id)):
     """
     Coach-proposed target changes waiting for review on the Plan tab.
 
-    Only ever returns a set targeting the plan that is currently live, so a
-    patch left over from a retired plan cannot be applied to a new one.
+    Returns a set targeting either the live plan or a draft still under
+    review, so a patch left over from a retired plan cannot be applied to a
+    new one — but a patch staged against the draft the user is looking at is
+    still reachable.
+
+    Checking only the live plan was the second half of the draft bug: even
+    once the coach could stage against a draft, the set it produced was
+    invisible here, so "accept it on the Plan tab" pointed at an empty tab.
     """
-    plan = PlanStore(db, user_id).get_active()
-    if not plan:
-        return {"status": "success", "suggestion": None}
-    record = PlanSuggestionStore(db, user_id).get_pending(plan_id=plan["id"])
-    if not record:
-        return {"status": "success", "suggestion": None}
-    pending = [
-        edit for edit in (record.get("edits") or [])
-        if edit.get("status") == EDIT_STATUS_PENDING
-    ]
-    return {
-        "status": "success",
-        "suggestion": record,
-        "pending_count": len(pending),
-        "plan_changed_since": int(plan.get("version") or 1)
-        != int(record.get("plan_version") or 1),
-    }
+    store = PlanStore(db, user_id)
+    suggestions = PlanSuggestionStore(db, user_id)
+
+    # Newest first, so a draft staged after a live-plan patch wins — the same
+    # ordering `editable` uses, for the same reason.
+    candidates = [store.latest_draft(), store.get_active()]
+    for plan in candidates:
+        if not plan:
+            continue
+        record = suggestions.get_pending(plan_id=plan["id"])
+        if not record:
+            continue
+        pending = [
+            edit for edit in (record.get("edits") or [])
+            if edit.get("status") == EDIT_STATUS_PENDING
+        ]
+        return {
+            "status": "success",
+            "suggestion": record,
+            "pending_count": len(pending),
+            # Named so the review card can say which plan it would change.
+            "plan_id": plan["id"],
+            "plan_name": plan.get("plan_name"),
+            "plan_status": plan.get("status"),
+            "plan_changed_since": int(plan.get("version") or 1)
+            != int(record.get("plan_version") or 1),
+        }
+    return {"status": "success", "suggestion": None}
 
 
 @router.post("/suggestions/{set_id}/accept")

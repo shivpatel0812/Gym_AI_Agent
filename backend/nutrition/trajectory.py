@@ -136,6 +136,55 @@ def _target_warnings(
     return []
 
 
+def height_cm_from_profile(profile: Dict[str, Any]) -> Optional[float]:
+    """
+    Centimetres from whichever height fields a profile actually carries.
+
+    `height_in` means two different things depending on who wrote it. The
+    profile forms write it as the leftover-inches half of a feet-and-inches
+    pair, so 5'9" is stored as ft=5, in=9. Other paths have written total
+    inches with no feet at all, which is how a real profile came to hold
+    `height_ft: null, height_in: 69`.
+
+    Requiring feet read that profile as having no height, so maintenance
+    calories returned None for a user whose height was plainly on file — and
+    every check gated on maintenance, including the one that flags a bulk
+    whose calorie target sits below it, silently switched off.
+
+    Twelve is the disambiguator, and it is exact rather than a heuristic: a
+    leftover-inches value is by construction under 12, so anything at or above
+    it can only be a total. Below 12 with no feet is genuinely unreadable —
+    nine inches is not a height — and still returns None.
+    """
+    if not profile:
+        return None
+
+    stated_cm = profile.get("height_cm")
+    if stated_cm:
+        try:
+            value = float(stated_cm)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    try:
+        feet = profile.get("height_ft")
+        inches = profile.get("height_in")
+        feet = float(feet) if feet is not None else None
+        inches = float(inches) if inches is not None else None
+    except (TypeError, ValueError):
+        return None
+
+    if feet is not None:
+        total_inches = feet * 12 + (inches or 0)
+    elif inches is not None and inches >= 12:
+        total_inches = inches
+    else:
+        return None
+
+    return total_inches * 2.54 if total_inches > 0 else None
+
+
 def estimate_maintenance_calories(profile: Dict[str, Any]) -> Optional[int]:
     """
     Mifflin-St Jeor plus an activity factor, or None.
@@ -152,11 +201,7 @@ def estimate_maintenance_calories(profile: Dict[str, Any]) -> Optional[int]:
     age = profile.get("age")
     gender = (profile.get("gender") or "").strip().lower()
 
-    height_cm = profile.get("height_cm")
-    if not height_cm:
-        ft, inch = profile.get("height_ft"), profile.get("height_in")
-        if ft is not None:
-            height_cm = (float(ft) * 12 + float(inch or 0)) * 2.54
+    height_cm = height_cm_from_profile(profile)
 
     if not weight_lb or not age or not height_cm or gender not in ("male", "female"):
         return None

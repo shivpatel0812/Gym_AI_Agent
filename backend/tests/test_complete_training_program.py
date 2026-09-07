@@ -198,3 +198,41 @@ def test_projection_route_keeps_each_exposure_and_includes_macros(monkeypatch):
     assert result["nutrition_companion"]["targets"]["protein"] > 0
     assert len(result["days"]) == 2
     assert result["weeks"] == 12
+
+
+class TestEveryExerciseCarriesAPrescription:
+    """
+    Sets and reps were always filled in by the validator's clamps, but the rep
+    band was written only when the model happened to supply one — so the one
+    part of a prescription that could silently go missing was the part the
+    engine judges sessions against, the projection paces to, and the card
+    shows.
+    """
+
+    def test_a_band_is_derived_when_the_model_omits_one(self):
+        from ai_analysis.plan_builder import PlanBuilder
+
+        assert PlanBuilder._default_rep_range(5) == [5, 6]
+        assert PlanBuilder._default_rep_range(8) == [8, 10]
+        assert PlanBuilder._default_rep_range(12) == [12, 15]
+
+    def test_the_stated_figure_becomes_the_floor_not_the_middle(self):
+        """
+        A band is a target to climb to, never a ceiling to be pushed back
+        under — the same inversion the rep step was fixed for. Centring a band
+        on 8 would prescribe 6, fewer reps than the model asked for.
+        """
+        from ai_analysis.plan_builder import PlanBuilder
+
+        for reps in (3, 5, 8, 10, 12, 15):
+            low, high = PlanBuilder._default_rep_range(reps)
+            assert low == reps
+            assert high > low
+
+    def test_a_heavy_triple_gets_less_room_than_a_set_of_fifteen(self):
+        """Two reps of slack is most of a triple and noise on a fifteen."""
+        from ai_analysis.plan_builder import PlanBuilder
+
+        triple = PlanBuilder._default_rep_range(3)
+        fifteen = PlanBuilder._default_rep_range(15)
+        assert (triple[1] - triple[0]) < (fifteen[1] - fifteen[0])

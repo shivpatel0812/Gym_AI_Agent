@@ -100,6 +100,34 @@ class PlanStore:
             return plan
         return None
 
+    def editable(self, conversation_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        The plan a coach edit should target: a draft under review, else the live one.
+
+        Edits used to resolve to `get_active()` and nothing else, so a draft
+        was invisible to the coach — it could neither read one nor write to
+        one. The user reviewing a fresh draft asked four times for the same
+        change; each time the coach staged it against the *active* plan and
+        reported success, and each time the draft on screen was unchanged.
+        Both of them were right, about different documents.
+
+        A draft outranks the live plan because a draft only exists while
+        someone is deciding on it, which makes it the thing they are looking
+        at. Preference order within that: the draft this conversation
+        produced, then any other pending draft — the Adjust-with-coach button
+        can open a *new* chat about a draft an earlier one generated, so
+        filtering strictly on conversation would miss the case the button
+        exists for.
+
+        Callers must tell the user which plan they got. The heuristic can pick
+        wrong; silence about which document was edited is what made the
+        original failure impossible to see.
+        """
+        draft = self.latest_draft(conversation_id=conversation_id)
+        if draft is None and conversation_id:
+            draft = self.latest_draft()
+        return draft or self.get_active()
+
     def supersede_drafts(self, keep_id: Optional[str] = None,
                          conversation_id: Optional[str] = None) -> int:
         """

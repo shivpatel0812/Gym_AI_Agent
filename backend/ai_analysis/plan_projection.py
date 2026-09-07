@@ -613,13 +613,40 @@ class PlanProjector:
             if destination
             else None
         )
+        # Pace toward the destination *load worked at the top of the band*,
+        # not toward the destination's own estimated 1RM.
+        #
+        # Double progression reaches a load and climbs it before moving on, so
+        # arriving at 90x3 means having earned 85 for a full band first — and
+        # 85x6 scores 102 against 90x3's 99. Pacing to 99 forbade the only path
+        # to 99: the walk froze at 85x5 and could never reach 90 at all. A
+        # low-rep goal is the case where the finish line's e1RM sits *below*
+        # states you must pass through to get there.
+        pace_target = destination_e1rm
+        if destination and rep_range_override:
+            try:
+                band_high = int(max(rep_range_override))
+                pace_target = max(
+                    destination_e1rm or 0,
+                    e1rm(destination.get("weight"), band_high),
+                )
+            except (TypeError, ValueError):
+                pass
         weekly_gain = pace_to_destination(
-            baseline_e1rm, destination_e1rm, weeks, plausible_rate
+            baseline_e1rm, pace_target, weeks, plausible_rate
         )
         # A stated goal is a ceiling as well as a target. Projecting past what
         # the user asked for is how a 12-week chart ended 15 lb above the
         # heaviest dumbbell they named.
-        e1rm_cap = destination_e1rm if destination_e1rm else None
+        #
+        # The ceiling is the **load**, not the estimated 1RM. Capping on e1RM
+        # blocked the very path to the goal: against a 90x3 target (e1RM 99),
+        # an intermediate step of 85x5 scores 99.2 and was refused, so the walk
+        # froze at 85x4 for twelve weeks and could never reach 90 at all. Reps
+        # at or below the target load are how a lifter gets there; what the
+        # user does not want is to be handed a heavier dumbbell than they asked
+        # for. Rate stays the plausibility ceiling's job.
+        weight_cap = destination.get("weight") if destination else None
 
         for week in range(1, weeks + 1):
             point = None
@@ -691,12 +718,9 @@ class PlanProjector:
                     baseline_e1rm = candidate.e1rm
 
                 over_destination = (
-                    e1rm_cap is not None
+                    weight_cap is not None
                     and arrived_week is None
-                    and candidate.e1rm > e1rm_cap
-                    and not _hits_destination(
-                        candidate, destination["weight"], destination["reps"]
-                    )
+                    and candidate.weight > weight_cap
                 )
                 if over_destination or exceeds_plausible_gain(
                     candidate.e1rm, baseline_e1rm, week, weekly_gain

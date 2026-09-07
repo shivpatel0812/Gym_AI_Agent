@@ -725,3 +725,117 @@ class TestDestinationPacing:
         )
         assert result.reachable is False
         assert result.arrived_week is None
+
+
+class TestTheWalkCanActuallyReachTheGoal:
+    """
+    Capping the walk at the destination is only half the requirement. The
+    first version capped estimated 1RM, which forbade the path to the goal as
+    well as the overshoot: against a 90x3 target (e1RM 99), the intermediate
+    step of 85x5 scores 99.2 and was refused, so the curve froze at 85x4 for
+    twelve weeks and could never reach 90 at all.
+
+    A low-rep goal is where this bites, because the finish line's estimated
+    1RM sits below states a lifter must pass through to arrive at it.
+    """
+
+    def low_rep_goal(self, projector, experience, balance, weeks=12):
+        return project(
+            projector,
+            [session(80, [6, 6, 6])],
+            weeks=weeks,
+            sessions_per_week=2,
+            rep_range_override=(4, 6),
+            target_weight=90,
+            target_reps=3,
+            target_weeks=weeks,
+            experience_level=experience,
+            energy_balance=balance,
+        )
+
+    def test_a_low_rep_goal_is_reached_when_the_diet_supports_it(self, projector):
+        result = self.low_rep_goal(projector, "intermediate", "maintain")
+        assert result.reachable is True
+        assert max(p.weight for p in result.best_case) == 90
+
+    @pytest.mark.parametrize("band", [(4, 6), (6, 8), (8, 12)])
+    def test_reps_climb_at_a_load_before_it_jumps(self, projector, band):
+        """
+        Double progression on every band width, heavy days included — not a
+        load ladder on frozen reps.
+
+        Read from an open-ended walk rather than one with a destination: a
+        goal-capped curve that has already arrived is holding on purpose, and
+        a held load shows one rep count for the honest reason.
+
+        How far reps climb before the load moves is a property of the band,
+        not a bug: 4-6 has two reps of room and 8-12 has five.
+        """
+        result = project(
+            projector,
+            [session(80, [6, 6, 6])],
+            weeks=12,
+            sessions_per_week=2,
+            rep_range_override=band,
+            experience_level="novice",
+            energy_balance="gain",
+        )
+        by_load = {}
+        for point in result.best_case:
+            by_load.setdefault(point.weight, set()).add(point.reps)
+        climbed = [load for load, reps in by_load.items() if len(reps) > 1]
+        assert climbed, f"no load was worked at more than one rep count: {by_load}"
+
+    def test_the_walk_never_hands_over_a_heavier_dumbbell_than_asked_for(
+        self, projector
+    ):
+        for experience, balance in (
+            ("novice", "gain"),
+            ("intermediate", "maintain"),
+            ("advanced", "lose"),
+        ):
+            result = self.low_rep_goal(projector, experience, balance)
+            assert max(p.weight for p in result.best_case) <= 90, (
+                f"{experience}/{balance} overshot the stated goal"
+            )
+
+    def test_a_deficit_does_not_reach_a_goal_that_needs_maintenance(self, projector):
+        """
+        The projection and the feasibility verdict have to agree. `assess_goal`
+        reports 90x3 unreachable for an advanced lifter in a deficit; the walk
+        must not then draw a line to it.
+        """
+        from ai_analysis.goal_feasibility import assess_goal, parse_lift_goal
+
+        result = self.low_rep_goal(projector, "advanced", "lose")
+        verdict = assess_goal(
+            parse_lift_goal("incline 90s for 3 in 12 weeks"),
+            baseline_e1rm=e1rm(80, 6),
+            profile={
+                "weight": 160, "age": 22, "gender": "male", "height_in": 69,
+                "experience_level": "advanced",
+                "preferred_workout_frequency": "5_6_days",
+            },
+            energy_balance="lose",
+        )
+        assert verdict.reachable is False
+        assert result.reachable is False
+
+    def test_a_volume_goal_still_climbs_reps_across_the_block(self, projector):
+        result = project(
+            projector,
+            [session(80, [8, 8, 8])],
+            weeks=12,
+            sessions_per_week=2,
+            rep_range_override=(8, 12),
+            target_weight=95,
+            target_reps=10,
+            target_weeks=12,
+            experience_level="novice",
+            energy_balance="gain",
+        )
+        by_load = {}
+        for point in result.best_case:
+            by_load.setdefault(point.weight, []).append(point.reps)
+        climbed = [reps for reps in by_load.values() if len(set(reps)) > 1]
+        assert len(climbed) >= 2, f"volume day did not climb reps: {by_load}"

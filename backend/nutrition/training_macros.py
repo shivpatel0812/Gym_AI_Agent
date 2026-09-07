@@ -1,12 +1,13 @@
 """A reviewable macro starting point attached to a training plan.
 
-Protein assumption: 1.6 g/kg, within ISSN's exercising-adult range:
-https://pmc.ncbi.nlm.nih.gov/articles/PMC5477153/
+Protein scales with the goal — 1.8 g/kg maintaining or gaining, 2.2 in a
+deficit, where lean mass is what a shortfall costs. All within ISSN's
+exercising-adult range: https://pmc.ncbi.nlm.nih.gov/articles/PMC5477153/
 Fat allocation and calorie offsets are coaching defaults, not measurements.
 """
 import math
 
-from nutrition.trajectory import estimate_maintenance_calories
+from nutrition.trajectory import estimate_maintenance_calories, height_cm_from_profile
 
 
 def positive(value):
@@ -31,7 +32,9 @@ def build_training_macros(profile, goal="maintain", existing=None):
     for name in ("weight", "age"):
         if not positive(profile.get(name)):
             missing.append(name)
-    if not positive(profile.get("height_cm")) and not positive(profile.get("height_ft")):
+    # Reads whichever height fields the profile carries, including a bare
+    # total-inches value with no feet — see height_cm_from_profile.
+    if height_cm_from_profile(profile) is None:
         missing.append("height")
     if str(profile.get("gender") or "").lower() not in ("male", "female"):
         missing.append("sex for the calorie estimate")
@@ -54,7 +57,16 @@ def build_training_macros(profile, goal="maintain", existing=None):
 
     # Do not infer a bulk from a performance goal. Maintenance is the default.
     calories = round(maintenance * {"maintain": 1, "gain": 1.05, "lose": 0.9}[goal])
-    protein = round(float(profile["weight"]) * 0.45359237 * 1.6)
+    # Protein moves with the goal rather than sitting at a flat 1.6 g/kg.
+    #
+    # A deficit is where protein matters most and where a fixed figure served
+    # a trained lifter worst: the same 1.6 that is adequate at maintenance is
+    # what gets eaten into when energy is short, and lean mass goes with it.
+    # A surplus needs a little more than maintenance but not much — past about
+    # 1.8 the extra is energy, not substrate. All three sit inside the 1.6-2.2
+    # g/kg band conventionally given for resistance-trained adults.
+    protein_per_kg = {"maintain": 1.8, "gain": 1.8, "lose": 2.2}[goal]
+    protein = round(float(profile["weight"]) * 0.45359237 * protein_per_kg)
     fats = round(calories * 0.25 / 9)
     carbs = round((calories - 4 * protein - 9 * fats) / 4)
     if carbs < 0:
@@ -66,7 +78,7 @@ def build_training_macros(profile, goal="maintain", existing=None):
         "maintenance_calories": maintenance,
         "targets": {"calories": calories, "protein": protein, "carbs": carbs, "fats": fats},
         "assumptions": ["Estimated maintenance from your profile and activity level.",
-                        "Protein at 1.6 g/kg; fat at about 25% of calories; remaining energy from carbs."],
+                        f"Protein at {protein_per_kg} g/kg; fat at about 25% of calories; remaining energy from carbs."],
         "guidelines": ["Starting estimates, not fixed requirements for the whole block.",
                        "Review average bodyweight, hunger, recovery and workout performance after two weeks.",
                        "Spread protein across meals and include carbohydrate around training as convenient."],

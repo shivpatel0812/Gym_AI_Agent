@@ -245,3 +245,63 @@ def test_carry_forward_rescues_the_draft_days_a_follow_up_did_not_mention():
     # And the rescued days get their weekdays back
     assert plan["weekly_schedule"]["wednesday"] == "Legs"
     assert plan["weekly_schedule"]["monday"] == "Pull A"
+
+
+class TestTheCoachEditsWhatTheUserIsLookingAt:
+    """
+    Coach edits resolved to `get_active()` and nothing else, so a draft was
+    invisible: the model could neither read one nor write to one.
+
+    Taken from a live failure. The user generated a draft, saw four exercises
+    on Push A, and asked four times over six minutes for the missing three.
+    Every time, the coach staged the change against the *active* plan — which
+    already had seven — described those seven back, and reported success. Both
+    of them were right about different documents, and nothing in the exchange
+    could reveal that.
+    """
+
+    def test_a_draft_outranks_the_live_plan(self):
+        store = store_with({
+            "live": {"status": STATUS_ACTIVE, "plan_name": "Live", "created_at": "2026-09-01"},
+            "draft": {"status": STATUS_DRAFT, "plan_name": "Draft", "created_at": "2026-09-06"},
+        })
+        assert store.editable()["id"] == "draft"
+
+    def test_the_live_plan_answers_when_no_draft_is_pending(self):
+        store = store_with({
+            "live": {"status": STATUS_ACTIVE, "plan_name": "Live", "created_at": "2026-09-01"},
+        })
+        assert store.editable()["id"] == "live"
+
+    def test_this_conversations_draft_wins_over_another(self):
+        store = store_with({
+            "mine": {"status": STATUS_DRAFT, "created_at": "2026-09-02",
+                     "source_conversation_id": "chat-1"},
+            "theirs": {"status": STATUS_DRAFT, "created_at": "2026-09-06",
+                       "source_conversation_id": "chat-2"},
+        })
+        assert store.editable("chat-1")["id"] == "mine"
+
+    def test_a_draft_from_another_conversation_is_still_reachable(self):
+        """
+        Adjust-with-coach can open a *new* chat about a draft an earlier
+        conversation generated, so filtering strictly on conversation id would
+        miss the case the button exists for.
+        """
+        store = store_with({
+            "live": {"status": STATUS_ACTIVE, "created_at": "2026-09-01"},
+            "draft": {"status": STATUS_DRAFT, "created_at": "2026-09-06",
+                      "source_conversation_id": "an-older-chat"},
+        })
+        assert store.editable("a-brand-new-chat")["id"] == "draft"
+
+    def test_a_superseded_draft_is_not_edited(self):
+        """Only a draft still under review counts; the rest were moved past."""
+        store = store_with({
+            "live": {"status": STATUS_ACTIVE, "created_at": "2026-09-01"},
+            "old": {"status": STATUS_SUPERSEDED, "created_at": "2026-09-06"},
+        })
+        assert store.editable()["id"] == "live"
+
+    def test_no_plans_at_all_resolves_to_nothing(self):
+        assert store_with({}).editable() is None

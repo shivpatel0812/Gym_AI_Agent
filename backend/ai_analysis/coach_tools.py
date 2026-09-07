@@ -594,18 +594,34 @@ class CoachToolbox:
         return "\n".join(lines)
 
     def compact_active_plan(self) -> str:
-        """Day → exercise snapshot so plan edits target exact names."""
+        """Day → exercise snapshot so plan edits target exact names.
+
+        Shows whichever plan an edit would actually land on — a draft under
+        review outranks the live plan. Reading the active plan here while
+        `propose_plan_edits` wrote somewhere else is how the model came to
+        describe four exercises to a user looking at seven.
+        """
         try:
-            from ai_analysis.plan_store import PlanStore
-            plan = PlanStore(self.db, self.user_id).get_active()
+            from ai_analysis.plan_store import PlanStore, STATUS_DRAFT
+            plan = PlanStore(self.db, self.user_id).editable(self.conversation_id)
         except Exception:
             return ""
         if not plan:
-            return "ACTIVE TRAINING PLAN: none. Create one before proposing edits."
+            return "TRAINING PLAN: none. Create one before proposing edits."
 
+        is_draft = plan.get("status") == STATUS_DRAFT
+        label = "DRAFT TRAINING PLAN (under review, not live yet)" if is_draft else (
+            "ACTIVE TRAINING PLAN (live)"
+        )
         lines = [
-            f"ACTIVE TRAINING PLAN ({plan.get('plan_name') or plan.get('id')}):",
+            f"{label} ({plan.get('plan_name') or plan.get('id')}):",
             "Use these exact day_name and exercise_name values in propose_plan_edits.",
+            (
+                "This is the draft the user is reviewing — call it 'your draft', "
+                "never 'your active plan'."
+                if is_draft else
+                "This is the user's live plan."
+            ),
         ]
         for day in plan.get("days") or []:
             lifts = []
@@ -1112,11 +1128,14 @@ class CoachToolbox:
         logged session). Accept on Plan Hub is the only write path.
         """
         try:
-            from ai_analysis.plan_store import PlanStore
+            from ai_analysis.plan_store import PlanStore, STATUS_DRAFT
             from ai_analysis.plan_suggestion_store import PlanSuggestionStore
             from ai_analysis.plan_edits import normalize_edits, MAX_EDITS
 
-            plan = PlanStore(self.db, self.user_id).get_active()
+            # A draft under review outranks the live plan. Resolving only the
+            # active plan meant a user reviewing a fresh draft had every edit
+            # staged against a document they were not looking at.
+            plan = PlanStore(self.db, self.user_id).editable(self.conversation_id)
         except Exception as e:
             return {"error": f"Could not load training plan: {e}"}
 
@@ -1124,10 +1143,13 @@ class CoachToolbox:
             return {
                 "status": "no_plan",
                 "message": (
-                    "There is no active training plan to edit. Tell the user to create "
+                    "There is no training plan to edit. Tell the user to create "
                     "one from the Plan tab first."
                 ),
             }
+
+        is_draft = plan.get("status") == STATUS_DRAFT
+        plan_label = "draft" if is_draft else "active plan"
 
         clean_summary = str(summary or "").strip()[:200]
         normalized, rejected = normalize_edits(plan, edits)
@@ -1156,6 +1178,8 @@ class CoachToolbox:
             "type": "plan_suggestions",
             "suggestion_set_id": record["id"],
             "plan_id": plan.get("id"),
+            "plan_name": plan.get("plan_name"),
+            "plan_status": plan.get("status"),
             "summary": record["summary"],
             "count": len(normalized),
             "titles": [edit["title"] for edit in normalized],
@@ -1166,15 +1190,23 @@ class CoachToolbox:
             "suggestion_set_id": record["id"],
             "count": len(normalized),
             "max_edits": MAX_EDITS,
+            # Which document was actually edited. Reported because the resolver
+            # is a heuristic, and a wrong guess the user cannot see is the
+            # failure this whole change exists to prevent.
+            "plan_id": plan.get("id"),
+            "plan_name": plan.get("plan_name"),
+            "plan_status": plan.get("status"),
             "proposed": [
                 {"title": e["title"], "op": e["op"], "rationale": e.get("rationale")}
                 for e in normalized
             ],
             "rejected": rejected,
             "message": (
-                "Staged for review. The plan has NOT changed. Explain the changes in "
-                "plain language and tell the user to review them on the Plan tab, where "
-                "they can accept or discard. If anything was rejected, say so."
+                f"Staged against the user's {plan_label} "
+                f"\"{plan.get('plan_name') or plan.get('id')}\". Nothing has changed "
+                f"yet. Name that {plan_label} when you reply, so the user knows which "
+                "plan you edited, explain the changes in plain language, and tell them "
+                "to accept or discard on the Plan tab. If anything was rejected, say so."
             ),
         }
 

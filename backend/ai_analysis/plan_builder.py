@@ -669,8 +669,18 @@ Return only the JSON object."""
                 if ex.get("intensity") in VALID_DAY_TYPES:
                     entry["intensity"] = ex["intensity"]
                 rep_range = PlanBuilder._rep_range(ex.get("target_rep_range"))
-                if rep_range:
-                    entry["target_rep_range"] = rep_range
+                if not rep_range:
+                    # Every exercise carries a band, even when the model omits
+                    # one. `sets` and `reps` were always filled in by the
+                    # clamps above, so a dropped band was the one part of a
+                    # prescription that could silently go missing — and the
+                    # band is the prescription: the engine judges a session
+                    # against it, the projection paces to it, and the card
+                    # shows it. Widening the single figure the model did give
+                    # keeps the intent it stated rather than substituting a
+                    # goal default that may contradict the day's intensity.
+                    rep_range = PlanBuilder._default_rep_range(entry["reps"])
+                entry["target_rep_range"] = rep_range
                 # Destination finish line — weight and reps travel together.
                 try:
                     tw = float(ex.get("target_weight")) if ex.get("target_weight") is not None else None
@@ -814,6 +824,30 @@ Return only the JSON object."""
             return max(low, min(high, int(value)))
         except (TypeError, ValueError):
             return fallback
+
+    @staticmethod
+    def _default_rep_range(reps: int) -> List[int]:
+        """A band around a single rep figure, when the model gave only one.
+
+        Widened rather than centred: the stated figure is what the model meant
+        the lifter to hit, so it becomes the floor and the room is added above.
+        Centring would prescribe fewer reps than were asked for, which is the
+        same inversion `_rep_step` was fixed for — a band is a target to climb
+        to, never a ceiling to be pushed back under.
+
+        The width follows the rep count, because a band's usefulness is
+        proportional to what it is measuring: two reps of room on a heavy
+        triple is a large fraction of the set, and on a set of fifteen it is
+        noise.
+        """
+        reps = max(1, int(reps))
+        if reps <= 5:
+            width = 2
+        elif reps <= 10:
+            width = 3
+        else:
+            width = 4
+        return [reps, min(50, reps + width - 1)]
 
     @staticmethod
     def _rep_range(value: Any) -> Optional[List[int]]:
