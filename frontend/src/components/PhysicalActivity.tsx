@@ -229,7 +229,7 @@ export default function PhysicalActivity() {
               <View style={logStyles.cardTop}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1 }}>
                   <View style={styles.iconBox}>
-                    <MaterialCommunityIcons name="run-fast" size={22} color="#9CC0E8" />
+                    <MaterialCommunityIcons name="run-fast" size={22} color="#FF6B35" />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={logStyles.cardDate}>
@@ -290,13 +290,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  checkOn: { backgroundColor: "#9CC0E8", borderColor: "#9CC0E8" },
+  checkOn: { backgroundColor: "#FF6B35", borderColor: "#FF6B35" },
   checkLabel: { color: "#fff", fontSize: 14, fontWeight: "600" },
   iconBox: {
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: "rgba(156, 192, 232,0.15)",
+    backgroundColor: "rgba(255, 107, 53,0.15)",
     alignItems: "center",
     justifyContent: "center",
   },

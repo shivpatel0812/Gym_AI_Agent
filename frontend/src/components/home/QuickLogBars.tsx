@@ -160,7 +160,7 @@ export default function QuickLogBars({
       : null;
 
   const historyTitle = history === "sleep" ? "Sleep history" : "Stress history";
-  const historyColor = history === "sleep" ? "#A78BFA" : "#9CC0E8";
+  const historyColor = history === "sleep" ? "#A78BFA" : "#FF6B35";
   const historyPoints =
     history === "sleep"
       ? series(sleepRows.map((r) => ({ date: r.date, value: r.hours_slept })))
@@ -397,7 +397,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
     textTransform: "uppercase",
   },
-  historyLink: { color: "#9CC0E8", fontSize: 12, fontWeight: "700" },
+  historyLink: { color: "#FF6B35", fontSize: 12, fontWeight: "700" },
   row: { flexDirection: "row", gap: 8, marginBottom: 8 },
   bottomRow: { flexDirection: "row", gap: 8, marginBottom: 14, alignItems: "stretch" },
   card: {
@@ -499,7 +499,7 @@ const styles = StyleSheet.create({
   },
   sheetHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
   sheetTitle: { color: "#fff", fontSize: 20, fontWeight: "700" },
-  done: { color: "#9CC0E8", fontWeight: "700" },
+  done: { color: "#FF6B35", fontWeight: "700" },
   kindRow: { flexDirection: "row", gap: 8, marginBottom: 14 },
   kindChip: {
     paddingHorizontal: 12,
@@ -508,9 +508,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  kindChipOn: { borderColor: "#9CC0E8", backgroundColor: "rgba(156,192,232,0.14)" },
+  kindChipOn: { borderColor: "#FF6B35", backgroundColor: "rgba(255, 107, 53,0.14)" },
   kindText: { color: "#7C8CA0", fontSize: 12, fontWeight: "700" },
-  kindTextOn: { color: "#9CC0E8" },
+  kindTextOn: { color: "#FF6B35" },
   sheetHint: { color: "#55647A", fontSize: 12, marginTop: 10, lineHeight: 16 },
   detailsBtn: {
     marginTop: 14,
@@ -520,7 +520,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  detailsText: { color: "#9CC0E8", fontWeight: "700", fontSize: 14 },
+  detailsText: { color: "#FF6B35", fontWeight: "700", fontSize: 14 },
   legend: { gap: 12, paddingTop: 14 },
   legendItem: { alignItems: "center", minWidth: 28 },
   legendLabel: { color: "#55647A", fontSize: 10, fontWeight: "700" },

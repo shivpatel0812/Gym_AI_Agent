@@ -623,6 +623,12 @@ class CoachToolbox:
                 "This is the user's live plan."
             ),
         ]
+        if plan.get("exercise_list_locked"):
+            lines.append(
+                "The user edited this lift list by hand on the Plan tab. "
+                "Treat it as the source of truth and analyse from these "
+                "exercises; do not rewrite the split unless they ask."
+            )
         for day in plan.get("days") or []:
             lifts = []
             for ex in day.get("exercises") or []:
@@ -954,10 +960,18 @@ class CoachToolbox:
             "duration_weeks": plan.get("duration_weeks"),
             "weekly_schedule": plan.get("weekly_schedule") or {},
             "days": days,
+            "exercise_list_locked": bool(plan.get("exercise_list_locked")),
             "hint": (
                 "Use these exact day_name and exercise_name values in "
                 "propose_plan_edits. To fill a sparse day, call get_workout_session "
                 "for a logged date then replace_day_exercises."
+                + (
+                    " The user edited this lift list by hand on the Plan tab — "
+                    "treat it as the source of truth and analyse from it rather "
+                    "than proposing a rewrite of the split."
+                    if plan.get("exercise_list_locked")
+                    else ""
+                )
             ),
         }
 

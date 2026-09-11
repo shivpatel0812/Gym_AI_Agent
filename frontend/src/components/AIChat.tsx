@@ -1440,7 +1440,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   inputWrapperPlan: {
-    borderColor: "rgba(156, 192, 232,0.45)",
+    borderColor: "rgba(255, 107, 53,0.45)",
   },
   modalBackdrop: {
     flex: 1,

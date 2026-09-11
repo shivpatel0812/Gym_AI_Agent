@@ -6,7 +6,11 @@ from unittest.mock import Mock
 import pytest
 
 from ai_analysis.plan_builder import PlanBuilder
-from ai_analysis.plan_completeness import complete_routine, completeness_errors
+from ai_analysis.plan_completeness import (
+    complete_routine,
+    completeness_errors,
+    enforce_locked_exercises,
+)
 from ai_analysis.plan_projection import PlanProjector
 from ai_analysis.workout_recommender.progression_engine import ProgressionEngine
 from nutrition.training_macros import build_training_macros
@@ -18,23 +22,62 @@ def day(name, *ids):
         for i, ex in enumerate(ids)]}
 
 
-def test_first_plan_keeps_non_priority_days_and_accessories():
+def test_first_plan_keeps_days_it_never_discussed():
+    """Days are carried whole; a day the draft *did* return is left alone.
+
+    Backfilling exercises into a returned day overrode the mode that produced
+    it — `adapt_split` tells the model it may remove lifts, and this put them
+    back. A gutted day is caught by `completeness_errors` and sent back for a
+    repair pass instead of being silently rebuilt from old logs.
+    """
     source = {"days": [day("Upper", "press", "row", "curl"), day("Lower", "squat", "hinge")]}
     original = copy.deepcopy(source)
     plan = complete_routine({"days": [day("Upper", "press")]}, source)
-    assert [ex["exercise_id"] for ex in plan["days"][0]["exercises"]] == ["press", "row", "curl"]
+    assert [ex["exercise_id"] for ex in plan["days"][0]["exercises"]] == ["press"]
     assert plan["days"][1] == source["days"][1]
     assert source == original
     assert any("Lower" in issue for issue in completeness_errors(plan))
+    assert any("Upper" in issue for issue in completeness_errors(plan, source))
 
 
-def test_repeated_variants_keep_the_full_source_without_extra_day():
+def test_a_day_the_draft_shrank_is_an_error_not_a_silent_rebuild():
+    source = {"days": [day("Push A", "press", "dips", "machine", "pushdown")]}
+    gutted = {"days": [day("Push A", "press")], "weekly_schedule": {"monday": "Push A"}}
+    assert any("Push A" in issue for issue in completeness_errors(gutted, source))
+
+
+def test_a_declared_removal_is_a_decision_the_mode_allows():
+    source = {"days": [day("Push A", "press", "dips", "machine", "pushdown")]}
+    trimmed = {"days": [day("Push A", "press")],
+               "weekly_schedule": {"monday": "Push A"},
+               "changes": [{"action": "removed", "day_name": "Push A",
+                            "exercise_name": "dips"}]}
+    assert completeness_errors(trimmed, source) == []
+
+
+def test_swapping_a_few_lifts_is_not_truncation():
+    source = {"days": [day("Push A", "press", "dips", "machine", "pushdown")]}
+    adapted = {"days": [day("Push A", "press", "incline", "machine")],
+               "weekly_schedule": {"monday": "Push A"}}
+    assert completeness_errors(adapted, source) == []
+
+
+def test_repeated_variants_do_not_resurrect_the_source_day():
     source = {"days": [day("Upper", "press", "row", "curl")]}
-    heavy = {**day("Upper strength", "press"), "source_day": "Upper"}
-    volume = {**day("Upper volume", "press"), "source_day": "Upper"}
+    heavy = {**day("Upper strength", "press", "row"), "source_day": "Upper"}
+    volume = {**day("Upper volume", "press", "curl"), "source_day": "Upper"}
     plan = complete_routine({"days": [heavy, volume]}, source)
-    assert len(plan["days"]) == 2
-    assert all(len(d["exercises"]) == 3 for d in plan["days"])
+    assert [d["day_name"] for d in plan["days"]] == ["Upper strength", "Upper volume"]
+
+
+def test_a_day_split_into_variants_is_measured_as_one_day():
+    """Two exposures of an Upper day each hold half the work by design.
+    Judging them separately would read a deliberate split as truncation."""
+    source = {"days": [day("Upper", "press", "row", "curl", "raise")]}
+    plan = {"days": [{**day("Upper strength", "press", "row"), "source_day": "Upper"},
+                     {**day("Upper volume", "curl", "raise"), "source_day": "Upper"}],
+            "weekly_schedule": {"monday": "Upper strength", "thursday": "Upper volume"}}
+    assert completeness_errors(plan, source) == []
 
 
 def test_restored_day_keeps_its_original_weekday():
@@ -71,8 +114,31 @@ def test_explicit_adaptation_survives_but_follow_mode_preserves_exercise():
 def test_import_retains_exact_exercise_identity_and_order():
     source = {"days": [day("Workout", "custom-row", "custom-press", "custom-curl")]}
     proposal = {"days": [day("Workout", "custom-curl", "custom-row")]}
-    actual = complete_routine(proposal, source, preserve_order=True)
-    assert actual["days"][0]["exercises"] == source["days"][0]["exercises"]
+    actual = complete_routine(proposal, source, preserve_order=True,
+                              backfill_exercises=True)
+    restored = actual["days"][0]["exercises"]
+    assert [ex["exercise_id"] for ex in restored] == [
+        ex["exercise_id"] for ex in source["days"][0]["exercises"]
+    ]
+    assert [ex["order"] for ex in restored] == [1, 2, 3]
+    for expected, ex in zip(source["days"][0]["exercises"], restored):
+        assert ex["exercise_name"] == expected["exercise_name"]
+        assert ex["sets"] == expected["sets"] and ex["reps"] == expected["reps"]
+
+
+def test_a_restored_lift_carries_a_rep_band():
+    """`complete_routine` runs after `validate_plan`, so it owes what that pass
+    guarantees. A lift preserved from a reconstructed session arrived with no
+    `target_rep_range` and rendered in the plan with no reps beside it."""
+    source = {"days": [{"day_name": "Workout", "exercises": [
+        {"exercise_id": "custom-fly", "exercise_name": "Cable Fly", "sets": 3,
+         "reps": 10, "rest_seconds": 120, "source_date": "2026-08-25",
+         "last_working_weight": 30.0}]}]}
+    restored = complete_routine({"days": [{"day_name": "Workout", "exercises": []}]},
+                                source, backfill_exercises=True)["days"][0]["exercises"][0]
+    assert restored["target_rep_range"][0] <= 10 <= restored["target_rep_range"][1]
+    for junk in ("rest_seconds", "source_date", "last_working_weight"):
+        assert junk not in restored
 
 
 def builder_with_responses(*plans):
@@ -236,3 +302,74 @@ class TestEveryExerciseCarriesAPrescription:
         triple = PlanBuilder._default_rep_range(3)
         fifteen = PlanBuilder._default_rep_range(15)
         assert (triple[1] - triple[0]) < (fifteen[1] - fifteen[0])
+
+
+def test_unlocked_plan_is_left_alone():
+    proposal = {"days": [day("Push A", "press", "curl")]}
+    locked = {"days": [day("Push A", "press")]}
+    assert enforce_locked_exercises(proposal, locked) is proposal
+
+
+def test_locked_list_keeps_user_lifts_and_takes_model_sets():
+    locked = {
+        "exercise_list_locked": True,
+        "days": [day("Push A", "press", "fly")],
+    }
+    proposal = {
+        "days": [{
+            "day_name": "Push A",
+            "exercises": [
+                {"exercise_id": "press", "exercise_name": "press", "sets": 5, "reps": 5},
+                {"exercise_id": "fly", "exercise_name": "fly", "sets": 3, "reps": 12},
+                {"exercise_id": "curl", "exercise_name": "curl", "sets": 3, "reps": 10},
+            ],
+        }],
+        "changes": [],
+    }
+    plan = enforce_locked_exercises(proposal, locked)
+    ids = [ex["exercise_id"] for ex in plan["days"][0]["exercises"]]
+    assert ids == ["press", "fly"]
+    assert plan["days"][0]["exercises"][0]["sets"] == 5
+    assert any(c.get("exercise_name") == "curl" for c in plan["changes"])
+
+
+def test_locked_list_restores_a_lift_the_model_dropped():
+    locked = {
+        "exercise_list_locked": True,
+        "days": [day("Push A", "press", "fly")],
+    }
+    proposal = {"days": [day("Push A", "press")], "changes": []}
+    plan = enforce_locked_exercises(proposal, locked)
+    ids = [ex["exercise_id"] for ex in plan["days"][0]["exercises"]]
+    assert ids == ["press", "fly"]
+
+
+def test_locked_list_is_in_the_revision_prompt():
+    builder = PlanBuilder.__new__(PlanBuilder)
+    text = builder._build_prompt(
+        [], {}, {}, {}, "adapt_split",
+        existing_plan={
+            "exercise_list_locked": True,
+            "days": [day("Push A", "press")],
+        },
+    )
+    assert "USER-LOCKED EXERCISE LIST" in text
+    assert "press" in text
+
+
+def test_generation_honours_a_locked_exercise_list():
+    locked = {
+        "exercise_list_locked": True,
+        "days": [day("Push A", "press", "fly")],
+        "weekly_schedule": {"monday": "Push A"},
+    }
+    raw = {
+        "days": [day("Push A", "press", "fly", "curl")],
+        "weekly_schedule": {"monday": "Push A"},
+    }
+    builder, _ = builder_with_responses(raw)
+    result = builder.build_plan([], {}, {}, {}, existing_plan=locked)
+    assert result["status"] == "success"
+    ids = [ex["exercise_id"] for ex in result["plan"]["days"][0]["exercises"]]
+    assert ids == ["press", "fly"]
+    assert result["plan"]["exercise_list_locked"] is True

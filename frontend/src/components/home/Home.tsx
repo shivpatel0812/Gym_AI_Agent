@@ -79,6 +79,62 @@ function todayEntry<T extends { date?: string }>(rows: T[]): T | undefined {
   return rows.find((row) => String(row.date || "").slice(0, 10) === key);
 }
 
+/**
+ * Today's macro row. Duplicate same-day docs happen when a create races a
+ * remount; `find` would then pick an empty leftover and the go-to that just
+ * logged looks like it vanished.
+ */
+function todayMacroEntry<
+  T extends { date?: string; food_items?: unknown[]; updated_at?: string; created_at?: string }
+>(rows: T[]): T | undefined {
+  const key = todayKey();
+  const matches = rows.filter((row) => String(row.date || "").slice(0, 10) === key);
+  if (!matches.length) return undefined;
+  if (matches.length === 1) return matches[0];
+  return [...matches].sort((a, b) => {
+    const foods = (row: T) => (Array.isArray(row.food_items) ? row.food_items.length : 0);
+    const byFoods = foods(b) - foods(a);
+    if (byFoods) return byFoods;
+    return String(b.updated_at || b.created_at || "").localeCompare(
+      String(a.updated_at || a.created_at || "")
+    );
+  })[0];
+}
+
+function bumpedFoods(
+  current: FoodItem[],
+  tag: string,
+  delta: number,
+  base: FoodItem
+): FoodItem[] | null {
+  const name = String(base.name || "").trim().toLowerCase();
+  let idx = current.findIndex(
+    (f) => (f.usual_id && f.usual_id === tag) || (f.anchor_id && f.anchor_id === tag)
+  );
+  if (idx === -1 && name) {
+    idx = current.findIndex(
+      (f) =>
+        !f.usual_id &&
+        !f.anchor_id &&
+        String(f.name || "").trim().toLowerCase() === name
+    );
+  }
+  if (idx === -1) {
+    if (delta <= 0) return null;
+    return [...current, scaleFoodItem(base, delta)];
+  }
+  const nextQty = foodQuantity(current[idx]) + delta;
+  if (nextQty <= 0) return current.filter((_, i) => i !== idx);
+  return current.map((f, i) =>
+    i === idx
+      ? {
+          ...scaleFoodItem(base, nextQty),
+          meal: base.meal ?? f.meal,
+        }
+      : f
+  );
+}
+
 function greetingForHour(hour: number) {
   if (hour < 12) return "Good morning";
   if (hour < 17) return "Good afternoon";
@@ -166,6 +222,13 @@ export default function Home() {
   const macrosWriteChain = useRef(Promise.resolve());
   const todayMacroIdRef = useRef<string | null>(null);
   const todayFoodsPendingRef = useRef<FoodItem[] | null>(null);
+  /**
+   * Bumped on every local food edit. A macros GET that started before this
+   * tap must not replace today's log — that's the "go-to appears, then
+   * vanishes" race, not a GitHub deploy.
+   */
+  const macrosEpochRef = useRef(0);
+  const liveTodayFoodsRef = useRef<FoodItem[]>([]);
 
   const enqueueMacroWrite = (task: () => Promise<void>) => {
     const next = macrosWriteChain.current.then(task, task);
@@ -174,7 +237,7 @@ export default function Home() {
   };
 
   const patchTodayMacroRow = (prev: any[], nextFoods: FoodItem[], opts?: { id?: string }) => {
-    const existing = todayEntry(prev);
+    const existing = todayMacroEntry(prev);
     const totals = {
       total_calories: nextFoods.reduce((s, f) => s + (Number(f.calories) || 0), 0),
       total_protein: nextFoods.reduce((s, f) => s + (Number(f.protein) || 0), 0),
@@ -230,7 +293,7 @@ export default function Home() {
         if (!newId) return;
         todayMacroIdRef.current = newId;
         setMacroRows((prev) => {
-          const existing = todayEntry(prev);
+          const existing = todayMacroEntry(prev);
           if (!existing) {
             // Cleared while create was in flight — drop the doc we just made.
             apiClient.delete(`/api/macros/${newId}`).catch(() => undefined);
@@ -250,6 +313,46 @@ export default function Home() {
         throw error;
       }
     });
+
+  const commitTodayFoods = (nextFoods: FoodItem[]) => {
+    macrosEpochRef.current += 1;
+    todayFoodsPendingRef.current = nextFoods;
+    liveTodayFoodsRef.current = nextFoods;
+    setMacroRows((prev) => {
+      const existing = todayMacroEntry(prev);
+      if (existing?.id && !String(existing.id).startsWith("local-")) {
+        todayMacroIdRef.current = String(existing.id);
+      }
+      if (!nextFoods.length && existing) {
+        return prev.filter(
+          (row) =>
+            row !== existing &&
+            row.id !== existing.id &&
+            String(row.date || "").slice(0, 10) !== date
+        );
+      }
+      return patchTodayMacroRow(prev, nextFoods);
+    });
+    return flushTodayMacros();
+  };
+
+  const restoreTodayFoods = (previousFoods: FoodItem[]) => {
+    macrosEpochRef.current += 1;
+    todayFoodsPendingRef.current = previousFoods;
+    liveTodayFoodsRef.current = previousFoods;
+    setMacroRows((prev) => {
+      const existing = todayMacroEntry(prev);
+      if (!previousFoods.length && existing) {
+        return prev.filter(
+          (row) =>
+            row !== existing &&
+            row.id !== existing.id &&
+            String(row.date || "").slice(0, 10) !== date
+        );
+      }
+      return patchTodayMacroRow(prev, previousFoods);
+    });
+  };
 
   const load = useCallback(async (only?: string) => {
     const generations: Record<string, number> = {};
@@ -303,14 +406,22 @@ export default function Home() {
       Food: async () => {
         // Finish local writes before reading. Never reset an unsaved local edit.
         await macrosWriteChain.current;
+        const epochAtRead = macrosEpochRef.current;
         const pendingAtRead = todayFoodsPendingRef.current;
         const { data } = await apiClient.get("/api/macros");
-        if (!isCurrent("Food") || todayFoodsPendingRef.current !== pendingAtRead) return;
+        if (
+          !isCurrent("Food") ||
+          macrosEpochRef.current !== epochAtRead ||
+          todayFoodsPendingRef.current !== pendingAtRead
+        ) {
+          return;
+        }
         const rows = Array.isArray(data) ? data : [];
         setMacroRows(rows);
-        const entry = todayEntry(rows);
+        const entry = todayMacroEntry(rows);
         todayMacroIdRef.current = entry?.id ? String(entry.id) : null;
         todayFoodsPendingRef.current = null;
+        liveTodayFoodsRef.current = entry?.food_items || [];
       },
       Plan: async () => {
         const next = await getActiveNutritionPlan();
@@ -361,7 +472,7 @@ export default function Home() {
       try {
         const settings = await loadMealReminderSettings();
         if (settings.enabled) await syncMealReminders(settings, plan, {
-          [date]: (todayEntry(macroRows)?.food_items || []) as FoodItem[],
+          [date]: (todayMacroEntry(macroRows)?.food_items || []) as FoodItem[],
         });
       } catch { /* Reminder scheduling must not block the log. */ }
     })();
@@ -555,43 +666,20 @@ export default function Home() {
     const tag = foods[0]?.usual_id || foods[0]?.anchor_id || null;
     if (tag) setLoggingId(tag);
 
-    let snapshot: any[] = [];
-    let skipped = false;
-    setMacroRows((prev) => {
-      snapshot = prev;
-      const existing = todayEntry(prev);
-      if (existing?.id && !String(existing.id).startsWith("local-")) {
-        todayMacroIdRef.current = String(existing.id);
-      }
-      const current = existing?.food_items || [];
-      // Ignore double-taps before the optimistic re-render lands.
-      const toAdd = foods.filter((f) => {
-        const t = f.usual_id || f.anchor_id;
-        if (!t) return true;
-        return !current.some((x: FoodItem) => x.usual_id === t || x.anchor_id === t);
-      });
-      if (!toAdd.length) {
-        skipped = true;
-        return prev;
-      }
-      const nextFoods = [...current, ...toAdd];
-      todayFoodsPendingRef.current = nextFoods;
-      return patchTodayMacroRow(prev, nextFoods);
+    const previousFoods = liveTodayFoodsRef.current;
+    const toAdd = foods.filter((f) => {
+      const t = f.usual_id || f.anchor_id;
+      if (!t) return true;
+      return !previousFoods.some((x) => x.usual_id === t || x.anchor_id === t);
     });
     if (closeSheet) setSheet(null);
     setLoggingId(null);
-    if (skipped) return;
+    if (!toAdd.length) return;
 
     try {
-      await flushTodayMacros();
+      await commitTodayFoods([...previousFoods, ...toAdd]);
     } catch {
-      setMacroRows(snapshot);
-      const existing = todayEntry(snapshot);
-      todayFoodsPendingRef.current = existing?.food_items || [];
-      todayMacroIdRef.current =
-        existing?.id && !String(existing.id).startsWith("local-")
-          ? String(existing.id)
-          : todayMacroIdRef.current;
+      restoreTodayFoods(previousFoods);
     }
   };
 
@@ -603,30 +691,12 @@ export default function Home() {
     const tag = foods[0]?.usual_id || foods[0]?.anchor_id || null;
     if (tag) setLoggingId(tag);
 
-    let snapshot: any[] = [];
-    setMacroRows((prev) => {
-      snapshot = prev;
-      const existing = todayEntry(prev);
-      if (existing?.id && !String(existing.id).startsWith("local-")) {
-        todayMacroIdRef.current = String(existing.id);
-      }
-      const current = existing?.food_items || [];
-      const nextFoods = [...current, ...foods];
-      todayFoodsPendingRef.current = nextFoods;
-      return patchTodayMacroRow(prev, nextFoods);
-    });
+    const previousFoods = liveTodayFoodsRef.current;
     setLoggingId(null);
-
     try {
-      await flushTodayMacros();
+      await commitTodayFoods([...previousFoods, ...foods]);
     } catch {
-      setMacroRows(snapshot);
-      const existing = todayEntry(snapshot);
-      todayFoodsPendingRef.current = existing?.food_items || [];
-      todayMacroIdRef.current =
-        existing?.id && !String(existing.id).startsWith("local-")
-          ? String(existing.id)
-          : todayMacroIdRef.current;
+      restoreTodayFoods(previousFoods);
     }
   };
 
@@ -637,117 +707,29 @@ export default function Home() {
    */
   const bumpFoodQuantity = async (tag: string, delta: number, base: FoodItem) => {
     setLoggingId(tag);
-
-    let snapshot: any[] = [];
-    let changed = false;
-    setMacroRows((prev) => {
-      snapshot = prev;
-      const existing = todayEntry(prev);
-      if (existing?.id && !String(existing.id).startsWith("local-")) {
-        todayMacroIdRef.current = String(existing.id);
-      }
-      const current: FoodItem[] = existing?.food_items || [];
-      const name = String(base.name || "").trim().toLowerCase();
-      let idx = current.findIndex(
-        (f) => (f.usual_id && f.usual_id === tag) || (f.anchor_id && f.anchor_id === tag)
-      );
-      // The same food may already be on the log untagged (added via the form).
-      // Bump that row rather than appending a duplicate beside it.
-      if (idx === -1 && name) {
-        idx = current.findIndex(
-          (f) =>
-            !f.usual_id &&
-            !f.anchor_id &&
-            String(f.name || "").trim().toLowerCase() === name
-        );
-      }
-
-      let nextFoods: FoodItem[];
-      if (idx === -1) {
-        if (delta <= 0) return prev;
-        nextFoods = [...current, scaleFoodItem(base, 1)];
-      } else {
-        const nextQty = foodQuantity(current[idx]) + delta;
-        if (nextQty <= 0) {
-          nextFoods = current.filter((_, i) => i !== idx);
-        } else {
-          nextFoods = current.map((f, i) =>
-            i === idx
-              ? {
-                  ...scaleFoodItem(base, nextQty),
-                  // Prefer the meal from this log action so go-tos can be retargeted.
-                  meal: base.meal ?? f.meal,
-                }
-              : f
-          );
-        }
-      }
-
-      changed = true;
-      todayFoodsPendingRef.current = nextFoods;
-      if (!nextFoods.length && existing) {
-        return prev.filter(
-          (row) =>
-            row !== existing &&
-            row.id !== existing.id &&
-            String(row.date || "").slice(0, 10) !== date
-        );
-      }
-      return patchTodayMacroRow(prev, nextFoods);
-    });
+    const previousFoods = liveTodayFoodsRef.current;
+    const nextFoods = bumpedFoods(previousFoods, tag, delta, base);
     setLoggingId(null);
-    if (!changed) return;
-
+    if (!nextFoods) return;
     try {
-      await flushTodayMacros();
+      await commitTodayFoods(nextFoods);
     } catch {
-      setMacroRows(snapshot);
-      const existing = todayEntry(snapshot);
-      todayFoodsPendingRef.current = existing?.food_items || [];
-      todayMacroIdRef.current =
-        existing?.id && !String(existing.id).startsWith("local-")
-          ? String(existing.id)
-          : todayMacroIdRef.current;
+      restoreTodayFoods(previousFoods);
     }
   };
 
   const removeByTag = async (tag: string) => {
     setLoggingId(tag);
-
-    let snapshot: any[] = [];
-    setMacroRows((prev) => {
-      snapshot = prev;
-      const existing = todayEntry(prev);
-      if (!existing) return prev;
-      if (existing.id && !String(existing.id).startsWith("local-")) {
-        todayMacroIdRef.current = String(existing.id);
-      }
-      const nextFoods = (existing.food_items || []).filter(
-        (item: FoodItem) => item.usual_id !== tag && item.anchor_id !== tag
-      );
-      todayFoodsPendingRef.current = nextFoods;
-      if (!nextFoods.length) {
-        return prev.filter(
-          (row) =>
-            row !== existing &&
-            row.id !== existing.id &&
-            String(row.date || "").slice(0, 10) !== date
-        );
-      }
-      return patchTodayMacroRow(prev, nextFoods);
-    });
+    const previousFoods = liveTodayFoodsRef.current;
+    const nextFoods = previousFoods.filter(
+      (item) => item.usual_id !== tag && item.anchor_id !== tag
+    );
     setLoggingId(null);
-
+    if (nextFoods.length === previousFoods.length) return;
     try {
-      await flushTodayMacros();
+      await commitTodayFoods(nextFoods);
     } catch {
-      setMacroRows(snapshot);
-      const existing = todayEntry(snapshot);
-      todayFoodsPendingRef.current = existing?.food_items || [];
-      todayMacroIdRef.current =
-        existing?.id && !String(existing.id).startsWith("local-")
-          ? String(existing.id)
-          : todayMacroIdRef.current;
+      restoreTodayFoods(previousFoods);
     }
   };
 
@@ -830,7 +812,10 @@ export default function Home() {
   const now = new Date();
   const dateLabel = now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   const showWorkout = todayWorkout?.status === "workout_day" && !todayWorkout.already_logged;
-  const todayFoods: FoodItem[] = todayEntry(macroRows)?.food_items || [];
+  const todayFoods: FoodItem[] = todayMacroEntry(macroRows)?.food_items || [];
+  if (todayFoodsPendingRef.current === null) {
+    liveTodayFoodsRef.current = todayFoods;
+  }
 
   return (
     <ScrollView
@@ -967,7 +952,7 @@ export default function Home() {
                 <TouchableOpacity style={styles.editDot} onPress={() => openEditRoutine(routine)} hitSlop={8}>
                   <MaterialCommunityIcons name="pencil-outline" size={12} color="#7C8CA0" />
                 </TouchableOpacity>
-                <MaterialCommunityIcons name={icon} size={26} color={done ? "#9CC0E8" : "#7C8CA0"} />
+                <MaterialCommunityIcons name={icon} size={26} color={done ? "#FF6B35" : "#7C8CA0"} />
                 <Text style={styles.routineName} numberOfLines={1}>
                   {routine.name}
                 </Text>
@@ -991,7 +976,7 @@ export default function Home() {
           <Text style={styles.todayLabel}>Today's workout</Text>
           <View style={styles.workoutRow}>
             <View style={styles.workoutIcon}>
-              <MaterialCommunityIcons name="dumbbell" size={20} color="#9CC0E8" />
+              <MaterialCommunityIcons name="dumbbell" size={20} color="#FF6B35" />
             </View>
             <View>
               <Text style={styles.workoutTitle}>{todayWorkout?.day_name || "Workout"}</Text>
@@ -1140,7 +1125,7 @@ export default function Home() {
                 onPress={() => setRoutineIcon(item.name)}
                 style={[styles.iconPick, on && styles.iconPickOn]}
               >
-                <MaterialCommunityIcons name={item.name} size={20} color={on ? "#9CC0E8" : "#fff"} />
+                <MaterialCommunityIcons name={item.name} size={20} color={on ? "#FF6B35" : "#fff"} />
               </TouchableOpacity>
             );
           })}
@@ -1205,7 +1190,7 @@ const styles = StyleSheet.create({
   cardLabel: { color: "#7C8CA0", fontSize: 13, marginTop: 8 },
   cardValue: { color: "#fff", fontSize: 18, fontWeight: "700", marginTop: 4 },
   bodyPreview: { color: "#7C8CA0", fontSize: 12, marginTop: 4 },
-  tap: { color: "#9CC0E8", fontSize: 13, fontWeight: "600", marginTop: 8 },
+  tap: { color: "#FF6B35", fontSize: 13, fontWeight: "600", marginTop: 8 },
   wellnessCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -1313,7 +1298,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  routineChipOn: { borderColor: "#9CC0E8" },
+  routineChipOn: { borderColor: "#FF6B35" },
   usualScroll: { gap: 14, paddingRight: 8, marginBottom: 10 },
   usualGroup: { gap: 6 },
   usualGroupHead: { flexDirection: "row", alignItems: "center", gap: 5, paddingLeft: 2 },
@@ -1383,12 +1368,12 @@ const styles = StyleSheet.create({
   workoutCard: {
     backgroundColor: colors.cardBackground,
     borderWidth: 1,
-    borderColor: "#9CC0E8",
+    borderColor: "#FF6B35",
     borderRadius: 16,
     padding: 16,
   },
   todayLabel: {
-    color: "#9CC0E8",
+    color: "#FF6B35",
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.2,
@@ -1406,7 +1391,7 @@ const styles = StyleSheet.create({
   },
   workoutTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
   startBtn: {
-    backgroundColor: "#9CC0E8",
+    backgroundColor: "#FF6B35",
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: "center",
@@ -1436,7 +1421,7 @@ const styles = StyleSheet.create({
   muted: { color: "#7C8CA0" },
   purpleVal: { color: "#A78BFA", fontWeight: "700" },
   saveBtn: {
-    backgroundColor: "#9CC0E8",
+    backgroundColor: "#FF6B35",
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: "center",
@@ -1476,7 +1461,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#05080F",
   },
-  iconPickOn: { borderColor: "#9CC0E8" },
+  iconPickOn: { borderColor: "#FF6B35" },
   deleteBtn: { alignItems: "center", paddingVertical: 14 },
   deleteText: { color: "#EF4444", fontWeight: "600" },
 });

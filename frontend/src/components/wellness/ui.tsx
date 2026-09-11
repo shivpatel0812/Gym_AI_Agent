@@ -7,7 +7,7 @@ export function fieldColor(value: number, reverse = false) {
   const n = reverse ? 11 - value : value;
   if (n <= 3) return "#EF4444";
   if (n <= 6) return "#F59E0B";
-  return "#9CC0E8";
+  return "#FF6B35";
 }
 
 export function LevelSlider({
@@ -163,7 +163,7 @@ export const logStyles = StyleSheet.create({
     marginBottom: 16,
   },
   logBtn: {
-    backgroundColor: "#9CC0E8",
+    backgroundColor: "#FF6B35",
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -175,7 +175,7 @@ export const logStyles = StyleSheet.create({
   saveRow: { flexDirection: "row", gap: 10, marginTop: 8 },
   saveBtn: {
     flex: 1,
-    backgroundColor: "#9CC0E8",
+    backgroundColor: "#FF6B35",
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: "center",

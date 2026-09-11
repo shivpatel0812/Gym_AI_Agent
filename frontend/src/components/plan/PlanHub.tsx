@@ -25,6 +25,7 @@ import {
   updatePlan,
   type CardioWeekPoint,
   type PendingPlanSuggestions,
+  type PlanDay,
   type PlanProjection,
   type ProjectedDay,
   type ProjectedExercise,
@@ -59,6 +60,14 @@ import {
   groupFamilyExercises,
   mergeSessionVariants,
 } from "./familyExercises";
+import ExercisePickerModal from "../workouts/session/ExercisePickerModal";
+import {
+  addExerciseToDay,
+  exerciseAlreadyOnDay,
+  lastLiftConflict,
+  planDaysFromProjection,
+  removeExercisesFromDays,
+} from "./reviewEdits";
 
 type Role = "building" | "maintaining" | "support";
 type DetailTab = "history" | "roadmap";
@@ -96,6 +105,9 @@ export default function PlanHub({
   const [savingSchedule, setSavingSchedule] = useState(false);
   /** Within a split: body-part charts vs the lift list. */
   const [contentTab, setContentTab] = useState<"muscles" | "exercises">("muscles");
+  const [editing, setEditing] = useState(false);
+  const [savingEdits, setSavingEdits] = useState(false);
+  const [pickerDay, setPickerDay] = useState<string | null>(null);
 
   const loadProjection = useCallback(
     () =>
@@ -194,6 +206,77 @@ export default function PlanHub({
     [liveSchedule, loadProjection, projection?.plan_id, savingSchedule]
   );
 
+  const persistDays = useCallback(
+    async (days: PlanDay[]) => {
+      if (!projection?.plan_id || savingEdits) return;
+      setSavingEdits(true);
+      try {
+        await updatePlan(projection.plan_id, {
+          days,
+          exercise_list_locked: true,
+        });
+        await loadProjection();
+      } catch (error) {
+        console.error("Could not save plan exercises:", error);
+        Alert.alert("Could not save", "That exercise change was not saved. Try again.");
+        await loadProjection();
+      } finally {
+        setSavingEdits(false);
+      }
+    },
+    [loadProjection, projection?.plan_id, savingEdits]
+  );
+
+  const handlePickExercise = useCallback(
+    (exercise: { id: string; name: string }) => {
+      const targetDay = pickerDay;
+      if (!projection || !targetDay) return;
+      setPickerDay(null);
+      const days = planDaysFromProjection(projection.days);
+      const day = days.find((item) => item.day_name === targetDay);
+      if (day && exerciseAlreadyOnDay(day, exercise.id, exercise.name)) {
+        Alert.alert(
+          "Already on this workout",
+          `${exercise.name} is already on ${targetDay}.`
+        );
+        return;
+      }
+      void persistDays(
+        addExerciseToDay(days, targetDay, {
+          exercise_id: exercise.id,
+          exercise_name: exercise.name,
+        })
+      );
+    },
+    [persistDays, pickerDay, projection]
+  );
+
+  const handleRemoveFromDay = useCallback(
+    (dayName: string, exercise: { exercise_name: string; order: number }) => {
+      if (!projection) return;
+      const days = planDaysFromProjection(projection.days);
+      const removals = [{ day_name: dayName, order: exercise.order }];
+      const conflict = lastLiftConflict(days, removals);
+      if (conflict) {
+        Alert.alert("Can't remove", conflict);
+        return;
+      }
+      Alert.alert(
+        "Remove exercise",
+        `Remove ${exercise.exercise_name} from ${dayName}?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Remove",
+            style: "destructive",
+            onPress: () => void persistDays(removeExercisesFromDays(days, removals)),
+          },
+        ]
+      );
+    },
+    [persistDays, projection]
+  );
+
   if (loading) return <ActivityIndicator style={styles.loader} color={colors.accentPrimary} />;
 
   if (loadError) {
@@ -252,7 +335,14 @@ export default function PlanHub({
         }}
         onSwapDays={handleSwapDays}
         onImport={onImport}
-        onEdit={() => onEdit?.("I want to revise one exercise in my active plan. ")}
+        editing={editing}
+        onEdit={() => {
+          setEditing((current) => {
+            const next = !current;
+            if (next) setContentTab("exercises");
+            return next;
+          });
+        }}
       />
 
       {pending ? (
@@ -318,13 +408,61 @@ export default function PlanHub({
           <View style={styles.sectionHead}>
             <Text style={styles.sectionTitle}>{family.label} exercises</Text>
             <Text style={styles.sectionSub}>
-              {family.days.length > 1
+              {editing
+                ? "Add a lift under the workout it belongs on. New exercises go at the bottom of that list."
+                : family.days.length > 1
                 ? `Session ${family.days
                     .map((day) => variantCaption(day.day_name, family.key) || day.day_name)
                     .join(" · ")} together — tap a card for the full roadmap.`
                 : "Tap a card for the full roadmap and history."}
             </Text>
           </View>
+          {editing ? (
+            <View style={styles.workoutStacks}>
+              {family.days.map((day) => {
+                const sessionLabel =
+                  family.days.length > 1
+                    ? familySessionLabels([day.day_name], family.key)
+                    : day.day_name;
+                const title = [sessionLabel, day.day_type].filter(Boolean).join(" · ");
+                return (
+                  <View key={day.day_name} style={styles.workoutBlock}>
+                    <View style={styles.workoutBlockHead}>
+                      <Text style={styles.workoutBlockTitle}>{title}</Text>
+                      <Text style={styles.workoutBlockSub}>
+                        {day.exercises.length}{" "}
+                        {day.exercises.length === 1 ? "exercise" : "exercises"} · in order
+                      </Text>
+                    </View>
+                    <View style={styles.cards}>
+                      {day.exercises.map((exercise) => (
+                        <ExerciseSummary
+                          key={`${day.day_name}-${exercise.order}-${exercise.exercise_id}`}
+                          exercise={exercise}
+                          onRemove={() => handleRemoveFromDay(day.day_name, exercise)}
+                          onPress={() => setDetail({ kind: "single", exercise })}
+                        />
+                      ))}
+                      <TouchableOpacity
+                        style={styles.addExerciseCard}
+                        onPress={() => setPickerDay(day.day_name)}
+                        disabled={savingEdits}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Add exercise to ${day.day_name}`}
+                      >
+                        {savingEdits && pickerDay === day.day_name ? (
+                          <ActivityIndicator size="small" color={colors.accentPrimary} />
+                        ) : (
+                          <MaterialCommunityIcons name="plus" size={20} color={colors.accentPrimary} />
+                        )}
+                        <Text style={styles.addExerciseText}>Add exercise</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          ) : (
           <View style={styles.cards}>
             {groupFamilyExercises(family).map((group) => {
               if (group.kind === "dual_track") {
@@ -374,6 +512,7 @@ export default function PlanHub({
               );
             })}
           </View>
+          )}
         </View>
       )}
 
@@ -392,6 +531,12 @@ export default function PlanHub({
         onClose={() => setDetail(null)}
         onEdit={onEdit}
         onSaved={loadProjection}
+      />
+      <ExercisePickerModal
+        visible={!!pickerDay}
+        onClose={() => setPickerDay(null)}
+        onSelectExercise={handlePickExercise}
+        userExercises={[]}
       />
       </View>
     </>
@@ -505,11 +650,13 @@ function ExerciseSummary({
   exercise,
   onPress,
   sessionLine,
+  onRemove,
 }: {
   exercise: ProjectedExercise;
   onPress: () => void;
   /** When set, shows which plan sessions this lift belongs to (A · B). */
   sessionLine?: string;
+  onRemove?: () => void;
 }) {
   if (exercise.is_cardio) return <CardioSummary exercise={exercise} />;
   const role = roleFor(exercise);
@@ -519,18 +666,31 @@ function ExerciseSummary({
 
   return (
     <View style={styles.summaryCard}>
-      <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
-        <View style={styles.summaryHead}>
-          <View style={styles.cardTitleWrap}>
-            <View style={styles.nameRow}>
-              <Text style={styles.exerciseName}>{exercise.exercise_name}</Text>
-              <RoleBadge role={role} />
-            </View>
-            {sessionLine ? <Text style={styles.sessionLine}>{sessionLine}</Text> : null}
-            <Text style={styles.goalLine}>{goalLine}</Text>
+      <View style={styles.summaryHead}>
+        <TouchableOpacity style={styles.cardTitleWrap} onPress={onPress} activeOpacity={0.85}>
+          <View style={styles.nameRow}>
+            <Text style={styles.exerciseName}>{exercise.exercise_name}</Text>
+            <RoleBadge role={role} />
           </View>
-          <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textMuted} />
-        </View>
+          {sessionLine ? <Text style={styles.sessionLine}>{sessionLine}</Text> : null}
+          <Text style={styles.goalLine}>{goalLine}</Text>
+        </TouchableOpacity>
+        {onRemove ? (
+          <TouchableOpacity
+            onPress={onRemove}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel={`Remove ${exercise.exercise_name}`}
+            style={styles.removeButton}
+          >
+            <MaterialCommunityIcons name="minus-circle-outline" size={22} color={colors.danger} />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity onPress={onPress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textMuted} />
+          </TouchableOpacity>
+        )}
+      </View>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
         <View style={styles.sessionLogs}>
           <Text style={styles.label}>LAST SESSIONS</Text>
           {sessions.length ? (
@@ -555,9 +715,11 @@ function ExerciseSummary({
 function CombinedExerciseSummary({
   exercises,
   onPress,
+  onRemove,
 }: {
   exercises: ProjectedExercise[];
   onPress: () => void;
+  onRemove?: () => void;
 }) {
   const exercise = exercises.find((item) => item.priority === "high") || exercises[0];
   const displayName = exercise.exercise_name.replace(/^weighted\s+/i, "");
@@ -565,17 +727,30 @@ function CombinedExerciseSummary({
 
   return (
     <View style={styles.summaryCard}>
-      <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
-        <View style={styles.summaryHead}>
-          <View style={styles.cardTitleWrap}>
-            <View style={styles.nameRow}>
-              <Text style={styles.exerciseName}>{displayName}</Text>
-              <RoleBadge role="building" />
-            </View>
-            <Text style={styles.goalLine}>Dual track · weighted load + bodyweight reps</Text>
+      <View style={styles.summaryHead}>
+        <TouchableOpacity style={styles.cardTitleWrap} onPress={onPress} activeOpacity={0.85}>
+          <View style={styles.nameRow}>
+            <Text style={styles.exerciseName}>{displayName}</Text>
+            <RoleBadge role="building" />
           </View>
-          <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textMuted} />
-        </View>
+          <Text style={styles.goalLine}>Dual track · weighted load + bodyweight reps</Text>
+        </TouchableOpacity>
+        {onRemove ? (
+          <TouchableOpacity
+            onPress={onRemove}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel={`Remove ${displayName}`}
+            style={styles.removeButton}
+          >
+            <MaterialCommunityIcons name="minus-circle-outline" size={22} color={colors.danger} />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity onPress={onPress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textMuted} />
+          </TouchableOpacity>
+        )}
+      </View>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
         <View style={styles.sessionLogs}>
           <Text style={styles.label}>LAST SESSIONS</Text>
           {sessions.length ? (
@@ -1978,6 +2153,18 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
     color: colors.textMutedCool,
   },
+  workoutStacks: { gap: spacing.xl },
+  workoutBlock: { gap: spacing.md },
+  workoutBlockHead: { gap: spacing.xs, paddingHorizontal: spacing.xs },
+  workoutBlockTitle: {
+    fontSize: typography.title,
+    fontWeight: weight.heavy,
+    color: colors.textPrimary,
+  },
+  workoutBlockSub: {
+    fontSize: typography.caption,
+    color: colors.textMutedCool,
+  },
   cards: { gap: 10 },
   summaryCard: {
     backgroundColor: colors.cardBackground,
@@ -1985,6 +2172,33 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: borderRadius.lg,
     overflow: "hidden",
+  },
+  removeButton: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: -10,
+    marginRight: -6,
+  },
+  addExerciseCard: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    backgroundColor: colors.cardBackground,
+    borderWidth: 1,
+    borderColor: colors.borderCool,
+    borderRadius: borderRadius.lg,
+    borderStyle: "dashed",
+  },
+  addExerciseText: {
+    fontSize: typography.body,
+    fontWeight: weight.bold,
+    color: colors.accentPrimary,
   },
   cardTitleWrap: { flex: 1 },
   nameRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 7 },
@@ -2010,7 +2224,7 @@ const styles = StyleSheet.create({
   revise: { color: colors.accentPrimary, fontSize: 12, fontWeight: "700" },
   roleBadge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 99 },
   roleBadgeText: { fontSize: 8, fontWeight: "900", letterSpacing: 0.5 },
-  buildingBadge: { backgroundColor: "rgba(156,192,232,.14)" },
+  buildingBadge: { backgroundColor: "rgba(255, 107, 53,.14)" },
   buildingText: { color: colors.accentPrimary },
   maintainBadge: { backgroundColor: "rgba(94,234,212,.1)" },
   maintainText: { color: colors.ai },
@@ -2072,7 +2286,7 @@ const styles = StyleSheet.create({
   },
   detailTabActive: {
     borderColor: colors.accentPrimary,
-    backgroundColor: "rgba(156,192,232,.1)",
+    backgroundColor: "rgba(255, 107, 53,.1)",
   },
   detailTabText: { fontSize: 12, fontWeight: "700", color: colors.textSecondary },
   detailTabTextActive: { color: colors.accentPrimary },
@@ -2102,7 +2316,7 @@ const styles = StyleSheet.create({
   },
   sessionChipActive: {
     borderColor: colors.accentPrimary,
-    backgroundColor: "rgba(156,192,232,.12)",
+    backgroundColor: "rgba(255, 107, 53,.12)",
   },
   sessionChipDate: { fontSize: 11, fontWeight: "800", color: colors.textSecondary },
   sessionChipSet: { fontSize: 13, fontWeight: "800", color: colors.textPrimary, marginTop: 4 },
@@ -2233,7 +2447,7 @@ const styles = StyleSheet.create({
     borderColor: colors.accentPrimary,
     borderRadius: borderRadius.lg,
     padding: 16,
-    backgroundColor: "rgba(156,192,232,.06)",
+    backgroundColor: "rgba(255, 107, 53,.06)",
   },
   suggestionEyebrow: { fontSize: 9, fontWeight: "900", letterSpacing: 0.8, color: colors.accentPrimary },
   suggestionTitle: { fontSize: 15, fontWeight: "800", color: colors.textPrimary, marginTop: 5 },

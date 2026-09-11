@@ -1,12 +1,12 @@
 export const colors = {
-  // Same dark black surfaces as before — only the accent shifted orange → blue.
+  // Same dark black surfaces as before — accent is the original orange.
   background: "#070708",
   cardBackground: "#111113",
   surface: "#0C0C0E",
-  accentPrimary: "#9CC0E8",
-  accentSecondary: "#9CC0E8",
-  // Text and icons on top of an accent fill.
-  onAccent: "#070708",
+  accentPrimary: "#FF6B35",
+  accentSecondary: "#FF6B35",
+  // Text and icons on top of an accent fill. Orange is dark enough for white.
+  onAccent: "#FFFFFF",
   ai: "#5EEAD4",
   success: "#4ADE80",
   danger: "#EF4444",
@@ -70,7 +70,7 @@ export const colors = {
  * colors, not UI accents — keep them off buttons and borders.
  */
 export const macro = {
-  calories: "#9CC0E8",
+  calories: "#FF6B35",
   protein: "#E4B896",
   carbs: "#F5C542",
   fats: "#C4B5FD",
@@ -215,6 +215,6 @@ export const shadows = {
 };
 
 export const gradients = {
-  primary: [colors.accentPrimary, "#7AA8D4"],
+  primary: [colors.accentPrimary, "#E85A24"],
   card: [colors.cardBackground, "#0C0C0E"],
 };

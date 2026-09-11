@@ -358,6 +358,9 @@ class UpdatePlanRequest(BaseModel):
     duration_weeks: Optional[int] = None
     weekly_schedule: Optional[dict] = None
     days: Optional[List[dict]] = None
+    # Set when the user adds/removes lifts on Review Plan. Later generations
+    # fill prescriptions from that list instead of rewriting the split.
+    exercise_list_locked: Optional[bool] = None
 
 
 def _recommender(user_id: str) -> WorkoutRecommender:
@@ -542,6 +545,34 @@ def _scan_dates(text: str) -> list:
     return found
 
 
+# A logged workout the coach is *offering as a template*, as opposed to a date
+# it named while reporting a number. The coach narrates dates constantly — "you
+# were at 80s x 6 as of September 4, up from 75s x 7 on August 14" — and every
+# one of those went on the table for the user to accidentally adopt. One "Yes I
+# have all of this", answering a question about dumbbell increments, adopted
+# three such dates; the sessions behind them were imported wholesale, and with
+# them the whole reconstructed Push day, including a cable fly done once in
+# August that then could not be removed.
+_SESSION_REFERENCE_RE = re.compile(
+    r"\b(?:session|workout|template|routine|log(?:ged|s)?"
+    r"|push|pull|legs?|upper|lower|full[-\s]?body)\b",
+    re.I,
+)
+
+
+def _sentence_around(text: str, position: int) -> str:
+    """The sentence a date sits in, so a mention is read in its own context."""
+    text = text or ""
+    start = max(text.rfind(mark, 0, position) for mark in ".!?\n")
+    ends = [index for index in (text.find(mark, position) for mark in ".!?\n") if index != -1]
+    return text[start + 1:min(ends) if ends else len(text)]
+
+
+def _offers_a_template(text: str, position: int) -> bool:
+    """Is this date naming a logged workout, or just carrying a statistic?"""
+    return bool(_SESSION_REFERENCE_RE.search(_sentence_around(text, position)))
+
+
 def _referenced_workout_mentions(conversation: list) -> list:
     """
     Every logged workout this request points at, in the order it was raised.
@@ -578,7 +609,13 @@ def _referenced_workout_mentions(conversation: list) -> list:
         content = str(message.get("content") or "")
 
         if role == "assistant":
-            for _, date in _scan_dates(content):
+            for position, date in _scan_dates(content):
+                # Only a date the coach put forward as a workout can be
+                # adopted. A passing mention is not a proposal, and the
+                # adoption signal is far too coarse to be the only thing
+                # standing between the two.
+                if not _offers_a_template(content, position):
+                    continue
                 order += 1
                 on_the_table.append((order, date, content))
         elif role == "user":
@@ -723,6 +760,7 @@ def _attach_referenced_workout(user_id: str, split_context: dict, conversation: 
 REVISION_FIELDS = (
     "plan_name", "primary_goal", "strategy", "guidelines",
     "weekly_schedule", "days", "duration_weeks", "nutrition_goal",
+    "exercise_list_locked",
 )
 
 

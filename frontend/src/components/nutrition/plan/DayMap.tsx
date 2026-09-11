@@ -135,11 +135,11 @@ type BlueprintTheme = {
   target: string;
 };
 
-/** Day Blueprint — blue anchor · amber potential · purple uncertain. */
+/** Day Blueprint — orange anchor · amber potential · purple uncertain. */
 const THEME: BlueprintTheme = {
-  accent: "#9CC0E8",
-  accentMuted: "#7FA8D0",
-  accentSoft: "rgba(156,192,232,0.14)",
+  accent: "#FF6B35",
+  accentMuted: "#FF8A5C",
+  accentSoft: "rgba(255,107,53,0.14)",
   potential: "#E09A45",
   potentialSoft: "rgba(224,154,69,0.16)",
   uncertain: "#A78BFA",
@@ -151,7 +151,7 @@ const THEME: BlueprintTheme = {
   surface2: "#0C0C0E",
   border: "#1C1C1F",
   muted: "#8E8E93",
-  target: "#9CC0E8",
+  target: "#FF6B35",
 };
 
 function calorieText(slot: DayMapSlot) {
@@ -1222,7 +1222,7 @@ function PreviousLogRow({
       {expanded ? (
         <View style={styles.logDetail}>
           <View style={styles.macroStrip}>
-            <Text style={[styles.macroChip, { color: "#9CC0E8" }]}>
+            <Text style={[styles.macroChip, { color: "#FF6B35" }]}>
               {Math.round(totalCal)} kcal
             </Text>
             <Text style={[styles.macroChip, { color: "#C4A574" }]}>

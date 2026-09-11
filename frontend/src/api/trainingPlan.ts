@@ -130,6 +130,8 @@ export interface TrainingPlan {
   carried_forward_days?: string[];
   /** Exercises the model asked for that could not be honoured. */
   dropped_exercises?: Array<{ day_name: string; exercise_name: string; reason: string }>;
+  /** User added/removed lifts on Review Plan — later AI fills from this list. */
+  exercise_list_locked?: boolean;
   version?: number;
   created_at?: string;
   ended_at?: string;
@@ -362,6 +364,8 @@ export async function updatePlan(
     plan_name?: string;
     primary_goal?: string;
     duration_weeks?: number;
+    days?: TrainingPlan["days"];
+    exercise_list_locked?: boolean;
   }
 ): Promise<TrainingPlan> {
   const res = await apiClient.patch(`/api/training-plan/${planId}`, updates);

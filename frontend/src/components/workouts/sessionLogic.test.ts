@@ -3,6 +3,7 @@ import {
   buildSessionPayload,
   emptySessionForm,
   getBestSetLabel,
+  getRecentMuscleGroupLogs,
   layoutExercisesFromSession,
   mapRecSets,
   recDropsLastWorkoutLoad,
@@ -159,5 +160,59 @@ describe("applying a recommendation", () => {
   it("leaves the load field blank rather than writing a literal 0", () => {
     expect(mapRecSets(bodyweightRec)[0].weight).toBeUndefined();
     expect(mapRecSets({ sets: [{ reps: 8, weight: 95 }] })[0].weight).toBe(95);
+  });
+});
+
+describe("recent muscle-group history", () => {
+  const resolveCategory = () => "BICEPS";
+  const sessions = [
+    {
+      id: "s3",
+      date: "2026-09-02",
+      exercises: [{ exercise_id: "curl", exercise_name: "Dumbbell Curls", sets: [] }],
+    },
+    {
+      id: "s2",
+      date: "2026-08-30",
+      exercises: [
+        { exercise_id: "curl", exercise_name: "Dumbbell Curls", sets: [] },
+        { exercise_id: "hammer", exercise_name: "Rope Hammer Curls", sets: [] },
+      ],
+    },
+    {
+      id: "s1",
+      date: "2026-08-26",
+      exercises: [
+        { exercise_id: "curl", exercise_name: "Dumbbell Curls", sets: [] },
+        { exercise_id: "hammer", exercise_name: "Rope Hammer Curls", sets: [] },
+        { exercise_id: "preacher", exercise_name: "Preacher Curls", sets: [] },
+      ],
+    },
+  ];
+
+  it("shows each exercise once, at its most recent log", () => {
+    // Five rows of the same two lifts is five buttons that add the same two things.
+    const hits = getRecentMuscleGroupLogs(sessions as never, "BICEPS", resolveCategory, null, 5);
+    expect(hits.map((h) => h.exercise.exercise_name)).toEqual([
+      "Dumbbell Curls",
+      "Rope Hammer Curls",
+      "Preacher Curls",
+    ]);
+    expect(hits[0].session.date).toBe("2026-09-02");
+    expect(hits[1].session.date).toBe("2026-08-30");
+  });
+
+  it("fills the limit with distinct exercises, not repeats of the newest", () => {
+    const hits = getRecentMuscleGroupLogs(sessions as never, "BICEPS", resolveCategory, null, 2);
+    expect(hits.map((h) => h.exercise.exercise_id)).toEqual(["curl", "hammer"]);
+  });
+
+  it("falls back to the name when a log carries no exercise id", () => {
+    const unidentified = [
+      { id: "a", date: "2026-09-02", exercises: [{ exercise_id: "", exercise_name: "Curls", sets: [] }] },
+      { id: "b", date: "2026-09-01", exercises: [{ exercise_id: "", exercise_name: "curls", sets: [] }] },
+    ];
+    const hits = getRecentMuscleGroupLogs(unidentified as never, "BICEPS", resolveCategory, null, 5);
+    expect(hits).toHaveLength(1);
   });
 });

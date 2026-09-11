@@ -118,3 +118,18 @@ def test_cache_invalidates_when_logs_change_and_is_scoped_to_user(monkeypatch):
 def test_routine_schedule_roundtrips():
     routine = DailyRoutine(name="Office", scheduled_days=["mon", "wed"])
     assert routine.model_dump()["scheduled_days"] == ["mon", "wed"]
+
+
+def test_ai_usage_is_preserved_for_cost_measurement(monkeypatch):
+    import json
+    import openai
+    monkeypatch.setenv("OPENAI_API_KEY", "test-placeholder")
+    payload = {"summary": "Pull is on your schedule.", "yesterday": "Yesterday's logs are partial.",
+               "priorities": [{"title": "Pull", "detail": "Follow your saved workout.", "action": "workout"}]}
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))],
+        usage=SimpleNamespace(prompt_tokens=8000, completion_tokens=800, prompt_tokens_details=SimpleNamespace(cached_tokens=1000)))
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: response)))
+    monkeypatch.setattr(openai, "OpenAI", lambda **kw: client)
+    result = coach.generate_brief(coach.build_context(data(), NOW))
+    assert result["source"] == "ai"
+    assert result["usage"] == {"model": "gpt-4o", "input_tokens": 8000, "output_tokens": 800, "cached_input_tokens": 1000}

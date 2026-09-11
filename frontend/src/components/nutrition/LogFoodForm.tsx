@@ -1005,7 +1005,7 @@ export default function LogFoodForm({
                 <MaterialCommunityIcons
                   name={planListExpanded ? "chevron-up" : "chevron-down"}
                   size={16}
-                  color="#9CC0E8"
+                  color="#FF6B35"
                 />
               </TouchableOpacity>
             ) : null}
@@ -1259,7 +1259,7 @@ export default function LogFoodForm({
                   </View>
                   <View style={styles.macroRow}>
                     <View style={styles.macroCell}>
-                      <Text style={[styles.macroVal, { color: "#9CC0E8" }]}>{f.calories}</Text>
+                      <Text style={[styles.macroVal, { color: "#FF6B35" }]}>{f.calories}</Text>
                       <Text style={styles.macroUnit}>kcal</Text>
                     </View>
                     <View style={styles.macroCell}>
@@ -1340,7 +1340,7 @@ export default function LogFoodForm({
                   <Text
                     style={[
                       styles.amountLabel,
-                      amountMode === "serving" && { color: "#9CC0E8" },
+                      amountMode === "serving" && { color: "#FF6B35" },
                     ]}
                   >
                     Serving
@@ -1348,7 +1348,7 @@ export default function LogFoodForm({
                   <Text
                     style={[
                       styles.amountVal,
-                      amountMode === "serving" && { color: "#9CC0E8" },
+                      amountMode === "serving" && { color: "#FF6B35" },
                     ]}
                   >
                     {selected.serving}
@@ -1364,7 +1364,7 @@ export default function LogFoodForm({
                   <Text
                     style={[
                       styles.amountLabel,
-                      amountMode === "custom" && { color: "#9CC0E8" },
+                      amountMode === "custom" && { color: "#FF6B35" },
                     ]}
                   >
                     Custom (g)
@@ -1426,7 +1426,7 @@ export default function LogFoodForm({
 
               <View style={{ flexDirection: "row", gap: 8 }}>
                 {[
-                  ["Calories", scaled.calories, "#9CC0E8"],
+                  ["Calories", scaled.calories, "#FF6B35"],
                   ["Protein", scaled.protein, "#E4B896"],
                   ["Carbs", scaled.carbs, "#F5C542"],
                   ["Fat", scaled.fats, "#C4B5FD"],
@@ -1469,7 +1469,7 @@ export default function LogFoodForm({
                 <View style={styles.photoMacroGrid}>
                   {(
                     [
-                      ["Calories", photoDisplayed.calories, "kcal", "#9CC0E8"],
+                      ["Calories", photoDisplayed.calories, "kcal", "#FF6B35"],
                       ["Protein", photoDisplayed.protein, "g", "#E4B896"],
                       ["Carbs", photoDisplayed.carbs, "g", "#F5C542"],
                       ["Fat", photoDisplayed.fats, "g", "#C4B5FD"],
@@ -1528,7 +1528,7 @@ export default function LogFoodForm({
                     style={styles.photoAdjustToggle}
                     onPress={() => setPhotoAdjustOpen((open) => !open)}
                   >
-                    <MaterialCommunityIcons name="pencil-outline" size={16} color="#9CC0E8" />
+                    <MaterialCommunityIcons name="pencil-outline" size={16} color="#FF6B35" />
                     <Text style={styles.photoAdjustText}>Adjust</Text>
                     <MaterialCommunityIcons
                       name={photoAdjustOpen ? "chevron-up" : "chevron-down"}
@@ -1880,11 +1880,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#05080F",
   },
   mealChipOn: {
-    borderColor: "#9CC0E8",
-    backgroundColor: "rgba(156,192,232,0.16)",
+    borderColor: "#FF6B35",
+    backgroundColor: "rgba(255, 107, 53,0.16)",
   },
   mealChipText: { color: "#7C8CA0", fontSize: 12, fontWeight: "700" },
-  mealChipTextOn: { color: "#9CC0E8" },
+  mealChipTextOn: { color: "#FF6B35" },
   uncertainRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1932,7 +1932,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   tab: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: "center" },
-  tabActive: { backgroundColor: "#9CC0E8" },
+  tabActive: { backgroundColor: "#FF6B35" },
   tabText: { color: "#7C8CA0", fontSize: 14, fontWeight: "600" },
   tabTextActive: { color: colors.onAccent },
   searchIcon: { position: "absolute", left: 14, top: 16, zIndex: 1 },
@@ -1965,9 +1965,9 @@ const styles = StyleSheet.create({
     color: "#55647A",
     textTransform: "uppercase",
   },
-  fillLink: { color: "#9CC0E8", fontSize: 14, fontWeight: "600", textAlign: "center" },
+  fillLink: { color: "#FF6B35", fontSize: 14, fontWeight: "600", textAlign: "center" },
   primaryBtn: {
-    backgroundColor: "#9CC0E8",
+    backgroundColor: "#FF6B35",
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: "center",
@@ -1981,9 +1981,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderRadius: 12,
-    backgroundColor: "rgba(156, 192, 232,0.05)",
+    backgroundColor: "rgba(255, 107, 53,0.05)",
     borderWidth: 1,
-    borderColor: "rgba(156, 192, 232,0.3)",
+    borderColor: "rgba(255, 107, 53,0.3)",
   },
   selectedName: { color: "#fff", fontWeight: "700", fontSize: 14, flex: 1 },
   changeBtn: {
@@ -2012,8 +2012,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#05080F",
   },
   amountCardOn: {
-    borderColor: "#9CC0E8",
-    backgroundColor: "rgba(156, 192, 232,0.1)",
+    borderColor: "#FF6B35",
+    backgroundColor: "rgba(255, 107, 53,0.1)",
   },
   amountLabel: {
     fontSize: 9,
@@ -2054,7 +2054,7 @@ const styles = StyleSheet.create({
     gap: 10,
     minHeight: 56,
     borderRadius: 999,
-    backgroundColor: "#9CC0E8",
+    backgroundColor: "#FF6B35",
   },
   scanLaunchText: {
     color: "#070708",
@@ -2068,9 +2068,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 10,
-    backgroundColor: "rgba(156,192,232,0.06)",
+    backgroundColor: "rgba(255, 107, 53,0.06)",
     borderWidth: 1,
-    borderColor: "rgba(156,192,232,0.14)",
+    borderColor: "rgba(255, 107, 53,0.14)",
   },
   photoResultCard: {
     gap: 14,
@@ -2078,7 +2078,7 @@ const styles = StyleSheet.create({
     padding: 14,
     backgroundColor: "#0C1017",
     borderWidth: 1,
-    borderColor: "rgba(156,192,232,0.26)",
+    borderColor: "rgba(255, 107, 53,0.26)",
   },
   photoResultHead: {
     flexDirection: "row",
@@ -2108,7 +2108,7 @@ const styles = StyleSheet.create({
   },
   photoLedgerName: { color: "#C9D4E2", fontSize: 13, flex: 1, minWidth: 0 },
   photoLedgerAmount: { color: "#6B7A8C", fontSize: 12 },
-  photoLedgerCal: { color: "#9CC0E8", fontSize: 13, fontWeight: "700" },
+  photoLedgerCal: { color: "#FF6B35", fontSize: 13, fontWeight: "700" },
   photoLedgerHint: { color: "#6B7A8C", fontSize: 11, marginTop: 8 },
   photoResultName: { color: "#fff", fontSize: 17, fontWeight: "800" },
   photoResultAmount: { color: "#7C8CA0", fontSize: 12, marginTop: 3 },
@@ -2164,7 +2164,7 @@ const styles = StyleSheet.create({
     gap: 5,
     paddingVertical: 3,
   },
-  photoAdjustText: { color: "#9CC0E8", fontSize: 13, fontWeight: "700" },
+  photoAdjustText: { color: "#FF6B35", fontSize: 13, fontWeight: "700" },
   photoAdjustPanel: {
     gap: 9,
     paddingTop: 13,
@@ -2183,11 +2183,11 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   photoChoiceOn: {
-    backgroundColor: "rgba(156,192,232,0.14)",
-    borderColor: "#9CC0E8",
+    backgroundColor: "rgba(255, 107, 53,0.14)",
+    borderColor: "#FF6B35",
   },
   photoChoiceText: { color: "#7C8CA0", fontSize: 12, fontWeight: "700" },
-  photoChoiceTextOn: { color: "#9CC0E8" },
+  photoChoiceTextOn: { color: "#FF6B35" },
   photoAdjustHint: { color: "#66768A", fontSize: 11, lineHeight: 15 },
   photoAssumption: {
     color: "#8B8061",
@@ -2232,9 +2232,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  qtyChipOn: { borderColor: "#9CC0E8", backgroundColor: "#111C2B" },
+  qtyChipOn: { borderColor: "#FF6B35", backgroundColor: "rgba(255, 107, 53,0.14)" },
   qtyChipText: { color: "#7C8CA0", fontWeight: "700", fontSize: 13 },
-  qtyChipTextOn: { color: "#9CC0E8" },
+  qtyChipTextOn: { color: "#FF6B35" },
   modelRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   modelChip: {
     paddingHorizontal: 12,
@@ -2245,11 +2245,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#05080F",
   },
   modelChipOn: {
-    borderColor: "#9CC0E8",
-    backgroundColor: "rgba(156, 192, 232,0.18)",
+    borderColor: "#FF6B35",
+    backgroundColor: "rgba(255, 107, 53,0.18)",
   },
   modelChipText: { color: "#7C8CA0", fontWeight: "700", fontSize: 13 },
-  modelChipTextOn: { color: "#9CC0E8" },
+  modelChipTextOn: { color: "#FF6B35" },
   preview: {
     width: "100%",
     height: 176,
@@ -2294,7 +2294,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     paddingLeft: 6,
   },
-  planExpandText: { color: "#9CC0E8", fontSize: 11, fontWeight: "700" },
+  planExpandText: { color: "#FF6B35", fontSize: 11, fontWeight: "700" },
   planHint: { color: "#636366", fontSize: 11, fontWeight: "600", marginBottom: 2 },
   planCard: {
     borderRadius: 10,

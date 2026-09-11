@@ -14,15 +14,18 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   PlanMode,
   PlanModeOption,
+  PlanDay,
   TrainingPlan,
   getPlanModes,
   proposePlan,
   activatePlan,
   deletePlan,
+  updatePlan,
 } from "../../api/trainingPlan";
 import { listConversations } from "../../api/conversations";
 import apiClient from "../../api/client";
 import PlanReviewContent from "./PlanReviewContent";
+import { lockedListPrompt } from "./reviewEdits";
 import { colors, spacing, borderRadius } from "../../theme";
 
 interface Props {
@@ -85,6 +88,7 @@ export default function CreatePlanModal({
   const [splits, setSplits] = useState<{ id: string; name: string }[]>([]);
   const [splitId, setSplitId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [savingDays, setSavingDays] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -191,10 +195,35 @@ export default function CreatePlanModal({
     setStep("setup");
   };
 
+  const persistDays = async (days: PlanDay[]) => {
+    if (!draft) return;
+    const previous = draft;
+    setDraft({ ...draft, days, exercise_list_locked: true });
+    setSavingDays(true);
+    try {
+      const updated = await updatePlan(draft.id, {
+        days,
+        exercise_list_locked: true,
+      });
+      setDraft(updated);
+    } catch (error) {
+      console.error("Could not save exercise edits:", error);
+      setDraft(previous);
+      Alert.alert(
+        "Could not save",
+        "That exercise change was not saved. Check your connection and try again."
+      );
+    } finally {
+      setSavingDays(false);
+    }
+  };
+
   const handleAdjustWithCoach = (prompt?: string) => {
     const message =
       prompt ||
-      (draft
+      (draft?.exercise_list_locked
+        ? lockedListPrompt(draft.plan_name, draft.days)
+        : draft
         ? `I want to adjust the draft plan "${draft.plan_name}". `
         : "I want to adjust this plan. ");
     if (onAdjustWithCoach) {
@@ -248,6 +277,8 @@ export default function CreatePlanModal({
                   plan={draft}
                   modes={modes}
                   onEditRequest={handleAdjustWithCoach}
+                  onDaysChange={persistDays}
+                  savingDays={savingDays}
                 />
               </ScrollView>
 
@@ -255,7 +286,7 @@ export default function CreatePlanModal({
                 <TouchableOpacity
                   style={styles.adjustButton}
                   onPress={() => handleAdjustWithCoach()}
-                  disabled={busy}
+                  disabled={busy || savingDays}
                 >
                   <MaterialCommunityIcons
                     name="chat-processing-outline"
@@ -267,7 +298,7 @@ export default function CreatePlanModal({
                 <TouchableOpacity
                   style={styles.primaryButton}
                   onPress={confirm}
-                  disabled={busy}
+                  disabled={busy || savingDays}
                 >
                   {busy ? (
                     <ActivityIndicator size="small" color="#fff" />

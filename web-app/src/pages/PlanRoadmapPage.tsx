@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  MdAdd,
   MdArrowBackIosNew,
   MdArrowForwardIos,
   MdAutoAwesome,
@@ -18,8 +19,21 @@ import ProjectionChart, {
   type Series,
 } from "../components/plan/ProjectionChart";
 import {
+  addExerciseToDay,
+  exerciseAlreadyOnDay,
+  lastLiftConflict,
+  planDaysFromProjection,
+  removeExercisesFromDays,
+} from "../components/plan/reviewEdits";
+import defaultExercises from "../data/defaultExercises";
+import {
+  acceptPlanSuggestions,
+  dismissPlanSuggestions,
   getPlanProjection,
+  getPlanSuggestions,
+  updatePlan,
   type NutritionTrajectory,
+  type PendingPlanSuggestions,
   type PlanProjection,
   type ProjectedDay,
   type ProjectedExercise,
@@ -43,26 +57,142 @@ export default function PlanRoadmapPage() {
   const [dayIndex, setDayIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [savingEdits, setSavingEdits] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingPlanSuggestions | null>(null);
+  const [pendingBusy, setPendingBusy] = useState(false);
+
+  const loadProjection = useCallback(async () => {
+    const value = await getPlanProjection();
+    setProjection(value);
+    return value;
+  }, []);
+
+  const loadPending = useCallback(async () => {
+    try {
+      setPending(await getPlanSuggestions());
+    } catch {
+      setPending(null);
+    }
+  }, []);
 
   useEffect(() => {
     let live = true;
-    getPlanProjection()
-      .then((value) => live && setProjection(value))
+    Promise.all([loadProjection(), loadPending()])
       .catch(() => live && setError("Could not load your plan hub."))
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
     };
-  }, []);
+  }, [loadPending, loadProjection]);
 
   const days = projection?.days || [];
   const day = days[dayIndex] || days[0];
+
+  const persistDays = useCallback(
+    async (nextDays: ReturnType<typeof planDaysFromProjection>) => {
+      if (!projection?.plan_id || savingEdits) return;
+      setSavingEdits(true);
+      setEditError(null);
+      try {
+        await updatePlan(projection.plan_id, {
+          days: nextDays,
+          exercise_list_locked: true,
+        });
+        await loadProjection();
+      } catch (err) {
+        console.error("Could not save plan exercises:", err);
+        setEditError("That exercise change was not saved. Try again.");
+        await loadProjection();
+      } finally {
+        setSavingEdits(false);
+      }
+    },
+    [loadProjection, projection?.plan_id, savingEdits]
+  );
+
+  const handlePickExercise = useCallback(
+    (exercise: { id: string; name: string }) => {
+      if (!projection || !day) return;
+      const planDays = planDaysFromProjection(projection.days);
+      const target = planDays.find((item) => item.day_name === day.day_name);
+      if (target && exerciseAlreadyOnDay(target, exercise.id, exercise.name)) {
+        setEditError(`${exercise.name} is already on ${day.day_name}.`);
+        setPickerOpen(false);
+        return;
+      }
+      setPickerOpen(false);
+      setPickerQuery("");
+      void persistDays(
+        addExerciseToDay(planDays, day.day_name, {
+          exercise_id: exercise.id,
+          exercise_name: exercise.name,
+        })
+      );
+    },
+    [day, persistDays, projection]
+  );
+
+  const handleRemoveExercise = useCallback(
+    (exercise: ProjectedExercise) => {
+      if (!projection || !day) return;
+      const planDays = planDaysFromProjection(projection.days);
+      const removals = [{ day_name: day.day_name, order: exercise.order ?? 0 }];
+      const conflict = lastLiftConflict(planDays, removals);
+      if (conflict) {
+        setEditError(conflict);
+        return;
+      }
+      if (!window.confirm(`Remove ${exercise.exercise_name} from ${day.day_name}?`)) return;
+      void persistDays(removeExercisesFromDays(planDays, removals));
+    },
+    [day, persistDays, projection]
+  );
+
+  const handlePending = useCallback(
+    async (action: "accept" | "dismiss") => {
+      if (!pending || pendingBusy) return;
+      setPendingBusy(true);
+      try {
+        if (action === "accept") {
+          await acceptPlanSuggestions(pending.suggestion.id);
+          await loadProjection();
+        } else {
+          await dismissPlanSuggestions(pending.suggestion.id);
+        }
+        await loadPending();
+      } catch (err) {
+        console.error("Could not resolve plan suggestions:", err);
+        setEditError("Could not update those coach suggestions. Try again.");
+      } finally {
+        setPendingBusy(false);
+      }
+    },
+    [loadPending, loadProjection, pending, pendingBusy]
+  );
+
+  const filteredExercises = useMemo(() => {
+    const q = pickerQuery.trim().toLowerCase();
+    if (!q) return defaultExercises.slice(0, 40);
+    return defaultExercises
+      .filter(
+        (ex) =>
+          ex.name.toLowerCase().includes(q) ||
+          ex.category.toLowerCase().includes(q) ||
+          ex.equipment.toLowerCase().includes(q)
+      )
+      .slice(0, 60);
+  }, [pickerQuery]);
 
   if (loading) return <PageMessage>Loading your live plan…</PageMessage>;
   if (error) return <PageMessage>{error}</PageMessage>;
   if (!projection || !day) return <EmptyState />;
 
   const move = (delta: number) => setDayIndex((dayIndex + delta + days.length) % days.length);
+  const pendingEdits = (pending?.suggestion.edits || []).filter((edit) => edit.status === "pending");
 
   return (
     <div className="mx-auto max-w-5xl px-4 pb-24 pt-5 sm:px-7 sm:pt-8">
@@ -76,15 +206,82 @@ export default function PlanRoadmapPage() {
             Today’s target, the road ahead, and the reason behind every lift.
           </p>
         </div>
-        <Link
-          to="/chatbot"
-          className="inline-flex items-center gap-2 rounded-xl border border-[#393C44] bg-[#161A22] px-4 py-2.5 text-sm font-semibold text-white hover:border-[#FF6B35]/60"
-        >
-          <MdEdit size={16} /> Edit in Plan Mode
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setEditing((current) => !current);
+              setEditError(null);
+            }}
+            className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${
+              editing
+                ? "border-[#FF6B35] bg-[#FF6B35]/15 text-[#FF6B35]"
+                : "border-[#393C44] bg-[#161A22] text-white hover:border-[#FF6B35]/60"
+            }`}
+          >
+            <MdEdit size={16} />
+            {editing ? "Done editing" : "Edit exercises"}
+          </button>
+          <Link
+            to="/chatbot"
+            className="inline-flex items-center gap-2 rounded-xl border border-[#393C44] bg-[#161A22] px-4 py-2.5 text-sm font-semibold text-white hover:border-[#FF6B35]/60"
+          >
+            <MdAutoAwesome size={16} /> Edit in Plan Mode
+          </Link>
+        </div>
       </header>
 
       <ProgramOverview projection={projection} />
+
+      {pending && pendingEdits.length > 0 ? (
+        <section className="mt-6 rounded-2xl border border-[#FF6B35]/40 bg-[#FF6B35]/[0.07] p-5">
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#FF6B35]">
+            Coach suggestions
+          </p>
+          <h2 className="mt-1 text-lg font-bold text-white">{pending.suggestion.summary}</h2>
+          <ul className="mt-3 space-y-1.5 text-sm text-[#C7C7CC]">
+            {pendingEdits.slice(0, 6).map((edit) => (
+              <li key={edit.id}>• {edit.title}</li>
+            ))}
+          </ul>
+          {pending.planChangedSince ? (
+            <p className="mt-3 text-xs text-[#F5C542]">
+              The live plan changed since these were proposed — review carefully before accepting.
+            </p>
+          ) : null}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={pendingBusy}
+              onClick={() => void handlePending("accept")}
+              className="inline-flex items-center gap-1 rounded-lg bg-[#FF6B35] px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+            >
+              <MdCheck size={14} /> Accept
+            </button>
+            <button
+              type="button"
+              disabled={pendingBusy}
+              onClick={() => void handlePending("dismiss")}
+              className="inline-flex items-center gap-1 rounded-lg border border-[#393C44] px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+            >
+              <MdClose size={14} /> Discard
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {editError ? (
+        <p className="mt-4 rounded-xl border border-[#EF4444]/40 bg-[#EF4444]/10 px-4 py-3 text-sm text-[#FCA5A5]">
+          {editError}
+        </p>
+      ) : null}
+
+      {editing ? (
+        <p className="mt-4 text-sm text-[#8E8E93]">
+          Add a lift under the workout it belongs on. New exercises go at the bottom of that list.
+          {savingEdits ? " Saving…" : ""}
+        </p>
+      ) : null}
 
       <nav className="mt-8 flex items-center gap-3" aria-label="Training days">
         <button
@@ -122,19 +319,99 @@ export default function PlanRoadmapPage() {
 
       <div className="mt-7 space-y-5">
         {day.exercises.map((exercise) => (
-          <FocusCard key={exercise.exercise_id} exercise={exercise} />
+          <div key={`${exercise.exercise_id}-${exercise.order}`} className="relative">
+            {editing ? (
+              <button
+                type="button"
+                disabled={savingEdits}
+                onClick={() => handleRemoveExercise(exercise)}
+                className="absolute right-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-full border border-[#393C44] bg-[#161A22] text-[#8E8E93] hover:border-[#EF4444] hover:text-[#EF4444] disabled:opacity-50"
+                aria-label={`Remove ${exercise.exercise_name}`}
+              >
+                <MdClose size={16} />
+              </button>
+            ) : null}
+            <FocusCard exercise={exercise} />
+          </div>
         ))}
+        {editing ? (
+          <button
+            type="button"
+            disabled={savingEdits}
+            onClick={() => {
+              setEditError(null);
+              setPickerOpen(true);
+            }}
+            className="flex w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-[#FF6B35]/50 bg-[#FF6B35]/[0.06] px-5 py-6 text-sm font-bold text-[#FF6B35] hover:bg-[#FF6B35]/10 disabled:opacity-50"
+          >
+            <MdAdd size={18} /> Add exercise to {day.day_name}
+          </button>
+        ) : null}
       </div>
 
       {projection.nutrition?.weeks?.length ? (
         <NutritionSection nutrition={projection.nutrition} />
       ) : null}
 
-      <div className="mt-8 rounded-2xl border border-dashed border-[#343740] px-5 py-4 text-sm text-[#8E8E93]">
-        <span className="font-semibold text-white">Coach changes stay reviewable.</span> When the
-        AI adjusts a next-session target, its suggestion appears here with Accept and Discard
-        controls before your live plan changes.
-      </div>
+      {!pending ? (
+        <div className="mt-8 rounded-2xl border border-dashed border-[#343740] px-5 py-4 text-sm text-[#8E8E93]">
+          <span className="font-semibold text-white">Coach changes stay reviewable.</span> When the
+          AI adjusts a next-session target, its suggestion appears here with Accept and Discard
+          controls before your live plan changes.
+        </div>
+      ) : null}
+
+      {pickerOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
+          <div className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[#2A2D35] bg-[#161A22] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#2A2D35] px-4 py-3">
+              <h3 className="text-base font-bold text-white">Add exercise</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setPickerOpen(false);
+                  setPickerQuery("");
+                }}
+                className="grid h-8 w-8 place-items-center rounded-full text-[#8E8E93] hover:bg-[#111319] hover:text-white"
+                aria-label="Close exercise picker"
+              >
+                <MdClose size={18} />
+              </button>
+            </div>
+            <div className="border-b border-[#2A2D35] px-4 py-3">
+              <input
+                autoFocus
+                value={pickerQuery}
+                onChange={(e) => setPickerQuery(e.target.value)}
+                placeholder="Search exercises"
+                className="w-full rounded-xl border border-[#2A2D35] bg-[#0B0C10] px-3 py-2.5 text-sm text-white placeholder:text-[#636366] focus:outline-none focus:ring-2 focus:ring-[#FF6B35]/40"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {filteredExercises.map((exercise) => (
+                <button
+                  key={exercise.id}
+                  type="button"
+                  disabled={savingEdits}
+                  onClick={() => handlePickExercise(exercise)}
+                  className="flex w-full items-start justify-between gap-3 rounded-xl px-3 py-3 text-left hover:bg-[#111319] disabled:opacity-50"
+                >
+                  <span>
+                    <span className="block text-sm font-semibold text-white">{exercise.name}</span>
+                    <span className="mt-0.5 block text-xs text-[#8E8E93]">
+                      {exercise.category} · {exercise.equipment}
+                    </span>
+                  </span>
+                  <MdAdd className="mt-0.5 shrink-0 text-[#FF6B35]" size={18} />
+                </button>
+              ))}
+              {!filteredExercises.length ? (
+                <p className="px-3 py-6 text-center text-sm text-[#8E8E93]">No matches.</p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

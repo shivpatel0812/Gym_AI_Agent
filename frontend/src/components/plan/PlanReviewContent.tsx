@@ -1,9 +1,15 @@
 import { MacroSummary } from "./ProgramOverview";
 import { useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { PlanChange, PlanMode, PlanModeOption, TrainingPlan } from "../../api/trainingPlan";
-import { colors, spacing, borderRadius } from "../../theme";
+import { PlanChange, PlanDay, PlanMode, PlanModeOption, TrainingPlan } from "../../api/trainingPlan";
+import ExercisePickerModal from "../workouts/session/ExercisePickerModal";
+import {
+  addExerciseToDay,
+  exerciseAlreadyOnDay,
+  removeExerciseFromDay,
+} from "./reviewEdits";
+import { colors, spacing, borderRadius, typography, weight } from "../../theme";
 
 const DAY_ORDER = [
   "monday",
@@ -34,6 +40,9 @@ interface Props {
   modes?: PlanModeOption[];
   /** When provided, shows Edit controls that call this with a coach prompt. */
   onEditRequest?: (prompt: string) => void;
+  /** Persist add/remove on a draft. The list is then locked for later AI fills. */
+  onDaysChange?: (days: PlanDay[]) => void;
+  savingDays?: boolean;
   showFootnote?: boolean;
 }
 
@@ -138,9 +147,13 @@ export default function PlanReviewContent({
   plan,
   modes = [],
   onEditRequest,
+  onDaysChange,
+  savingDays = false,
   showFootnote = true,
 }: Props) {
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
+  const [pickerDay, setPickerDay] = useState<string | null>(null);
+  const canEditExercises = !!onDaysChange;
 
   const modeLabel =
     modes.find((m) => m.id === plan.plan_mode)?.label ||
@@ -160,6 +173,49 @@ export default function PlanReviewContent({
 
   const toggleDay = (name: string) => {
     setExpandedDays((prev) => ({ ...prev, [name]: !isDayExpanded(name) }));
+  };
+
+  const requestDaysChange = (days: PlanDay[]) => {
+    onDaysChange?.(days);
+  };
+
+  const handleAddExercise = (exercise: { id: string; name: string }) => {
+    if (!pickerDay) return;
+    const day = plan.days.find((item) => item.day_name === pickerDay);
+    if (day && exerciseAlreadyOnDay(day, exercise.id, exercise.name)) {
+      Alert.alert("Already on this day", `${exercise.name} is already on ${pickerDay}.`);
+      return;
+    }
+    requestDaysChange(
+      addExerciseToDay(plan.days, pickerDay, {
+        exercise_id: exercise.id,
+        exercise_name: exercise.name,
+      })
+    );
+    setPickerDay(null);
+  };
+
+  const handleRemoveExercise = (day: PlanDay, exercise: PlanDay["exercises"][number]) => {
+    if (day.exercises.length <= 1) {
+      Alert.alert(
+        "Can't remove the last lift",
+        `Add another exercise first, or ask the coach to drop ${day.day_name}.`
+      );
+      return;
+    }
+    Alert.alert(
+      "Remove exercise",
+      `Remove ${exercise.exercise_name} from ${day.day_name}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () =>
+            requestDaysChange(removeExerciseFromDay(plan.days, day.day_name, exercise)),
+        },
+      ]
+    );
   };
 
   const changeText = (change: PlanChange) => {
@@ -244,6 +300,11 @@ export default function PlanReviewContent({
       </View>
 
       <Text style={[styles.sectionTitle, styles.workoutDaysTitle]}>Workout Days</Text>
+      {canEditExercises ? (
+        <Text style={styles.editHint}>
+          Add or remove lifts here. Coach will keep this list and fill in sets, ranges, and goals from it.
+        </Text>
+      ) : null}
 
       {plan.days.map((day) => {
         const expanded = isDayExpanded(day.day_name);
@@ -262,7 +323,7 @@ export default function PlanReviewContent({
                   {title}
                 </Text>
               </TouchableOpacity>
-              {onEditRequest ? (
+              {onEditRequest && !canEditExercises ? (
                 <TouchableOpacity
                   style={styles.editDayButton}
                   onPress={() =>
@@ -289,7 +350,7 @@ export default function PlanReviewContent({
 
             {expanded
               ? day.exercises.map((ex) => (
-                  <View key={`${day.day_name}-${ex.order}`} style={styles.exerciseRow}>
+                  <View key={`${day.day_name}-${ex.order}-${ex.exercise_id}`} style={styles.exerciseRow}>
                     <Text style={styles.exerciseText}>
                       {ex.order}. {ex.exercise_name}
                       {ex.target_rep_range
@@ -297,14 +358,35 @@ export default function PlanReviewContent({
                         : ""}
                       {ex.priority === "high" ? "  ★" : ""}
                     </Text>
-                    <MaterialCommunityIcons
-                      name="drag-horizontal-variant"
-                      size={18}
-                      color={colors.textMuted}
-                    />
+                    {canEditExercises ? (
+                      <TouchableOpacity
+                        onPress={() => handleRemoveExercise(day, ex)}
+                        disabled={savingDays}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        accessibilityLabel={`Remove ${ex.exercise_name}`}
+                        style={styles.removeButton}
+                      >
+                        <MaterialCommunityIcons
+                          name="minus-circle-outline"
+                          size={22}
+                          color={colors.danger}
+                        />
+                      </TouchableOpacity>
+                    ) : null}
                   </View>
                 ))
               : null}
+            {expanded && canEditExercises ? (
+              <TouchableOpacity
+                style={styles.addExerciseButton}
+                onPress={() => setPickerDay(day.day_name)}
+                disabled={savingDays}
+                accessibilityLabel={`Add exercise to ${day.day_name}`}
+              >
+                <MaterialCommunityIcons name="plus" size={18} color={colors.accentPrimary} />
+                <Text style={styles.addExerciseText}>Add exercise</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         );
       })}
@@ -353,6 +435,13 @@ export default function PlanReviewContent({
           recommendations are targeted while it is active.
         </Text>
       ) : null}
+
+      <ExercisePickerModal
+        visible={!!pickerDay}
+        onClose={() => setPickerDay(null)}
+        onSelectExercise={handleAddExercise}
+        userExercises={[]}
+      />
     </View>
   );
 }
@@ -390,9 +479,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(156, 192, 232,0.12)",
+    backgroundColor: "rgba(255, 107, 53,0.12)",
     borderWidth: 1,
-    borderColor: "rgba(156, 192, 232,0.28)",
+    borderColor: "rgba(255, 107, 53,0.28)",
   },
   pillText: {
     fontSize: 13,
@@ -584,6 +673,36 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textSecondary,
     lineHeight: 20,
+  },
+  editHint: {
+    fontSize: typography.caption,
+    fontWeight: weight.medium,
+    color: colors.textMutedCool,
+    lineHeight: 18,
+    marginTop: -spacing.sm,
+    marginBottom: spacing.md,
+  },
+  removeButton: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  addExerciseButton: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  addExerciseText: {
+    fontSize: typography.body,
+    fontWeight: weight.bold,
+    color: colors.accentPrimary,
   },
 
   changeRow: {

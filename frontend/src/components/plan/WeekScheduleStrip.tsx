@@ -51,6 +51,7 @@ export default function WeekScheduleStrip({
   onSwapDays,
   onImport,
   onEdit,
+  editing,
 }: {
   schedule: Record<string, string>;
   families: DayFamily<{ day_name: string }>[];
@@ -59,6 +60,7 @@ export default function WeekScheduleStrip({
   onSwapDays: (from: string, to: string) => void;
   onImport?: () => void;
   onEdit?: () => void;
+  editing?: boolean;
 }) {
   const todayKey = WEEKDAYS[new Date().getDay()].toLowerCase();
   const [draggingFrom, setDraggingFrom] = useState<string | null>(null);
@@ -161,10 +163,14 @@ export default function WeekScheduleStrip({
               onPress={onEdit}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               accessibilityRole="button"
-              accessibilityLabel="Edit plan"
+              accessibilityLabel={editing ? "Done editing plan" : "Edit plan"}
             >
-              <MaterialCommunityIcons name="pencil-outline" size={16} color={colors.accentPrimary} />
-              <Text style={styles.weekActionText}>Edit</Text>
+              <MaterialCommunityIcons
+                name={editing ? "check" : "pencil-outline"}
+                size={16}
+                color={colors.accentPrimary}
+              />
+              <Text style={styles.weekActionText}>{editing ? "Done" : "Edit"}</Text>
             </TouchableOpacity>
           ) : null}
         </View>

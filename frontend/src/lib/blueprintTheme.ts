@@ -1,15 +1,15 @@
 /**
- * Shared Day Blueprint tokens (Slate + Ice default).
+ * Shared Day Blueprint tokens.
  * Keep edit sheets visually tied to the nutrition plan page.
  */
 import { Platform, StyleSheet } from "react-native";
 import { spacing, borderRadius } from "../theme";
 
 export const bp = {
-  accent: "#9CC0E8",
-  accentMuted: "#7FA8D0",
-  accentSoft: "rgba(156,192,232,0.14)",
-  onAccent: "#070708",
+  accent: "#FF6B35",
+  accentMuted: "#FF8A5C",
+  accentSoft: "rgba(255,107,53,0.14)",
+  onAccent: "#FFFFFF",
   potential: "#E09A45",
   potentialSoft: "rgba(224,154,69,0.16)",
   uncertain: "#A78BFA",

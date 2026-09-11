@@ -27,6 +27,76 @@ export interface PlanDay {
   day_type?: string;
   goal?: string;
   exercises: PlanExercise[];
+  estimated_duration_minutes?: number;
+}
+
+export interface PlanChange {
+  action: string;
+  day_name?: string;
+  exercise_name?: string;
+  replaces?: string;
+  reason?: string;
+}
+
+/** What a proposed plan would change about the one it replaces. */
+export interface PlanDayDiff {
+  day_name: string;
+  added: string[];
+  removed: string[];
+  retargeted: Array<{ exercise_name: string; from: string; to: string }>;
+  reordered: boolean;
+  added_count: number;
+  removed_count: number;
+}
+
+export interface PlanDiff {
+  is_first_plan: boolean;
+  /** True when the proposal deletes a training day. Lead the review with this. */
+  is_destructive: boolean;
+  removed_days: string[];
+  added_days: string[];
+  days: PlanDayDiff[];
+  schedule_changes: Array<{ weekday: string; from: string; to: string }>;
+  exercises_added?: number;
+  exercises_removed?: number;
+  summary: string;
+}
+
+export type PlanEditOp =
+  | "set_rep_range"
+  | "set_sets"
+  | "set_priority"
+  | "set_goal"
+  | "set_notes"
+  | "set_destination"
+  | "clear_destination"
+  | "add_exercise"
+  | "remove_exercise"
+  | "add_day"
+  | "remove_day"
+  | "replace_day_exercises";
+
+export interface PlanEdit {
+  id: string;
+  op: PlanEditOp;
+  day_name?: string;
+  exercise_id?: string;
+  exercise_name: string;
+  field: string;
+  from?: unknown;
+  value: unknown;
+  title: string;
+  rationale?: string | null;
+  status: "pending" | "applied" | "dismissed";
+}
+
+export interface PlanSuggestionSet {
+  id: string;
+  plan_id: string;
+  summary: string;
+  edits: PlanEdit[];
+  status: string;
+  created_at?: string;
 }
 
 export interface NutritionCompanion {
@@ -46,12 +116,25 @@ export interface TrainingPlan {
   primary_goal?: string;
   status: PlanStatus;
   plan_mode?: PlanMode;
+  plan_type?: string;
   duration_weeks?: number;
   start_date?: string;
   strategy?: string[];
   guidelines?: string[];
   weekly_schedule: Record<string, string>;
   days: PlanDay[];
+  changes?: PlanChange[];
+  /** Server-computed comparison against the plan this would replace. */
+  diff?: PlanDiff;
+  /** Days kept because the conversation never mentioned them. */
+  carried_forward_days?: string[];
+  /** Exercises the model asked for that could not be honoured. */
+  dropped_exercises?: Array<{ day_name: string; exercise_name: string; reason: string }>;
+  /** User added/removed lifts on Review Plan — later AI fills from this list. */
+  exercise_list_locked?: boolean;
+  version?: number;
+  created_at?: string;
+  ended_at?: string;
 }
 
 export interface PlanProgress {
@@ -59,6 +142,12 @@ export interface PlanProgress {
   total_weeks?: number | null;
   days_elapsed?: number;
   ends_on?: string;
+}
+
+export interface PlanModeOption {
+  id: PlanMode;
+  label: string;
+  description: string;
 }
 
 export interface PlanEnvelope {
@@ -79,6 +168,13 @@ export interface WeekPoint {
   session?: number;
   /** Every prescribed set, so "80×6, 80×4" can be rendered in full. */
   sets?: Array<{ set_number?: number; weight: number; reps: number }>;
+}
+
+export interface CardioWeekPoint {
+  week: number;
+  minutes: number;
+  speed?: number;
+  decision?: string;
 }
 
 export interface ProjectedExercise {
@@ -105,9 +201,13 @@ export interface ProjectedExercise {
   reps?: number;
   order?: number;
   is_cardio?: boolean;
-  cardio_realistic?: Array<{ week: number; minutes: number }>;
+  cardio_modality?: "steady" | "sport";
+  cardio_current?: CardioWeekPoint | null;
+  cardio_best_case?: CardioWeekPoint[];
+  cardio_realistic?: Array<{ week: number; minutes: number }> | CardioWeekPoint[];
   target_rep_range?: [number, number];
   notes?: string;
+  intensity?: string;
   target_weight?: number | null;
   target_reps?: number | null;
   target_weeks?: number | null;
@@ -127,6 +227,19 @@ export interface ProjectedExercise {
     }>;
     top_set?: { weight?: number; reps?: number } | null;
   }>;
+  history_context?: {
+    lifetime_session_count: number;
+    recent_sessions?: Array<{
+      date?: string;
+      session_id?: string;
+      sets?: Array<{ set_number?: number; weight?: number; reps?: number; completed?: boolean }>;
+      top_set?: { weight?: number; reps?: number } | null;
+    }>;
+    best_weighted_set?: { weight?: number; reps?: number; date?: string } | null;
+    best_bodyweight_rep_set?: { weight?: number; reps?: number; date?: string } | null;
+    most_recent_weighted_set?: { weight?: number; reps?: number; date?: string } | null;
+    recent_trend?: "up" | "down" | "steady" | "insufficient_history";
+  };
 }
 
 export interface ProjectedDay {
@@ -135,8 +248,20 @@ export interface ProjectedDay {
   day_goal?: string;
   day_type?: string;
   goal?: string;
+  estimated_duration_minutes?: number;
   sessions_per_week: number;
   exercises: ProjectedExercise[];
+}
+
+export interface MuscleGroupDay {
+  date: string;
+  stimulus: number;
+  sessions: Array<{
+    exercise_id: string;
+    exercise_name: string;
+    session_id?: string;
+    sets: Array<{ set_number?: number; weight: number; reps: number; completed?: boolean }>;
+  }>;
 }
 
 export interface NutritionWeekPoint {
@@ -148,6 +273,7 @@ export interface NutritionWeekPoint {
   /** Backend legacy alias for bodyweight. */
   expected_weight_lb?: number | null;
   expected_weight_change_lb?: number | null;
+  phase?: string;
 }
 
 export interface NutritionTrajectory {
@@ -198,15 +324,37 @@ export interface PlanProjection {
   progress: PlanProgress;
   adherence?: Adherence;
   days: ProjectedDay[];
+  /**
+   * Stimulus per muscle group per day, computed server-side from the whole
+   * workout log rather than from the current plan day's exercises.
+   */
+  muscle_group_history?: Record<string, MuscleGroupDay[]>;
   nutrition?: NutritionTrajectory | null;
 }
 
+export interface PendingPlanSuggestions {
+  suggestion: PlanSuggestionSet;
+  pendingCount: number;
+  planChangedSince: boolean;
+}
+
+export type ExerciseRole = "building" | "maintaining" | "support";
+
 // === Requests =============================================================
+
+export async function getPlanModes(): Promise<PlanModeOption[]> {
+  const res = await apiClient.get("/api/training-plan/modes");
+  return res.data?.modes ?? [];
+}
 
 export async function getActivePlan(): Promise<PlanEnvelope | null> {
   const res = await apiClient.get("/api/training-plan/active");
   if (res.data?.status === "no_plan") return null;
-  return { plan: res.data.plan, progress: res.data.progress };
+  if (res.data?.status === "success" && res.data?.plan) {
+    return { plan: res.data.plan, progress: res.data.progress };
+  }
+  if (res.data?.plan) return { plan: res.data.plan, progress: res.data.progress };
+  return null;
 }
 
 export async function getPlanProjection(weeks?: number): Promise<PlanProjection | null> {
@@ -214,23 +362,156 @@ export async function getPlanProjection(weeks?: number): Promise<PlanProjection 
     params: weeks ? { weeks } : undefined,
   });
   if (res.data?.status === "no_plan") return null;
-  return res.data.projection;
+  if (res.data?.status === "success" && res.data?.projection) return res.data.projection;
+  return res.data?.projection ?? null;
+}
+
+export async function proposePlan(params: {
+  conversationId?: string | null;
+  splitId?: string | null;
+  /** null when the user never opened the mode selector — backend honours the interview. */
+  planMode: PlanMode | null;
+  goalStatement?: string;
+  durationWeeks?: number | null;
+  weeklySchedule?: Record<string, string> | null;
+  nutritionGoal?: string | null;
+}): Promise<PlanEnvelope> {
+  const res = await apiClient.post(
+    "/api/training-plan/propose",
+    {
+      conversation_id: params.conversationId ?? null,
+      split_id: params.splitId ?? null,
+      plan_mode: params.planMode ?? null,
+      goal_statement: params.goalStatement ?? null,
+      duration_weeks: params.durationWeeks ?? null,
+      weekly_schedule: params.weeklySchedule ?? null,
+      nutrition_goal: params.nutritionGoal ?? null,
+    },
+    { timeout: 120000 }
+  );
+  return { plan: res.data.plan, progress: res.data.progress };
 }
 
 export async function adjustPlan(params: {
   adjustment: string;
-  conversationId?: string;
+  conversationId?: string | null;
   planMode?: PlanMode;
 }): Promise<PlanEnvelope> {
-  const res = await apiClient.post("/api/training-plan/adjust", {
-    adjustment: params.adjustment,
-    conversation_id: params.conversationId,
-    plan_mode: params.planMode,
-  });
+  const res = await apiClient.post(
+    "/api/training-plan/adjust",
+    {
+      adjustment: params.adjustment,
+      conversation_id: params.conversationId ?? null,
+      plan_mode: params.planMode,
+    },
+    { timeout: 120000 }
+  );
   return { plan: res.data.plan, progress: res.data.progress };
 }
 
 export async function activatePlan(planId: string): Promise<PlanEnvelope> {
   const res = await apiClient.post(`/api/training-plan/${planId}/activate`);
+  return { plan: res.data.plan, progress: res.data.progress };
+}
+
+export async function pausePlan(planId: string): Promise<void> {
+  await apiClient.post(`/api/training-plan/${planId}/pause`);
+}
+
+export async function resumePlan(planId: string): Promise<void> {
+  await apiClient.post(`/api/training-plan/${planId}/resume`);
+}
+
+export async function endPlan(planId: string): Promise<void> {
+  await apiClient.post(`/api/training-plan/${planId}/end`);
+}
+
+/** Direct user edits — schedule drag, add/remove lifts, locked exercise list. */
+export async function updatePlan(
+  planId: string,
+  updates: {
+    weekly_schedule?: Record<string, string>;
+    plan_name?: string;
+    primary_goal?: string;
+    duration_weeks?: number;
+    days?: TrainingPlan["days"];
+    exercise_list_locked?: boolean;
+  }
+): Promise<TrainingPlan> {
+  const res = await apiClient.patch(`/api/training-plan/${planId}`, updates);
+  return res.data.plan;
+}
+
+export async function deletePlan(planId: string): Promise<void> {
+  await apiClient.delete(`/api/training-plan/${planId}`);
+}
+
+export async function getPlanHistory(): Promise<Partial<TrainingPlan>[]> {
+  const res = await apiClient.get("/api/training-plan/history");
+  return Array.isArray(res.data?.plans) ? res.data.plans : [];
+}
+
+/** Coach-proposed target changes awaiting Accept or Discard. */
+export async function getPlanSuggestions(): Promise<PendingPlanSuggestions | null> {
+  const res = await apiClient.get("/api/training-plan/suggestions");
+  if (!res.data?.suggestion) return null;
+  return {
+    suggestion: res.data.suggestion,
+    pendingCount: res.data.pending_count ?? 0,
+    planChangedSince: Boolean(res.data.plan_changed_since),
+  };
+}
+
+export async function acceptPlanSuggestions(
+  setId: string,
+  editIds?: string[]
+): Promise<PlanEnvelope> {
+  const res = await apiClient.post(`/api/training-plan/suggestions/${setId}/accept`, {
+    edit_ids: editIds ?? null,
+  });
+  return { plan: res.data.plan, progress: res.data.progress };
+}
+
+export async function dismissPlanSuggestions(
+  setId: string,
+  editIds?: string[]
+): Promise<void> {
+  await apiClient.post(`/api/training-plan/suggestions/${setId}/dismiss`, {
+    edit_ids: editIds ?? null,
+  });
+}
+
+/**
+ * Guided per-exercise revision — Plan Mode, re-entered for one lift.
+ * Typed fields apply directly instead of staging a suggestion.
+ */
+export async function setExerciseGoal(params: {
+  dayName: string;
+  exerciseId?: string;
+  exerciseName: string;
+  role?: ExerciseRole;
+  goal?: string;
+  targetRepRange?: [number, number];
+  sets?: number;
+  notes?: string;
+  targetWeight?: number | null;
+  targetReps?: number | null;
+  targetWeeks?: number | null;
+  clearDestination?: boolean;
+}): Promise<PlanEnvelope> {
+  const res = await apiClient.post("/api/training-plan/exercise-goal", {
+    day_name: params.dayName,
+    exercise_id: params.exerciseId ?? null,
+    exercise_name: params.exerciseName,
+    role: params.role ?? null,
+    goal: params.goal ?? null,
+    target_rep_range: params.targetRepRange ?? null,
+    sets: params.sets ?? null,
+    notes: params.notes ?? null,
+    target_weight: params.targetWeight ?? null,
+    target_reps: params.targetReps ?? null,
+    target_weeks: params.targetWeeks ?? null,
+    clear_destination: params.clearDestination ?? null,
+  });
   return { plan: res.data.plan, progress: res.data.progress };
 }

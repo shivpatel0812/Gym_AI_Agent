@@ -183,7 +183,7 @@ function EstimateMacros({
         label="Calories"
         value={estimate.calories}
         unit="kcal"
-        color="#9CC0E8"
+        color="#FF6B35"
         previousValue={previous?.calories}
       />
       <MacroPill
@@ -208,7 +208,7 @@ function EstimateMacros({
         previousValue={previous?.fats}
       />
       {estimate.sugar != null ? <MacroPill label="Sugar" value={estimate.sugar} unit="g" color="#E4B896" previousValue={previous?.sugar} /> : null}
-      {estimate.sodium != null ? <MacroPill label="Sodium" value={estimate.sodium} unit="mg" color="#9CC0E8" previousValue={previous?.sodium} /> : null}
+      {estimate.sodium != null ? <MacroPill label="Sodium" value={estimate.sodium} unit="mg" color="#FF6B35" previousValue={previous?.sodium} /> : null}
       <MacroPill
         label="Fiber"
         value={estimate.fiber}
@@ -566,7 +566,7 @@ export default function MacroAdjustChat({
                       <MaterialCommunityIcons
                         name={starter.icon}
                         size={16}
-                        color="#9CC0E8"
+                        color="#FF6B35"
                       />
                       <Text style={s.starterText}>{starter.label}</Text>
                     </TouchableOpacity>
@@ -970,9 +970,9 @@ const s = StyleSheet.create({
     paddingHorizontal: 11,
     paddingVertical: 9,
     borderRadius: 11,
-    backgroundColor: "rgba(156,192,232,0.07)",
+    backgroundColor: "rgba(255, 107, 53,0.07)",
     borderWidth: 1,
-    borderColor: "rgba(156,192,232,0.19)",
+    borderColor: "rgba(255, 107, 53,0.19)",
   },
   starterText: {
     color: "#B8CBE0",
@@ -1182,7 +1182,7 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 18,
-    backgroundColor: "#9CC0E8",
+    backgroundColor: "#FF6B35",
   },
   sendBtnDisabled: {
     opacity: 0.28,

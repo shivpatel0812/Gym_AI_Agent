@@ -363,7 +363,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  chipSelected: { borderColor: colors.accentPrimary, backgroundColor: "rgba(156,192,232,.12)" },
+  chipSelected: { borderColor: colors.accentPrimary, backgroundColor: "rgba(255, 107, 53,.12)" },
   chipText: { fontSize: 12, fontWeight: "700", color: colors.textSecondary },
   chipTextSelected: { color: colors.accentPrimary },
   destRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },

@@ -138,6 +138,31 @@ class PlanBuilder:
                 "EXISTING ACTIVE PLAN (you are revising this, not starting over):\n"
                 + json.dumps(existing_plan, indent=2, default=str)
             )
+            if existing_plan.get("exercise_list_locked"):
+                locked_days = [
+                    {
+                        "day_name": day.get("day_name"),
+                        "exercises": [
+                            {
+                                "exercise_id": ex.get("exercise_id"),
+                                "exercise_name": ex.get("exercise_name"),
+                            }
+                            for ex in (day.get("exercises") or [])
+                            if isinstance(ex, dict)
+                        ],
+                    }
+                    for day in (existing_plan.get("days") or [])
+                    if isinstance(day, dict) and day.get("day_name")
+                ]
+                sections.append(
+                    "USER-LOCKED EXERCISE LIST:\nThe user edited this plan by hand "
+                    "on Review Plan. Keep exactly these lifts on each day. Fill in "
+                    "or revise sets, target_rep_range, priority, goal, notes and "
+                    "intensity — that is the job. Do not add, remove, swap or "
+                    "rename exercises or days unless REQUESTED ADJUSTMENT "
+                    "explicitly asks for it.\n"
+                    + json.dumps(locked_days, indent=2, default=str)
+                )
             existing_days = [
                 day["day_name"]
                 for day in (existing_plan.get("days") or [])
@@ -376,16 +401,27 @@ Return only the JSON object."""
             }
 
         # Preserve the entire baseline even for a user's first plan.
-        from .plan_completeness import complete_routine, completeness_errors
+        from .plan_completeness import (
+            complete_routine, completeness_errors, enforce_locked_exercises,
+        )
         source = existing_plan or (split_context if plan_mode != "build_for_me" else None)
         plan = complete_routine(plan, source, strict=strict)
-        references = split_context.get("referenced_workouts") or []
-        referenced_days = {ref.get("target_day") for ref in references if ref.get("found")}
-        if referenced_days:
-            plan = complete_routine(plan, {"days": [d for d in split_context.get("days", [])
-                                                    if d.get("day_name") in referenced_days]},
-                                    strict=strict, preserve_order=True)
-        errors = completeness_errors(plan)
+        # Importing "my September 4 push" must import that session and nothing
+        # else. `split_context["days"]` is a *reconstruction* — the union of the
+        # last few sessions logged under that day — so sourcing the merge from
+        # it poured every one-off substitution the user had ever done into the
+        # plan, permanently: a cable fly performed once in August became a
+        # fixture of Push A that no later conversation could take back off it.
+        # The one place per-exercise backfill is still right: the user pointed
+        # at a specific logged session and asked for it, so every lift in it is
+        # something they chose, by name, in this conversation.
+        imported_days = PlanBuilder._imported_days(split_context)
+        if imported_days:
+            plan = complete_routine(plan, {"days": imported_days}, strict=strict,
+                                    preserve_order=True, backfill_exercises=True)
+        if existing_plan and existing_plan.get("exercise_list_locked"):
+            plan = enforce_locked_exercises(plan, existing_plan)
+        errors = completeness_errors(plan, source)
         confirmed = split_context.get("confirmed_schedule") or {}
         for weekday, name in confirmed.items():
             if str(plan["weekly_schedule"].get(weekday, "Rest")).lower() != name.lower():
@@ -405,6 +441,39 @@ Return only the JSON object."""
             "plan": plan,
             "tokens_used": getattr(response.usage, "total_tokens", 0),
         }
+
+    @staticmethod
+    def _imported_days(split_context: Dict) -> List[Dict]:
+        """Exactly the logged sessions the user pointed at, by target day.
+
+        Built from `referenced_workouts` rather than from the split days those
+        imports were merged into, because the merge also carries the
+        reconstruction's own contents and those were never referenced.
+        """
+        by_day: Dict[str, List[Dict]] = {}
+        for reference in split_context.get("referenced_workouts") or []:
+            if not reference.get("found") or not reference.get("target_day"):
+                continue
+            bucket = by_day.setdefault(str(reference["target_day"]), [])
+            present = {
+                str(ex.get("exercise_id") or ex.get("exercise_name") or "").strip().lower()
+                for ex in bucket
+            }
+            for exercise in reference.get("exercises") or []:
+                if not isinstance(exercise, dict):
+                    continue
+                identity = str(
+                    exercise.get("exercise_id") or exercise.get("exercise_name") or ""
+                ).strip().lower()
+                if not identity or identity in present:
+                    continue
+                present.add(identity)
+                bucket.append(exercise)
+        return [
+            {"day_name": name, "exercises": exercises}
+            for name, exercises in by_day.items()
+            if exercises
+        ]
 
     # How much of a day's work a proposed day must contain before it counts as
     # that same day under a new name. High enough that Push and Pull can never
@@ -607,6 +676,12 @@ Return only the JSON object."""
                     continue
 
             exercises = []
+            # One lift, one row. Nothing deduplicated a day, so a draft that
+            # re-emitted a carried-over exercise alongside its own addition
+            # shipped both — and the two copies rarely share an id, since a
+            # name resolved through the catalog and a name resolved through a
+            # coach edit land on different ones. Matched on id and name.
+            seen_exercises: set = set()
             for ex in day.get("exercises") or []:
                 if not isinstance(ex, dict):
                     continue
@@ -652,6 +727,14 @@ Return only the JSON object."""
                         "reason": "unrecognised exercise with no name",
                     })
                     continue
+
+                identity = {
+                    value for value in (exercise_id.lower(), exercise_name.lower())
+                    if value
+                }
+                if identity & seen_exercises:
+                    continue
+                seen_exercises |= identity
 
                 entry = {
                     "exercise_id": exercise_id,

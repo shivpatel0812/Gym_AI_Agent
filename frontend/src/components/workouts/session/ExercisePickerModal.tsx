@@ -18,7 +18,7 @@ import { colors, spacing, borderRadius } from "../../../theme";
 interface ExercisePickerModalProps {
   visible: boolean;
   onClose: () => void;
-  onSelectExercise: (exerciseName: string) => void;
+  onSelectExercise: (exercise: { id: string; name: string }) => void;
   userExercises: Exercise[];
 }
 
@@ -97,8 +97,8 @@ export default function ExercisePickerModal({
     return allExercises.filter((ex) => ex.name.toLowerCase().includes(query));
   }, [allExercises, searchQuery]);
 
-  const handleSelectExercise = (exerciseName: string) => {
-    onSelectExercise(exerciseName);
+  const handleSelectExercise = (exercise: { id: string; name: string }) => {
+    onSelectExercise(exercise);
     onClose();
     // Reset filters
     setSearchQuery("");
@@ -110,7 +110,7 @@ export default function ExercisePickerModal({
   const renderExerciseItem = ({ item }: { item: any }) => (
     <TouchableOpacity
       style={styles.exerciseItem}
-      onPress={() => handleSelectExercise(item.name)}
+      onPress={() => handleSelectExercise({ id: item.id, name: item.name })}
       activeOpacity={0.7}
     >
       <View style={styles.exerciseItemLeft}>

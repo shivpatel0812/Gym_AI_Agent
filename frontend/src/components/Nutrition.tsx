@@ -747,7 +747,7 @@ export default function Nutrition() {
           )}
           {Platform.OS === "ios" && showDatePicker && (
             <TouchableOpacity onPress={() => setShowDatePicker(false)} style={{ alignSelf: "flex-end" }}>
-              <Text style={{ color: "#9CC0E8", fontWeight: "600", marginBottom: 8 }}>Done</Text>
+              <Text style={{ color: "#FF6B35", fontWeight: "600", marginBottom: 8 }}>Done</Text>
             </TouchableOpacity>
           )}
 
@@ -820,7 +820,7 @@ export default function Nutrition() {
                 size={200}
                 stroke={12}
                 progress={totals.calories / calorieTarget}
-                color="#9CC0E8"
+                color="#FF6B35"
               >
                 <Text style={styles.consumedLabel}>Consumed</Text>
                 <Text style={styles.kcalBig}>{totals.calories.toLocaleString()}</Text>
@@ -958,7 +958,7 @@ export default function Nutrition() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.mealName}>{meal.label}</Text>
                     <Text style={{ fontSize: 13, marginTop: 2 }}>
-                      <Text style={{ color: "#9CC0E8", fontWeight: "600" }}>
+                      <Text style={{ color: "#FF6B35", fontWeight: "600" }}>
                         {Math.round(mealTotals.calories)} kcal
                       </Text>
                       <Text style={{ color: "#E4B896" }}>
@@ -1084,7 +1084,7 @@ export default function Nutrition() {
                         })}
                         <View style={styles.totalRow}>
                           <Text style={styles.totalLabel}>Total</Text>
-                          <Text style={[styles.foodKcal, { color: "#9CC0E8", fontWeight: "700" }]}>
+                          <Text style={[styles.foodKcal, { color: "#FF6B35", fontWeight: "700" }]}>
                             {Math.round(mealTotals.calories)}
                           </Text>
                           <Text style={[styles.foodMacro, { color: "#E4B896", fontWeight: "700" }]}>
@@ -1302,7 +1302,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.cardBackground,
   },
-  targetsBtnOn: { backgroundColor: "#9CC0E8", borderColor: "#9CC0E8" },
+  targetsBtnOn: { backgroundColor: "#FF6B35", borderColor: "#FF6B35" },
   targetsBtnText: { color: "#7C8CA0", fontSize: 14, fontWeight: "600" },
   dayTabs: {
     borderBottomWidth: 1,
@@ -1314,7 +1314,7 @@ const styles = StyleSheet.create({
   dayTabOn: { color: "#fff" },
   dayUnderline: {
     height: 2,
-    backgroundColor: "#9CC0E8",
+    backgroundColor: "#FF6B35",
     borderRadius: 999,
     marginTop: -2,
   },
@@ -1352,7 +1352,7 @@ const styles = StyleSheet.create({
   },
   unit: { position: "absolute", right: 12, top: 14, color: "#55647A", fontSize: 12 },
   saveBtn: {
-    backgroundColor: "#9CC0E8",
+    backgroundColor: "#FF6B35",
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -1374,7 +1374,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   kcalBig: { color: "#fff", fontSize: 34, fontWeight: "700", lineHeight: 38 },
-  pct: { color: "#9CC0E8", fontSize: 14, fontWeight: "700", marginTop: 6 },
+  pct: { color: "#FF6B35", fontSize: 14, fontWeight: "700", marginTop: 6 },
   remain: { color: "#7C8CA0", fontSize: 11, textAlign: "center", paddingHorizontal: 12, marginTop: 2 },
   macroGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-around", gap: 12 },
   macroItem: { width: "45%", alignItems: "center", marginBottom: 8 },
@@ -1567,7 +1567,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     paddingVertical: 14,
     borderRadius: 999,
-    backgroundColor: "#9CC0E8",
+    backgroundColor: "#FF6B35",
   },
   fabText: { color: colors.onAccent, fontWeight: "700", fontSize: 16 },
   mealsHead: {

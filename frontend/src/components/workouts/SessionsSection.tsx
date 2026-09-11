@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import {
   View,
   Text,
@@ -116,6 +116,77 @@ const SET_ENTRY_FIELDS: SetEntryField[] = ["reps", "weight", "rpe"];
 function setEntryKey(exerciseIdx: number, setIdx: number, field: SetEntryField) {
   return `${exerciseIdx}:${setIdx}:${field}`;
 }
+
+/**
+ * Owns the string the user is typing so a parent re-render (autosave, AI rec,
+ * live activity) cannot remount the field, dismiss the keypad, or wipe the
+ * digits. Parent `committed` is only applied when this input is not focused.
+ */
+const SetFieldInput = memo(function SetFieldInput({
+  committed,
+  placeholder,
+  flex,
+  fillWidth,
+  accessibilityLabel,
+  returnKeyType,
+  accessoryLabel,
+  submitBehavior,
+  inputRef,
+  onChangeText,
+  onFocus,
+  onEndEditing,
+  onSubmitEditing,
+}: {
+  committed: string;
+  placeholder: string;
+  flex?: number;
+  fillWidth?: boolean;
+  accessibilityLabel: string;
+  returnKeyType: "next" | "done";
+  accessoryLabel: string;
+  submitBehavior: "submit" | "blurAndSubmit";
+  inputRef: (input: TextInput | null) => void;
+  onChangeText: (value: string) => void;
+  onFocus: (current: string) => void;
+  onEndEditing: () => void;
+  onSubmitEditing: () => void;
+}) {
+  const [draft, setDraft] = useState(committed);
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(committed);
+  }, [committed]);
+
+  return (
+    <TextInput
+      ref={inputRef}
+      keyboardType="decimal-pad"
+      keyboardAppearance="dark"
+      returnKeyType={returnKeyType}
+      inputAccessoryViewButtonLabel={accessoryLabel}
+      submitBehavior={submitBehavior}
+      value={draft}
+      onFocus={() => {
+        focusedRef.current = true;
+        onFocus(draft);
+      }}
+      onEndEditing={() => {
+        focusedRef.current = false;
+        onEndEditing();
+      }}
+      onSubmitEditing={onSubmitEditing}
+      onChangeText={(value) => {
+        setDraft(value);
+        onChangeText(value);
+      }}
+      placeholder={placeholder}
+      accessibilityLabel={accessibilityLabel}
+      placeholderTextColor={colors.textMuted}
+      style={[styles.setInput, fillWidth ? styles.setInputFill : { flex }]}
+    />
+  );
+});
 
 /** Keep the text the user is actively typing intact (notably `12.`). */
 function normalizeSetEntryDraft(value: string, allowDecimal: boolean) {
@@ -2312,117 +2383,92 @@ export default function SessionsSection({
                                     </Text>
                                   ) : null}
                                 </View>
-                                {/* One shared keypad layout prevents a hide/show cycle when
-                                    moving between reps, weight, and RPE. */}
-                                <TextInput
-                                  ref={(input) => {
-                                    setInputRefs.current[repsKey] = input;
-                                  }}
-                                  keyboardType="decimal-pad"
-                                  keyboardAppearance="dark"
-                                  returnKeyType={hasNextSetInput(repsKey) ? "next" : "done"}
-                                  inputAccessoryViewButtonLabel={
-                                    hasNextSetInput(repsKey) ? "Next" : "Done"
-                                  }
-                                  submitBehavior={
-                                    hasNextSetInput(repsKey) ? "submit" : "blurAndSubmit"
-                                  }
-                                  selectTextOnFocus
-                                  value={setEntryValue(
-                                    repsKey,
-                                    set.reps === 0 ? "" : String(set.reps)
-                                  )}
-                                  onFocus={() =>
-                                    beginSetEntry(
+                                <View style={{ flex: 2 }}>
+                                  <SetFieldInput
+                                    committed={setEntryValue(
                                       repsKey,
                                       set.reps === 0 ? "" : String(set.reps)
-                                    )
-                                  }
-                                  onEndEditing={() => endSetEntry(repsKey)}
-                                  onSubmitEditing={() => focusNextSetInput(repsKey)}
-                                  onChangeText={(value) =>
-                                    changeSetEntry(idx, setIdx, "reps", value)
-                                  }
-                                  placeholder={
-                                    repPlaceholder != null && Number(repPlaceholder) > 0
-                                      ? String(repPlaceholder)
-                                      : "—"
-                                  }
-                                  accessibilityLabel={`${ex.exercise_name}, set ${set.set_number}, reps`}
-                                  placeholderTextColor={colors.textMuted}
-                                  style={[styles.setInput, { flex: 2 }]}
-                                />
-                                <TextInput
-                                  ref={(input) => {
-                                    setInputRefs.current[weightKey] = input;
-                                  }}
-                                  keyboardType="decimal-pad"
-                                  keyboardAppearance="dark"
-                                  returnKeyType={hasNextSetInput(weightKey) ? "next" : "done"}
-                                  inputAccessoryViewButtonLabel={
-                                    hasNextSetInput(weightKey) ? "Next" : "Done"
-                                  }
-                                  submitBehavior={
-                                    hasNextSetInput(weightKey) ? "submit" : "blurAndSubmit"
-                                  }
-                                  selectTextOnFocus
-                                  value={setEntryValue(
-                                    weightKey,
-                                    set.weight != null ? String(set.weight) : ""
-                                  )}
-                                  onFocus={() =>
-                                    beginSetEntry(
+                                    )}
+                                    placeholder={
+                                      repPlaceholder != null && Number(repPlaceholder) > 0
+                                        ? String(repPlaceholder)
+                                        : "—"
+                                    }
+                                    fillWidth
+                                    accessibilityLabel={`${ex.exercise_name}, set ${set.set_number}, reps`}
+                                    returnKeyType={hasNextSetInput(repsKey) ? "next" : "done"}
+                                    accessoryLabel={hasNextSetInput(repsKey) ? "Next" : "Done"}
+                                    submitBehavior={
+                                      hasNextSetInput(repsKey) ? "submit" : "blurAndSubmit"
+                                    }
+                                    inputRef={(input) => {
+                                      setInputRefs.current[repsKey] = input;
+                                    }}
+                                    onFocus={(current) => beginSetEntry(repsKey, current)}
+                                    onEndEditing={() => endSetEntry(repsKey)}
+                                    onSubmitEditing={() => focusNextSetInput(repsKey)}
+                                    onChangeText={(value) =>
+                                      changeSetEntry(idx, setIdx, "reps", value)
+                                    }
+                                  />
+                                  {lastSet && lastSet.reps > 0 ? (
+                                    <Text style={styles.lastHint}>last {lastSet.reps}</Text>
+                                  ) : null}
+                                </View>
+                                <View style={{ flex: 2 }}>
+                                  <SetFieldInput
+                                    committed={setEntryValue(
                                       weightKey,
                                       set.weight != null ? String(set.weight) : ""
-                                    )
-                                  }
-                                  onEndEditing={() => endSetEntry(weightKey)}
-                                  onSubmitEditing={() => focusNextSetInput(weightKey)}
-                                  onChangeText={(value) =>
-                                    changeSetEntry(idx, setIdx, "weight", value)
-                                  }
-                                  placeholder={
-                                    weightPlaceholder != null && Number(weightPlaceholder) > 0
-                                      ? String(weightPlaceholder)
-                                      : "—"
-                                  }
-                                  accessibilityLabel={`${ex.exercise_name}, set ${set.set_number}, weight`}
-                                  placeholderTextColor={colors.textMuted}
-                                  style={[styles.setInput, { flex: 2 }]}
-                                />
-                                <TextInput
-                                  ref={(input) => {
-                                    setInputRefs.current[rpeKey] = input;
-                                  }}
-                                  keyboardType="decimal-pad"
-                                  keyboardAppearance="dark"
-                                  returnKeyType={hasNextSetInput(rpeKey) ? "next" : "done"}
-                                  inputAccessoryViewButtonLabel={
-                                    hasNextSetInput(rpeKey) ? "Next" : "Done"
-                                  }
-                                  submitBehavior={
-                                    hasNextSetInput(rpeKey) ? "submit" : "blurAndSubmit"
-                                  }
-                                  selectTextOnFocus
-                                  value={setEntryValue(
+                                    )}
+                                    placeholder={
+                                      weightPlaceholder != null && Number(weightPlaceholder) > 0
+                                        ? String(weightPlaceholder)
+                                        : "—"
+                                    }
+                                    fillWidth
+                                    accessibilityLabel={`${ex.exercise_name}, set ${set.set_number}, weight`}
+                                    returnKeyType={hasNextSetInput(weightKey) ? "next" : "done"}
+                                    accessoryLabel={hasNextSetInput(weightKey) ? "Next" : "Done"}
+                                    submitBehavior={
+                                      hasNextSetInput(weightKey) ? "submit" : "blurAndSubmit"
+                                    }
+                                    inputRef={(input) => {
+                                      setInputRefs.current[weightKey] = input;
+                                    }}
+                                    onFocus={(current) => beginSetEntry(weightKey, current)}
+                                    onEndEditing={() => endSetEntry(weightKey)}
+                                    onSubmitEditing={() => focusNextSetInput(weightKey)}
+                                    onChangeText={(value) =>
+                                      changeSetEntry(idx, setIdx, "weight", value)
+                                    }
+                                  />
+                                  {lastSet && lastSet.weight != null && lastSet.weight > 0 ? (
+                                    <Text style={styles.lastHint}>last {lastSet.weight}</Text>
+                                  ) : null}
+                                </View>
+                                <SetFieldInput
+                                  committed={setEntryValue(
                                     rpeKey,
                                     set.rpe != null ? String(set.rpe) : ""
                                   )}
-                                  onFocus={() =>
-                                    beginSetEntry(
-                                      rpeKey,
-                                      set.rpe != null ? String(set.rpe) : ""
-                                    )
+                                  placeholder="—"
+                                  flex={1.2}
+                                  accessibilityLabel={`${ex.exercise_name}, set ${set.set_number}, RPE`}
+                                  returnKeyType={hasNextSetInput(rpeKey) ? "next" : "done"}
+                                  accessoryLabel={hasNextSetInput(rpeKey) ? "Next" : "Done"}
+                                  submitBehavior={
+                                    hasNextSetInput(rpeKey) ? "submit" : "blurAndSubmit"
                                   }
+                                  inputRef={(input) => {
+                                    setInputRefs.current[rpeKey] = input;
+                                  }}
+                                  onFocus={(current) => beginSetEntry(rpeKey, current)}
                                   onEndEditing={() => endSetEntry(rpeKey)}
                                   onSubmitEditing={() => focusNextSetInput(rpeKey)}
                                   onChangeText={(value) =>
                                     changeSetEntry(idx, setIdx, "rpe", value)
                                   }
-                                  placeholder="—"
-                                  accessibilityLabel={`${ex.exercise_name}, set ${set.set_number}, RPE`}
-                                  placeholderTextColor={colors.textMuted}
-                                  style={[styles.setInput, { flex: 1.2 }]}
                                 />
                                 <TouchableOpacity onPress={() => removeSet(idx, setIdx)}>
                                   <MaterialCommunityIcons
@@ -2686,7 +2732,7 @@ const styles = StyleSheet.create({
   todayCard: {
     backgroundColor: colors.cardBackground,
     borderWidth: 1,
-    borderColor: "#9CC0E8",
+    borderColor: "#FF6B35",
     borderRadius: 16,
     padding: 20,
     marginBottom: spacing.lg,
@@ -2696,7 +2742,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: "rgba(156, 192, 232,0.15)",
+    backgroundColor: "rgba(255, 107, 53,0.15)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2721,7 +2767,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 999,
-    backgroundColor: "rgba(156, 192, 232,0.12)",
+    backgroundColor: "rgba(255, 107, 53,0.12)",
     marginBottom: 10,
   },
   planBannerText: {
@@ -2858,7 +2904,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   menuItem: { paddingHorizontal: 12, paddingVertical: 10 },
-  menuItemActive: { backgroundColor: "rgba(156, 192, 232,0.2)" },
+  menuItemActive: { backgroundColor: "rgba(255, 107, 53,0.2)" },
   menuText: { color: colors.textPrimary, fontSize: 13 },
   muted: { color: colors.textSecondary, fontSize: 12 },
   controlDivider: {
@@ -2901,7 +2947,7 @@ const styles = StyleSheet.create({
   },
   timerBtnActive: {
     borderColor: colors.accentPrimary,
-    backgroundColor: "rgba(156, 192, 232, 0.12)",
+    backgroundColor: "rgba(255, 107, 53, 0.12)",
   },
   timerBtnText: { color: colors.textSecondary, fontSize: 11, fontWeight: "700" },
   timerBtnTextActive: { color: colors.accentPrimary },
@@ -2973,7 +3019,7 @@ const styles = StyleSheet.create({
   },
   pillActive: {
     borderColor: colors.accentPrimary,
-    backgroundColor: "rgba(156, 192, 232,0.1)",
+    backgroundColor: "rgba(255, 107, 53,0.1)",
   },
   pillText: { color: colors.textSecondary, fontSize: 12, fontWeight: "600" },
   pillTextActive: { color: colors.accentPrimary },
@@ -3149,7 +3195,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
     backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "rgba(156, 192, 232,0.28)",
+    borderColor: "rgba(255, 107, 53,0.28)",
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -3188,12 +3234,12 @@ const styles = StyleSheet.create({
   sliderEnds: { flexDirection: "row", justifyContent: "space-between" },
   setHead: { flexDirection: "row", gap: 6, marginBottom: 4 },
   setCol: { color: colors.textMuted, fontSize: 9, fontWeight: "700" },
-  setRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 },
+  setRow: { flexDirection: "row", alignItems: "flex-start", gap: 6, marginBottom: 2 },
   setBlock: { borderWidth: 1, borderColor: "transparent", borderRadius: 8, padding: 2, marginBottom: 2 },
   updatedSetBlock: { borderColor: "rgba(94,234,212,0.5)", backgroundColor: "rgba(94,234,212,0.06)" },
-  completedSetRow: { opacity: 0.72 },
+  completedSetRow: { borderColor: colors.border },
   setNum: { color: colors.textSecondary, fontSize: 13 },
-  lastHint: { color: colors.textMuted, fontSize: 8 },
+  lastHint: { color: colors.textMuted, fontSize: 8, textAlign: "center", marginTop: 2 },
   setInput: {
     height: 34,
     borderRadius: 8,
@@ -3204,6 +3250,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 13,
   },
+  setInputFill: { width: "100%" },
   addSet: {
     marginTop: 4,
     borderWidth: 1,
@@ -3256,7 +3303,7 @@ const styles = StyleSheet.create({
   },
   actionPillSolidActive: {
     borderColor: colors.accentPrimary,
-    backgroundColor: "rgba(156, 192, 232, 0.12)",
+    backgroundColor: "rgba(255, 107, 53, 0.12)",
   },
   actionPillSolidText: {
     color: colors.textPrimary,

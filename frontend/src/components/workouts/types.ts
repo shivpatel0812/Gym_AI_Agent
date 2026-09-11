@@ -71,6 +71,14 @@ export interface SessionExercise {
   weight?: number;
   time?: number;
   speed?: number;
+  /** Total ground covered, in miles. Only cardio that covers ground carries it. */
+  distance_miles?: number;
+  /** How many sprint intervals were run. */
+  sprint_intervals?: number;
+  /** How long one sprint lasted, in seconds — not the total spent sprinting. */
+  sprint_seconds?: number;
+  /** Pace held during the sprints, in mph. Optional; the count is the point. */
+  sprint_speed?: number;
   intensity?: number;
   fatigue?: number;
   notes?: string;

@@ -10,13 +10,23 @@ import {
 /** Bump with the backend whenever persisted prescriptions must be recomputed. */
 export const CURRENT_RECOMMENDATION_ALGORITHM_VERSION = 1;
 
+const CARDIO_FIELDS = [
+  "time",
+  "speed",
+  "intensity",
+  "fatigue",
+  "distance_miles",
+  "sprint_intervals",
+  "sprint_seconds",
+  "sprint_speed",
+] as const;
+
 export function isCardioExercise(ex: SessionExercise) {
   return (
     Boolean(ex.exercise_id?.startsWith("default-cardio")) ||
-    Object.prototype.hasOwnProperty.call(ex, "time") ||
-    Object.prototype.hasOwnProperty.call(ex, "speed") ||
-    Object.prototype.hasOwnProperty.call(ex, "intensity") ||
-    Object.prototype.hasOwnProperty.call(ex, "fatigue")
+    CARDIO_FIELDS.some((field) =>
+      Object.prototype.hasOwnProperty.call(ex, field)
+    )
   );
 }
 
@@ -34,6 +44,108 @@ export function isSportCardio(ex: SessionExercise) {
     Boolean(ex.exercise_id?.startsWith("default-cardio-sport")) ||
     (isCardioExercise(ex) && !isTreadmillCardio(ex))
   );
+}
+
+/**
+ * Cardio that covers ground, so miles and a pace mean something.
+ *
+ * Deliberately wider than `isTreadmillCardio`: an outdoor run logs as a *sport*
+ * entry (`default-cardio-sport-running`), which is exactly the case miles were
+ * asked for. Basketball is not on this list — a distance box on a pickup game
+ * is a field nobody can fill in.
+ */
+const DISTANCE_CARDIO_IDS = new Set([
+  "default-cardio-run",
+  "default-cardio-normal-walk",
+  "default-cardio-incline-walk",
+  "default-cardio-sport-running",
+  "default-cardio-sport-walking",
+  "default-cardio-sport-cycling",
+  "default-cardio-sport-hiking",
+  "default-cardio-sport-swimming",
+]);
+
+const DISTANCE_NAME_HINTS = [
+  "run", "jog", "walk", "sprint", "cycl", "bike", "hike", "swim", "row",
+  "treadmill", "elliptical",
+];
+
+export function isDistanceCardio(ex: SessionExercise) {
+  // An already-logged distance settles it, whatever the entry is called. A
+  // typed "Other Sport" keeps its miles on the next open of the session.
+  if (ex.distance_miles != null) return true;
+  if (!isCardioExercise(ex)) return false;
+  if (DISTANCE_CARDIO_IDS.has(ex.exercise_id || "")) return true;
+  const name = (ex.exercise_name || "").toLowerCase();
+  return DISTANCE_NAME_HINTS.some((hint) => name.includes(hint));
+}
+
+function positiveNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Total time spent sprinting, in seconds. Derived — never stored. */
+export function totalSprintSeconds(ex: SessionExercise): number | null {
+  const count = positiveNumber(ex.sprint_intervals);
+  const each = positiveNumber(ex.sprint_seconds);
+  if (!count || !each) return null;
+  return Math.round(count * each);
+}
+
+/** Seconds as m:ss. 245 → "4:05". */
+export function formatDuration(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Minutes per mile, as "8:45 /mi".
+ *
+ * Computed from the pair logged in one session, the same rule the e1RM follows:
+ * a best time and a best distance from different runs is a pace nobody ran.
+ */
+export function formatPace(
+  minutes?: number | null,
+  miles?: number | null
+): string | null {
+  const time = positiveNumber(minutes);
+  const distance = positiveNumber(miles);
+  if (!time || !distance) return null;
+  return `${formatDuration((time / distance) * 60)} /mi`;
+}
+
+/**
+ * "8 × 30s sprints (4:00)". Requires the count: a duration with nothing to
+ * multiply it by does not describe a session.
+ */
+export function formatSprintLine(ex: SessionExercise): string | null {
+  const count = positiveNumber(ex.sprint_intervals);
+  if (!count) return null;
+  const each = positiveNumber(ex.sprint_seconds);
+  const speed = positiveNumber(ex.sprint_speed);
+  let line = each ? `${count} × ${each}s sprints` : `${count} sprints`;
+  const total = totalSprintSeconds(ex);
+  if (total) line += ` (${formatDuration(total)})`;
+  if (speed) line += ` @ ${speed} mph`;
+  return line;
+}
+
+/** One line describing a logged cardio effort, or null when nothing was logged. */
+export function formatCardioLine(ex: SessionExercise): string | null {
+  const parts: string[] = [];
+  const miles = positiveNumber(ex.distance_miles);
+  const time = positiveNumber(ex.time);
+  if (miles) parts.push(`${miles} mi`);
+  if (time) parts.push(`${time} min`);
+  const pace = formatPace(time, miles);
+  if (pace) parts.push(pace);
+  const speed = positiveNumber(ex.speed);
+  if (speed) parts.push(`${speed} mph`);
+  const sprints = formatSprintLine(ex);
+  if (sprints) parts.push(sprints);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 function sportIdFromName(name: string) {
@@ -121,7 +233,7 @@ export function splitBadgeColors(label: string): { bg: string; text: string } | 
   if (!l) return null;
   if (l.includes("push")) return { bg: "#3D2B56", text: "#C084FC" };
   if (l.includes("pull")) return { bg: "#064E3B", text: "#34D399" };
-  if (l.includes("leg") || l.includes("lower")) return { bg: "#3D2A14", text: "#9CC0E8" };
+  if (l.includes("leg") || l.includes("lower")) return { bg: "#3D2A14", text: "#FF6B35" };
   if (l.includes("upper")) return { bg: "#2A1A14", text: "#FF8F66" };
   if (l.includes("full")) return { bg: "#1E2A38", text: "#E4B896" };
   return { bg: "#1E2A38", text: "#A1A1AA" };
@@ -777,7 +889,14 @@ export type MuscleGroupLogHit = {
   exercise: SessionExercise;
 };
 
-/** Last N individual exercise logs for a muscle group, newest first (not grouped by session). */
+/**
+ * Last N exercises logged for a muscle group, newest first, one row per exercise.
+ *
+ * The rows are an add-to-session picker, so a second row for the same exercise is a
+ * duplicate button: tapping either adds the same thing, and adding one greys out the
+ * rest. Deduping keeps the most recent log of each — the one worth seeing before
+ * repeating it — and spends the five slots on five different lifts.
+ */
 export function getRecentMuscleGroupLogs(
   sessions: WorkoutSession[],
   muscleGroup: string,
@@ -786,6 +905,7 @@ export function getRecentMuscleGroupLogs(
   limit = 5
 ): MuscleGroupLogHit[] {
   const hits: MuscleGroupLogHit[] = [];
+  const seen = new Set<string>();
   const sorted = [...sessions].sort((a, b) =>
     String(b.date || "").localeCompare(String(a.date || ""))
   );
@@ -796,11 +916,21 @@ export function getRecentMuscleGroupLogs(
       return exerciseMatchesMuscleGroup(cat, muscleGroup);
     });
     for (const exercise of matched) {
+      const key = exerciseIdentity(exercise);
+      if (seen.has(key)) continue;
+      seen.add(key);
       hits.push({ session, exercise });
       if (hits.length >= limit) return hits;
     }
   }
   return hits;
+}
+
+/** Identity for deduping history rows: the id when there is one, else the name. */
+function exerciseIdentity(ex: SessionExercise): string {
+  const id = String(ex.exercise_id || "").trim();
+  if (id) return `id:${id}`;
+  return `name:${String(ex.exercise_name || "").trim().toLowerCase()}`;
 }
 
 function workingSets(ex: SessionExercise) {

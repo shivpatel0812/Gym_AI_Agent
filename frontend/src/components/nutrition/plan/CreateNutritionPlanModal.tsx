@@ -786,7 +786,7 @@ const styles = StyleSheet.create({
   },
   modelChipOn: {
     borderColor: colors.accentPrimary,
-    backgroundColor: "rgba(156, 192, 232,0.18)",
+    backgroundColor: "rgba(255, 107, 53,0.18)",
   },
   modelChipText: { color: colors.textSecondary, fontWeight: "700", fontSize: 13 },
   modelChipTextOn: { color: colors.accentPrimary },
@@ -808,7 +808,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  miniChipOn: { borderColor: colors.accentPrimary, backgroundColor: "rgba(156, 192, 232,0.12)" },
+  miniChipOn: { borderColor: colors.accentPrimary, backgroundColor: "rgba(255, 107, 53,0.12)" },
   miniChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: "600" },
   miniChipTextOn: { color: colors.accentPrimary },
   addBtn: {

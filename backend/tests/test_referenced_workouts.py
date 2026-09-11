@@ -92,6 +92,39 @@ class TestResolvingReferencedWorkouts:
             user("ok that makes sense, what should I focus on?"),
         ]) == []
 
+    def test_a_date_carrying_a_statistic_is_never_on_the_table(self):
+        """
+        The real one. The coach reports progress by date constantly, and every
+        such date used to be a template a single "yes" could adopt — including
+        a "yes" answering an entirely different question. This conversation
+        imported three sessions, and with them a cable fly the user had done
+        once in August that no later conversation could remove.
+        """
+        assert _referenced_workout_dates([
+            user("I want to press 90s on incline in 12 weeks"),
+            coach("You're currently at 80s x 6 as of September 4, 2026, "
+                  "up from 75s x 7 on August 14, 2026."),
+            user("Full set at least 3 reps"),
+            coach("Do you have 5 lb dumbbell jumps, and no shoulder pain?"),
+            user("Yes I have all of this"),
+        ]) == []
+
+    def test_agreement_still_adopts_a_workout_the_coach_offered(self):
+        """The other half: the coach holds the log, so it is usually the coach
+        who names the session. Narrowing the table must not close it."""
+        assert _referenced_workout_dates([
+            user("build my push day"),
+            coach("Your September 4, 2026 push session had seven exercises."),
+            user("yes"),
+        ]) == ["2026-09-04"]
+
+    def test_a_statistic_and_an_offer_in_one_turn_take_only_the_offer(self):
+        assert _referenced_workout_dates([
+            coach("You were at 80s x 6 on September 4, 2026. "
+                  "Shall I build Pull A from your August 17, 2026 session?"),
+            user("yes"),
+        ]) == ["2026-08-17"]
+
     def test_a_rejection_clears_the_table(self):
         assert _referenced_workout_dates([
             user("build me a push day"),

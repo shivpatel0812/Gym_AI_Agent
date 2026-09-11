@@ -16,7 +16,7 @@ import type { FoodFit } from "./types";
 
 export const BAND_COLORS: Record<FoodFit["band"], { fg: string; bg: string }> = {
   excellent: { fg: colors.ai, bg: "rgba(94,234,212,0.12)" },
-  good: { fg: colors.accentPrimary, bg: "rgba(156,192,232,0.12)" },
+  good: { fg: colors.accentPrimary, bg: "rgba(255, 107, 53,0.12)" },
   fair: { fg: macro.carbs, bg: "rgba(245,197,66,0.12)" },
   poor: { fg: colors.attention, bg: "rgba(228,137,107,0.12)" },
   trivial: { fg: colors.textMutedCool, bg: "rgba(124,140,160,0.10)" },

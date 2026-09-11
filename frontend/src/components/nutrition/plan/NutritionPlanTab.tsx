@@ -1410,7 +1410,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: "rgba(156, 192, 232,0.12)",
+    backgroundColor: "rgba(255, 107, 53,0.12)",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 2,
@@ -1453,7 +1453,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(156, 192, 232,0.45)",
+    borderColor: "rgba(255, 107, 53,0.45)",
   },
   coachBtnText: { color: colors.accentPrimary, fontWeight: "700", fontSize: 14 },
   footerActions: {
