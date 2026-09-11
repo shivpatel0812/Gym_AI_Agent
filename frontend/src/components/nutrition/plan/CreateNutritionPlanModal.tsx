@@ -37,6 +37,10 @@ import {
   normalizeAiModel,
 } from "../../../lib/aiModels";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  NUTRITION_DISCLAIMER,
+  EATING_DISORDER_NOTE,
+} from "../../legal/disclaimers";
 
 interface Props {
   visible: boolean;
@@ -343,6 +347,10 @@ export default function CreateNutritionPlanModal({
                     ))}
                   </>
                 ) : null}
+                <View style={styles.disclaimerBox}>
+                  <Text style={styles.disclaimerText}>{NUTRITION_DISCLAIMER}</Text>
+                  <Text style={styles.disclaimerText}>{EATING_DISORDER_NOTE}</Text>
+                </View>
               </ScrollView>
               <View style={styles.actions}>
                 <TouchableOpacity style={styles.secondary} onPress={discard} disabled={busy}>
@@ -848,4 +856,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   primaryText: { color: colors.onAccent, fontWeight: "700" },
+  disclaimerBox: {
+    marginTop: spacing.lg,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: spacing.sm,
+  },
+  disclaimerText: {
+    fontSize: 11,
+    color: colors.textMuted,
+    lineHeight: 16,
+  },
 });

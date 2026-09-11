@@ -27,6 +27,7 @@ import apiClient from "../../api/client";
 import PlanReviewContent from "./PlanReviewContent";
 import { lockedListPrompt } from "./reviewEdits";
 import { colors, spacing, borderRadius } from "../../theme";
+import { TRAINING_DISCLAIMER } from "../legal/disclaimers";
 
 interface Props {
   visible: boolean;
@@ -280,6 +281,9 @@ export default function CreatePlanModal({
                   onDaysChange={persistDays}
                   savingDays={savingDays}
                 />
+                <View style={styles.disclaimerBox}>
+                  <Text style={styles.disclaimerText}>{TRAINING_DISCLAIMER}</Text>
+                </View>
               </ScrollView>
 
               <View style={styles.actions}>
@@ -614,4 +618,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   primaryButtonText: { color: colors.onAccent, fontWeight: "700", fontSize: 14 },
+  disclaimerBox: {
+    marginTop: spacing.lg,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  disclaimerText: {
+    fontSize: 11,
+    color: colors.textMuted,
+    lineHeight: 16,
+  },
 });
