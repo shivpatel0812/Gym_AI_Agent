@@ -140,6 +140,16 @@ export interface PhysicalActivity {
 }
 
 // Nutrition types
+/** Goal fit for one food — not absolute healthiness. Null score = too small. */
+export interface FoodFit {
+  score: number | null;
+  band: "excellent" | "good" | "fair" | "poor" | "trivial";
+  reason: string;
+  goal?: string;
+  protein_ratio?: number | null;
+  slot_share?: number | null;
+}
+
 export interface FoodItem {
   name: string;
   calories: number;
@@ -151,18 +161,35 @@ export interface FoodItem {
   sodium?: number;
   meal?: string;
   amount?: string;
+  quantity?: number;
+  unit_amount?: string;
+  uncertain?: boolean;
+  usual_id?: string;
+  anchor_id?: string;
+  log_source?: "photo";
+  was_adjusted?: boolean;
+  logged_at?: string;
+  eaten_at?: string;
+  slot_source?: "auto" | "user";
+  moved_from?: string;
+  /** Server-computed goal fit. Read-only; never send back on a write. */
+  fit?: FoodFit | null;
 }
 
 export interface MacroEntry {
   id?: string;
   date: string;
   food_items?: FoodItem[];
+  fit_score?: number | null;
+  fit_band?: FoodFit["band"] | null;
   total_calories?: number;
   total_protein?: number;
   total_carbs?: number;
   total_fats?: number;
   total_fiber?: number;
   total_sodium?: number;
+  updated_at?: string;
+  created_at?: string;
 }
 
 // Wellness types

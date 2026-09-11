@@ -4,6 +4,10 @@ import apiClient from "../lib/api-client";
 import { auth } from "../lib/firebase";
 import { MacroEntry, FoodItem, HydrationEntry } from "../types";
 import LogFoodForm, { MEALS } from "../components/nutrition/LogFoodModal";
+import { DayFitSummary, FitBadge, FitReason } from "../components/nutrition/FitBadge";
+import MealTimingCard from "../components/nutrition/MealTimingCard";
+import { foodClockLabel, isMoved, moveFoodToMeal, replaceFoodAt } from "../lib/mealTiming";
+import { displayMealLabel } from "../lib/recentMeals";
 
 /**
  * Meal rows on Today are fixed labels; plan anchors use slot ids. Map one to
@@ -300,6 +304,7 @@ export default function NutritionPage() {
     entryId: string;
     indexInEntry: number;
   } | null>(null);
+  const [timingRefresh, setTimingRefresh] = useState(0);
   const [targets, setTargets] = useState<NutritionTargets>(loadCachedTargets);
   const [targetDraft, setTargetDraft] = useState<NutritionTargets>(loadCachedTargets);
   const [showTargets, setShowTargets] = useState(false);
@@ -487,8 +492,27 @@ export default function NutritionPage() {
       });
       setEditingFood(null);
       fetchAll();
+      setTimingRefresh((n) => n + 1);
     } catch (error) {
       console.error("Error updating food:", error);
+    }
+  };
+
+  const moveFood = async (row: MealRow, targetMeal: string) => {
+    const next = moveFoodToMeal(row.food, targetMeal);
+    if (next === row.food) return;
+    try {
+      const entry = dayEntries.find((e) => e.id === row.entryId);
+      if (!entry?.id) return;
+      const newItems = replaceFoodAt(entry.food_items || [], row.indexInEntry, next);
+      await apiClient.put(`/api/macros/${entry.id}`, {
+        date: entry.date,
+        food_items: newItems,
+      });
+      fetchAll();
+      setTimingRefresh((n) => n + 1);
+    } catch (error) {
+      console.error("Error moving food:", error);
     }
   };
 
@@ -790,6 +814,17 @@ export default function NutritionPage() {
       </div>
 
       <TodayGuidanceCard guidance={guidance} />
+
+      <div className="mb-6 flex flex-wrap items-center gap-3">
+        <DayFitSummary
+          score={dayEntries[0]?.fit_score}
+          band={dayEntries[0]?.fit_band}
+        />
+      </div>
+
+      <div className="mb-6">
+        <MealTimingCard refreshKey={timingRefresh} />
+      </div>
 
       {showTargets && (
         <div className="rounded-2xl bg-[#161A22] border border-[#2A2D35] p-5 mb-6">
@@ -1105,14 +1140,45 @@ export default function NutritionPage() {
                               <MdEdit size={14} />
                             </button>
                             <div className="min-w-0">
-                              <p className="text-sm font-medium text-white truncate">
-                                {row.food.name}
-                              </p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-medium text-white truncate">
+                                  {row.food.name}
+                                </p>
+                                <FitBadge fit={row.food.fit} compact />
+                              </div>
                               {row.food.amount && (
                                 <p className="text-[11px] text-[#636366] sm:hidden truncate">
                                   {row.food.amount}
                                 </p>
                               )}
+                              <FitReason fit={row.food.fit} />
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                {foodClockLabel(row.food, selectedDate) ? (
+                                  <span className="text-[10px] text-[#7C8CA0]">
+                                    {foodClockLabel(row.food, selectedDate)}
+                                  </span>
+                                ) : null}
+                                {isMoved(row.food) ? (
+                                  <span className="text-[10px] text-[#F5C542]">
+                                    moved from {displayMealLabel(row.food.moved_from || "")}
+                                  </span>
+                                ) : null}
+                                <label className="sr-only" htmlFor={`move-${row.entryId}-${row.indexInEntry}`}>
+                                  Move to meal
+                                </label>
+                                <select
+                                  id={`move-${row.entryId}-${row.indexInEntry}`}
+                                  value={row.food.meal || meal.id}
+                                  onChange={(e) => void moveFood(row, e.target.value)}
+                                  className="rounded-md border border-[#2A2D35] bg-[#0B0C10] px-1.5 py-0.5 text-[10px] text-[#8E8E93]"
+                                >
+                                  {MEALS.map((m) => (
+                                    <option key={m.id} value={m.id}>
+                                      Move to {m.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
                             </div>
                           </div>
                           <div className="hidden sm:block sm:col-span-2 text-right text-xs text-[#636366]">

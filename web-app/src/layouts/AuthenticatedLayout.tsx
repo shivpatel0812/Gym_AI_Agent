@@ -16,6 +16,7 @@ import {
   MdClose,
   MdAutoAwesome,
   MdTimeline,
+  MdTrendingUp,
   MdAccessibilityNew,
 } from "react-icons/md";
 
@@ -40,6 +41,7 @@ export default function AuthenticatedLayout({
     { label: "Dashboard", href: "/dashboard", icon: MdDashboard },
     { label: "My Plan", href: "/plan-generator", icon: MdAutoAwesome },
     { label: "Plan Hub", href: "/plan", icon: MdTimeline },
+    { label: "Progress", href: "/progress", icon: MdTrendingUp },
     { label: "Workouts", href: "/workouts", icon: MdFitnessCenter },
     { label: "Activity", href: "/activity", icon: MdDirectionsRun },
     { label: "Nutrition", href: "/nutrition", icon: MdRestaurant },

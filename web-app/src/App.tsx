@@ -12,6 +12,7 @@ import GeneralAnalysisPage from './pages/GeneralAnalysisPage'
 import ChatbotPage from './pages/ChatbotPage'
 import PlanGeneratorPage from './pages/PlanGeneratorPage'
 import PlanRoadmapPage from './pages/PlanRoadmapPage'
+import ProgressHubPage from './pages/ProgressHubPage'
 import BodyScanPage from './pages/BodyScanPage'
 import AuthenticatedLayout from './layouts/AuthenticatedLayout'
 
@@ -46,6 +47,7 @@ function App() {
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/plan-generator" element={<PlanGeneratorPage />} />
                 <Route path="/plan" element={<PlanRoadmapPage />} />
+                <Route path="/progress" element={<ProgressHubPage />} />
                 <Route path="/workouts" element={<WorkoutsPage />} />
                 <Route path="/activity" element={<ActivityPage />} />
                 <Route path="/nutrition" element={<NutritionPage />} />

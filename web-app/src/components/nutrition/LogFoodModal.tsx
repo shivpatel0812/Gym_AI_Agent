@@ -1,14 +1,26 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { FoodItem } from "@/types";
+import { FoodFit, FoodItem } from "@/types";
 import foodDatabase, { FoodDbItem } from "@/data/foodDatabase";
 import apiClient from "@/lib/api-client";
-import { MdClose, MdSearch, MdPhotoCamera, MdImage } from "react-icons/md";
+import {
+  acceptPhotoLog,
+  previewFit,
+  type EstimateMacros,
+} from "@/api/macrosHelpers";
+import { MdAutoAwesome, MdClose, MdSearch, MdPhotoCamera, MdImage } from "react-icons/md";
 import {
   AI_MODEL_OPTIONS,
   AiModelId,
   loadStoredAiModel,
   persistAiModel,
 } from "@/lib/aiModels";
+import MacroAdjustChat, {
+  type AdjustChatEstimate,
+  type RevisedEstimate,
+} from "./MacroAdjustChat";
+import { FitBadge, FitReason } from "./FitBadge";
+
+type EstimateComponent = NonNullable<EstimateMacros["components"]>[number];
 
 async function compressImage(file: File): Promise<File> {
   // Match the backend image limit in both orientations.
@@ -127,6 +139,17 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
   const [estimateError, setEstimateError] = useState<string | null>(null);
   const estimateQueryRef = useRef("");
   const lastEstimatedRef = useRef("");
+  const [photoLogId, setPhotoLogId] = useState<string | null>(null);
+  const [estimateComponents, setEstimateComponents] = useState<EstimateComponent[]>(
+    []
+  );
+  const [estimateAnalysis, setEstimateAnalysis] = useState<
+    AdjustChatEstimate["analysis"]
+  >(undefined);
+  const [showAdjustChat, setShowAdjustChat] = useState(false);
+  const [estimateRevised, setEstimateRevised] = useState(false);
+  const [fit, setFit] = useState<FoodFit | null>(null);
+  const fitSeq = useRef(0);
 
   const selectAiModel = (model: AiModelId) => {
     setAiModel(model);
@@ -264,6 +287,52 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
     return () => window.clearTimeout(timer);
   }, [query, results.length, selected, mode]);
 
+  // Goal fit is scored server-side so the badge cannot disagree with the
+  // day's log. Re-request as the user edits macros after an estimate.
+  useEffect(() => {
+    if (!fromPhoto || mode !== "custom") {
+      setFit(null);
+      return;
+    }
+    const calories = parseFloat(customCalories);
+    const protein = parseFloat(customProtein);
+    if (!Number.isFinite(calories) || calories < 0 || !Number.isFinite(protein) || protein < 0) {
+      setFit(null);
+      return;
+    }
+    const carbs = parseFloat(customCarbs);
+    const fats = parseFloat(customFats);
+    const fiber = parseFloat(customFiber);
+    const seq = ++fitSeq.current;
+    const timer = window.setTimeout(() => {
+      void previewFit({
+        calories: Math.round(calories),
+        protein: Math.round(protein * 10) / 10,
+        carbs: Number.isFinite(carbs) && carbs >= 0 ? Math.round(carbs * 10) / 10 : 0,
+        fats: Number.isFinite(fats) && fats >= 0 ? Math.round(fats * 10) / 10 : 0,
+        fiber: Number.isFinite(fiber) && fiber >= 0 ? Math.round(fiber * 10) / 10 : 0,
+        meal,
+      })
+        .then((next) => {
+          if (seq !== fitSeq.current) return;
+          setFit(next);
+        })
+        .catch(() => {
+          if (seq === fitSeq.current) setFit(null);
+        });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [
+    fromPhoto,
+    mode,
+    meal,
+    customCalories,
+    customProtein,
+    customCarbs,
+    customFats,
+    customFiber,
+  ]);
+
   const handleAdd = () => {
     if (!selected || !scaled || scale === 0) return;
     const amountLabel =
@@ -293,33 +362,51 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
     const carbs = parseFloat(customCarbs);
     const fats = parseFloat(customFats);
     const fiber = parseFloat(customFiber);
-    onAdd({
-      name,
+    const sugar = optionalNutrient(customSugar);
+    const sodium = optionalNutrient(customSodium);
+    const rounded = {
       calories: Math.round(calories),
       protein: Math.round(protein * 10) / 10,
       carbs: Number.isFinite(carbs) && carbs >= 0 ? Math.round(carbs * 10) / 10 : 0,
       fats: Number.isFinite(fats) && fats >= 0 ? Math.round(fats * 10) / 10 : 0,
       fiber: Number.isFinite(fiber) && fiber >= 0 ? Math.round(fiber * 10) / 10 : 0,
-      sugar: optionalNutrient(customSugar),
-      sodium: optionalNutrient(customSodium),
+    };
+    onAdd({
+      name,
+      ...rounded,
+      sugar,
+      sodium,
       meal,
       amount: customAmount.trim() || undefined,
+      ...(fromPhoto
+        ? {
+            log_source: "photo" as const,
+            was_adjusted: estimateRevised,
+          }
+        : {}),
     });
     void rememberFood(
       {
         name,
         serving: customAmount.trim() || "1 serving",
         grams: 100,
-        calories: Math.round(calories),
-        protein: Math.round(protein * 10) / 10,
-        carbs: Number.isFinite(carbs) && carbs >= 0 ? Math.round(carbs * 10) / 10 : 0,
-        fats: Number.isFinite(fats) && fats >= 0 ? Math.round(fats * 10) / 10 : 0,
-        fiber: Number.isFinite(fiber) && fiber >= 0 ? Math.round(fiber * 10) / 10 : 0,
-        sugar: optionalNutrient(customSugar),
-        sodium: optionalNutrient(customSodium),
+        ...rounded,
+        sugar,
+        sodium,
       },
       [name]
     );
+    // Label the archived photo with what was actually committed. Best-effort —
+    // never block the log.
+    if (photoLogId) {
+      void acceptPhotoLog(photoLogId, {
+        name,
+        amount: customAmount.trim() || undefined,
+        ...rounded,
+        sugar,
+        sodium,
+      }).catch(() => {});
+    }
   };
 
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -344,18 +431,25 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
     setPhotoError(null);
   };
 
-  const applyEstimateToCustom = (item: {
-    name?: string;
-    amount?: string;
-    serving?: string;
-    calories?: number;
-    protein?: number;
-    carbs?: number;
-    fats?: number;
-    fiber?: number;
-    sugar?: number;
-    sodium?: number;
-  }) => {
+  const applyEstimateToCustom = (
+    item: {
+      name?: string;
+      amount?: string;
+      serving?: string;
+      calories?: number;
+      protein?: number;
+      carbs?: number;
+      fats?: number;
+      fiber?: number;
+      sugar?: number;
+      sodium?: number;
+    },
+    meta?: {
+      photoLogId?: string | null;
+      analysis?: AdjustChatEstimate["analysis"];
+      components?: EstimateComponent[];
+    }
+  ) => {
     const title = photoTitle.trim();
     setCustomName(title || item.name || "Meal");
     setCustomAmount(item.amount || item.serving || "");
@@ -366,8 +460,56 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
     setCustomFiber(String(Number(item.fiber) || 0));
     setCustomSugar(String(optionalNutrient(item.sugar) ?? ""));
     setCustomSodium(String(optionalNutrient(item.sodium) ?? ""));
+    setPhotoLogId(meta?.photoLogId?.trim() || null);
+    const components =
+      meta?.components?.length
+        ? meta.components
+        : Array.isArray(meta?.analysis?.components)
+        ? (meta!.analysis!.components as EstimateComponent[])
+        : [];
+    setEstimateComponents(components);
+    setEstimateAnalysis(meta?.analysis);
+    setEstimateRevised(false);
     setFromPhoto(true);
     setMode("custom");
+  };
+
+  const buildCurrentEstimate = (): AdjustChatEstimate => ({
+    name: customName.trim() || "Meal",
+    amount: customAmount.trim() || undefined,
+    calories: Number(customCalories) || 0,
+    protein: Number(customProtein) || 0,
+    carbs: Number(customCarbs) || 0,
+    fats: Number(customFats) || 0,
+    fiber: Number(customFiber) || 0,
+    sugar: optionalNutrient(customSugar),
+    sodium: optionalNutrient(customSodium),
+    components: estimateComponents,
+    analysis: {
+      ...estimateAnalysis,
+      components: estimateComponents,
+    },
+  });
+
+  const handleApplyRevision = (revised: RevisedEstimate) => {
+    setCustomName(revised.name || customName);
+    setCustomAmount(revised.amount || customAmount);
+    setCustomCalories(String(Math.round(Number(revised.calories) || 0)));
+    setCustomProtein(String(Number(revised.protein) || 0));
+    setCustomCarbs(String(Number(revised.carbs) || 0));
+    setCustomFats(String(Number(revised.fats) || 0));
+    setCustomFiber(String(Number(revised.fiber) || 0));
+    if (revised.sugar != null) setCustomSugar(String(revised.sugar));
+    if (revised.sodium != null) setCustomSodium(String(revised.sodium));
+    if (revised.components?.length) {
+      setEstimateComponents(revised.components);
+      setEstimateAnalysis((prev) => ({
+        ...prev,
+        components: revised.components,
+      }));
+    }
+    setEstimateRevised(true);
+    setShowAdjustChat(false);
   };
 
   const handleEstimateMacros = async () => {
@@ -395,10 +537,23 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
           );
           return;
         }
-        applyEstimateToCustom({
-          ...item,
-          name: title || item.name,
-        });
+        const analysis = response.data?.analysis;
+        applyEstimateToCustom(
+          {
+            ...item,
+            name: title || item.name,
+          },
+          {
+            photoLogId:
+              typeof response.data?.photo_log_id === "string"
+                ? response.data.photo_log_id
+                : null,
+            analysis,
+            components: Array.isArray(analysis?.components)
+              ? analysis.components
+              : [],
+          }
+        );
         return;
       }
 
@@ -414,7 +569,12 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
         setPhotoError("Could not estimate that food. Add more detail.");
         return;
       }
-      applyEstimateToCustom(item);
+      const analysis = res.data?.analysis;
+      applyEstimateToCustom(item, {
+        photoLogId: null,
+        analysis,
+        components: Array.isArray(analysis?.components) ? analysis.components : [],
+      });
     } catch (error: any) {
       setPhotoError(
         error.response?.data?.detail || "Could not estimate macros. Please try again."
@@ -853,9 +1013,50 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
       {mode === "custom" && (
         <>
           {fromPhoto && (
-            <p className="text-xs text-[#5EEAD4]">
-            Filled from your estimate — edit anything that looks off, then add.
-            </p>
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-xs text-[#5EEAD4]">
+                  Filled from your estimate — edit anything that looks off, then add.
+                </p>
+                {fit ? <FitBadge fit={fit} /> : null}
+              </div>
+              {fit ? <FitReason fit={fit} /> : null}
+
+              {estimateComponents.length > 0 ? (
+                <div className="space-y-1.5 rounded-xl border border-[#2A2D35] bg-[#0F1117] px-3.5 py-3">
+                  <p className="text-[9px] font-extrabold uppercase tracking-wide text-[#667487]">
+                    What’s counted
+                  </p>
+                  {estimateComponents.map((component, index) => (
+                    <div
+                      key={`${component.name}-${index}`}
+                      className="flex items-center justify-between gap-2"
+                    >
+                      <p className="min-w-0 flex-1 truncate text-xs text-[#BAC4D0]">
+                        {component.name}
+                        {component.amount ? (
+                          <span className="text-[10px] text-[#667487]">
+                            {`  ${component.amount}`}
+                          </span>
+                        ) : null}
+                      </p>
+                      <p className="text-[11px] font-bold text-[#8E8E93]">
+                        {component.calories ?? 0} kcal
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => setShowAdjustChat(true)}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[rgba(94,234,212,0.28)] bg-[rgba(94,234,212,0.08)] py-3 text-sm font-bold text-[#5EEAD4] hover:bg-[rgba(94,234,212,0.14)]"
+              >
+                <MdAutoAwesome size={16} />
+                Fix Results
+              </button>
+            </div>
           )}
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#636366] mb-2">
@@ -976,6 +1177,16 @@ export default function LogFoodForm({ meal, onAdd, onCancel }: LogFoodFormProps)
           >
             Add to {meal}
           </button>
+
+          <MacroAdjustChat
+            open={showAdjustChat && fromPhoto}
+            onClose={() => setShowAdjustChat(false)}
+            currentEstimate={buildCurrentEstimate()}
+            photoLogId={photoLogId}
+            model={aiModel}
+            onPhotoLogId={setPhotoLogId}
+            onApply={handleApplyRevision}
+          />
         </>
       )}
     </div>
