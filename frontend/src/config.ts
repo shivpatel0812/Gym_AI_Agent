@@ -58,11 +58,11 @@ export const firebaseConfig = {
 export const legal = {
   privacyPolicyUrl:
     resolve("EXPO_PUBLIC_PRIVACY_POLICY_URL", "privacyPolicyUrl") ||
-    "https://gymai.app/privacy",
+    "https://gym-ai-agent-five.vercel.app/privacy",
   termsUrl:
-    resolve("EXPO_PUBLIC_TERMS_URL", "termsUrl") || "https://gymai.app/terms",
+    resolve("EXPO_PUBLIC_TERMS_URL", "termsUrl") || "https://gym-ai-agent-five.vercel.app/terms",
   supportEmail:
-    resolve("EXPO_PUBLIC_SUPPORT_EMAIL", "supportEmail") || "support@gymai.app",
+    resolve("EXPO_PUBLIC_SUPPORT_EMAIL", "supportEmail") || "shivpatelca2@gmail.com",
 };
 
 /** Minimum age to create an account (Guideline 1.3 / COPPA). */
