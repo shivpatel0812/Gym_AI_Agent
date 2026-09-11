@@ -23,25 +23,11 @@ export default function MoreHome({ navigation }: MoreHomeProps) {
       screen: "Wellness",
     },
     {
-      id: "Dashboard",
-      title: "Dashboard",
-      subtitle: "Overview of your fitness",
-      icon: "view-dashboard" as keyof typeof MaterialCommunityIcons.glyphMap,
-      screen: "Dashboard",
-    },
-    {
       id: "UserProfile",
       title: "My Profile",
       subtitle: "Complete fitness profile",
       icon: "account-circle" as keyof typeof MaterialCommunityIcons.glyphMap,
       screen: "UserProfile",
-    },
-    {
-      id: "Calendar",
-      title: "Calendar",
-      subtitle: "View all activities",
-      icon: "calendar-month" as keyof typeof MaterialCommunityIcons.glyphMap,
-      screen: "Calendar",
     },
     {
       id: "SavedFoods",

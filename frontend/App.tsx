@@ -28,7 +28,6 @@ import apiClient from "./src/api/client";
 import { toDateKey } from "./src/components/nutrition/types";
 import type { FoodItem, MacroEntry } from "./src/components/nutrition/types";
 import Login from "./src/components/Login";
-import Dashboard from "./src/components/Dashboard";
 import Home from "./src/components/home/Home";
 import AIHub from "./src/components/aihub";
 import Workouts from "./src/components/workouts";
@@ -39,10 +38,7 @@ import MoreHome from "./src/components/MoreHome";
 import Settings from "./src/components/Settings";
 import BodyScanScreen from "./src/components/bodyScan/BodyScanScreen";
 import ProgressHub from "./src/components/progress/ProgressHub";
-import AIChat from "./src/components/AIChat";
-import AIAnalysis from "./src/components/AIAnalysis";
 import UserProfile from "./src/components/UserProfile";
-import Calendar from "./src/components/Calendar";
 import {
   View,
   Text,
@@ -110,29 +106,9 @@ function MoreStackScreen() {
         options={{ title: "More" }}
       />
       <MoreStack.Screen
-        name="Dashboard"
-        component={Dashboard}
-        options={{ title: "Dashboard" }}
-      />
-      <MoreStack.Screen
-        name="AIChat"
-        component={AIChat}
-        options={{ title: "AI Coach" }}
-      />
-      <MoreStack.Screen
-        name="AIAnalysis"
-        component={AIAnalysis}
-        options={{ title: "AI Analysis" }}
-      />
-      <MoreStack.Screen
         name="UserProfile"
         component={UserProfile}
         options={{ title: "My Profile" }}
-      />
-      <MoreStack.Screen
-        name="Calendar"
-        component={Calendar}
-        options={{ title: "Calendar" }}
       />
       <MoreStack.Screen
         name="Settings"
