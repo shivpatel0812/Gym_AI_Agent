@@ -25,8 +25,6 @@ export type ScanCapture = {
   mimeType: string;
 };
 
-type ScanMode = "food" | "barcode" | "label";
-
 type Props = {
   visible: boolean;
   busy?: boolean;
@@ -75,9 +73,7 @@ export default function ScanFoodCamera({
   const cameraRef = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [flash, setFlash] = useState<FlashMode>("off");
-  const [mode, setMode] = useState<ScanMode>("food");
   const [capturing, setCapturing] = useState(false);
-  const [modeHint, setModeHint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // `permission` changes when a request resolves, so keeping it in the effect's
   // deps re-runs the effect and re-prompts. On Android `canAskAgain` stays true
@@ -86,8 +82,6 @@ export default function ScanFoodCamera({
 
   useEffect(() => {
     if (!visible) {
-      setMode("food");
-      setModeHint(null);
       setCapturing(false);
       setError(null);
       askedRef.current = false;
@@ -109,7 +103,7 @@ export default function ScanFoodCamera({
   };
 
   const takePicture = async () => {
-    if (busy || capturing || mode !== "food") return;
+    if (busy || capturing) return;
     setCapturing(true);
     setError(null);
     try {
@@ -179,20 +173,6 @@ export default function ScanFoodCamera({
     }
   };
 
-  const selectMode = (next: ScanMode) => {
-    setMode(next);
-    setError(null);
-    if (next === "food") {
-      setModeHint(null);
-      return;
-    }
-    setModeHint(
-      next === "barcode"
-        ? "Barcode scan is coming soon — use Scan Food for now."
-        : "Food label scan is coming soon — use Scan Food for now."
-    );
-  };
-
   const granted = permission?.granted;
 
   return (
@@ -257,35 +237,6 @@ export default function ScanFoodCamera({
 
         <View style={[styles.bottom, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
-          {modeHint ? <Text style={styles.modeHint}>{modeHint}</Text> : null}
-
-          <View style={styles.modeRow}>
-            {(
-              [
-                { id: "food" as const, label: "Scan Food", icon: "food-apple-outline" as const },
-                { id: "barcode" as const, label: "Barcode", icon: "barcode" as const },
-                { id: "label" as const, label: "Food Label", icon: "tag-text-outline" as const },
-              ] as const
-            ).map((item) => {
-              const active = mode === item.id;
-              return (
-                <TouchableOpacity
-                  key={item.id}
-                  style={[styles.modeChip, active && styles.modeChipOn]}
-                  onPress={() => selectMode(item.id)}
-                >
-                  <MaterialCommunityIcons
-                    name={item.icon}
-                    size={18}
-                    color={active ? "#111111" : "#FFFFFF"}
-                  />
-                  <Text style={[styles.modeChipText, active && styles.modeChipTextOn]}>
-                    {item.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
 
           <View style={styles.shutterRow}>
             <TouchableOpacity
@@ -303,10 +254,10 @@ export default function ScanFoodCamera({
             <TouchableOpacity
               style={[
                 styles.shutter,
-                (busy || capturing || mode !== "food") && styles.shutterDisabled,
+                (busy || capturing) && styles.shutterDisabled,
               ]}
               onPress={() => void takePicture()}
-              disabled={busy || capturing || mode !== "food"}
+              disabled={busy || capturing}
               accessibilityLabel="Take photo"
             >
               <View style={styles.shutterInner} />
@@ -431,38 +382,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     marginBottom: -4,
-  },
-  modeHint: {
-    textAlign: "center",
-    color: "rgba(255,255,255,0.85)",
-    fontSize: 12,
-    marginBottom: -4,
-  },
-  modeRow: {
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 10,
-  },
-  modeChip: {
-    minWidth: 92,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: 14,
-    backgroundColor: "rgba(0,0,0,0.38)",
-  },
-  modeChipOn: {
-    backgroundColor: "#FFFFFF",
-  },
-  modeChipText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "600",
-  },
-  modeChipTextOn: {
-    color: "#111111",
   },
   shutterRow: {
     flexDirection: "row",
