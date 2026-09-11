@@ -14,9 +14,9 @@ const BUILD_NUMBER = "1";
 // Publicly reachable URLs. App Store Connect requires the privacy policy URL,
 // and Guideline 5.1.1 expects it to be reachable from inside the app too.
 const PRIVACY_POLICY_URL =
-  process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || "https://gymai.app/privacy";
-const TERMS_URL = process.env.EXPO_PUBLIC_TERMS_URL || "https://gymai.app/terms";
-const SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || "support@gymai.app";
+  process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || "https://gym-ai-agent-five.vercel.app/privacy";
+const TERMS_URL = process.env.EXPO_PUBLIC_TERMS_URL || "https://gym-ai-agent-five.vercel.app/terms";
+const SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || "shivpatelca2@gmail.com";
 
 module.exports = {
   expo: {
@@ -50,9 +50,9 @@ module.exports = {
         // the system's own TLS is exempt.
         ITSAppUsesNonExemptEncryption: false,
         NSCameraUsageDescription:
-          "GymAI uses your camera for meal photos and optional guided progress photos for AI body-scan coaching. Photos used for body scan are analyzed and then deleted.",
+          "GymAI uses your camera for meal photos (archived for estimate history) and optional guided progress photos for AI body-scan coaching (analyzed then deleted).",
         NSPhotoLibraryUsageDescription:
-          "GymAI needs photo library access so you can choose meal photos or progress photos for optional AI coaching. Body-scan photos are analyzed and then deleted.",
+          "GymAI needs photo library access so you can choose meal photos (archived for estimate history) or progress photos for optional AI coaching (analyzed then deleted).",
       },
     },
     android: {
@@ -85,16 +85,16 @@ module.exports = {
         "expo-image-picker",
         {
           photosPermission:
-            "GymAI needs photo library access so you can choose meal photos or progress photos for optional AI coaching. Body-scan photos are analyzed and then deleted.",
+            "GymAI needs photo library access so you can choose meal photos (archived for estimate history) or progress photos for optional AI coaching (analyzed then deleted).",
           cameraPermission:
-            "GymAI uses your camera for meal photos and optional guided progress photos for AI body-scan coaching. Photos used for body scan are analyzed and then deleted.",
+            "GymAI uses your camera for meal photos (archived for estimate history) and optional guided progress photos for AI body-scan coaching (analyzed then deleted).",
         },
       ],
       [
         "expo-camera",
         {
           cameraPermission:
-            "GymAI uses your camera for meal photos and optional guided progress photos for AI body-scan coaching. Photos used for body scan are analyzed and then deleted.",
+            "GymAI uses your camera for meal photos (archived for estimate history) and optional guided progress photos for AI body-scan coaching (analyzed then deleted).",
           microphonePermission: false,
           recordAudioAndroid: false,
         },
