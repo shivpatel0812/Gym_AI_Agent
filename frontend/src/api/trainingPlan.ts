@@ -174,6 +174,26 @@ export interface CardioWeekPoint {
   decision?: string;
 }
 
+export interface PaceDemand {
+  /** Weekly e1RM gain the goal needs, uncapped by what is plausible. */
+  required_weekly_gain: number;
+  /** What training delivers at the lifter's current intake. */
+  plausible_weekly_gain: number;
+  /** The same figure if they ate in a surplus — the one lever that moves it. */
+  plausible_on_surplus: number;
+  ratio: number;
+  /** Reachable on time without changing anything. */
+  within_plausible: boolean;
+  /** Reachable on time, but only by also eating for it. */
+  within_surplus: boolean;
+  weeks_requested: number;
+  weeks_at_current_pace: number | null;
+  weeks_on_surplus: number | null;
+  energy_balance: string | null;
+  /** Plain statements of what the push track is asking for. */
+  requirements: string[];
+}
+
 export interface ProjectedExercise extends PlanExercise {
   day_name: string;
   sessions_per_week: number;
@@ -193,6 +213,22 @@ export interface ProjectedExercise extends PlanExercise {
   destination?: { weight: number; reps: number; weeks?: number } | null;
   arrived_week?: number | null;
   reachable?: boolean | null;
+  /**
+   * What the stated finish line actually asks for. Present whenever a
+   * destination is set, reachable or not — "unreachable" alone gives the user
+   * nothing to act on; the required rate is the actionable part.
+   */
+  demand?: PaceDemand | null;
+  /**
+   * The session-by-session path that *does* reach the goal on time. Only sent
+   * when the steady walk misses it; when steady arrives, steady is the answer.
+   */
+  push?: {
+    best_case: WeekPoint[];
+    schedule: WeekPoint[];
+    arrived_week?: number | null;
+    reachable?: boolean | null;
+  } | null;
   /** Cardio projects minutes and pace; the lifting curves are empty when set. */
   is_cardio?: boolean;
   cardio_modality?: "steady" | "sport";

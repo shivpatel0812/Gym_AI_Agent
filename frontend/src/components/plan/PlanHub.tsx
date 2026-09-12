@@ -1039,6 +1039,7 @@ function GoalHistoryTab({
               points={chartPoints}
               height={132}
               flat={role === "maintaining"}
+              connectGaps={true}
               unit={chart.metric === "reps" ? "reps" : "e1RM"}
               onScrub={(point) => {
                 const found = sessionsForPoint(point);
@@ -1071,6 +1072,14 @@ function RoadmapTab({ exercise, role }: { exercise: ProjectedExercise; role: Rol
   const sessions = useMemo(() => getSessionRecords(exercise), [exercise]);
   const progress = goalProgress(sessions, role, current, target);
   const flatChart = role === "maintaining" || role === "support";
+  // Steady is the default because it is what training normally delivers.
+  // The push track is offered, never pre-selected: it is what the goal
+  // demands, not what is expected to happen.
+  const [pace, setPace] = useState<PaceChoice>("steady");
+  const canPush = Boolean(exercise.push?.schedule?.length);
+  const activePace: PaceChoice = canPush ? pace : "steady";
+  const activeSchedule =
+    activePace === "push" ? exercise.push?.schedule : exercise.schedule;
 
   return (
     <>
@@ -1097,8 +1106,23 @@ function RoadmapTab({ exercise, role }: { exercise: ProjectedExercise; role: Rol
                 <Text style={styles.progressPercent}>{progress}%</Text>
               </View>
               <View style={styles.progressTrack}>
-                <View style={[styles.progressFill, { width: `${progress}%` }]} />
+                <View
+                  style={[
+                    styles.progressFill,
+                    { width: `${progress}%` },
+                    exercise.reachable === false ? styles.progressFillShort : null,
+                  ]}
+                />
               </View>
+              {/* The projection already knows whether this horizon reaches the
+                  goal. Showing a rising percentage while `reachable` is false
+                  reads as being on track for something the plan does not
+                  deliver. */}
+              {exercise.reachable === false ? (
+                <Text style={styles.progressShortNote}>
+                  Plan falls short of this by the target date
+                </Text>
+              ) : null}
             </View>
           ) : null}
         </View>
@@ -1116,10 +1140,17 @@ function RoadmapTab({ exercise, role }: { exercise: ProjectedExercise; role: Rol
             ? "What to aim for each time this lift comes up."
             : "What to hit each week if you stay on plan."}
         </Text>
+        {canPush && role !== "support" ? (
+          <PaceToggle pace={activePace} onChange={setPace} exercise={exercise} />
+        ) : null}
         {role === "support" ? (
           <SupportPrescriptionTable exercise={exercise} />
         ) : (
-          <ProgressionTable exercise={exercise} flat={flatChart} />
+          <ProgressionTable
+            exercise={exercise}
+            flat={flatChart}
+            schedule={activeSchedule}
+          />
         )}
       </View>
     </>
@@ -1274,9 +1305,98 @@ function SupportPrescriptionTable({ exercise }: { exercise: ProjectedExercise })
  * one. Collapsing a week to a single "80 lb x 6" hid both, which is why the
  * table could not answer "what do I actually do on Friday".
  */
-function ProgressionTable({ exercise, flat }: { exercise: ProjectedExercise; flat: boolean }) {
+type PaceChoice = "steady" | "push";
+
+/**
+ * Steady vs push.
+ *
+ * A goal the steady walk misses used to render as "unreachable" and nothing
+ * else, which is a verdict with no action attached. The push track is the
+ * session-by-session path that does reach it; the requirements underneath are
+ * what buys that path, stated plainly so the choice is informed rather than
+ * flattering. When even a surplus cannot deliver the rate, it says the date is
+ * wrong rather than implying the lifter is.
+ */
+function PaceToggle({
+  pace,
+  onChange,
+  exercise,
+}: {
+  pace: PaceChoice;
+  onChange: (pace: PaceChoice) => void;
+  exercise: ProjectedExercise;
+}) {
+  const demand = exercise.demand;
+  const arrived = exercise.push?.arrived_week;
+  return (
+    <View style={styles.paceWrap}>
+      <View style={styles.paceRow}>
+        {(
+          [
+            { id: "steady" as const, label: "Steady", sub: "What training delivers" },
+            { id: "push" as const, label: "Push", sub: "What the goal needs" },
+          ] as const
+        ).map((item) => {
+          const active = pace === item.id;
+          return (
+            <TouchableOpacity
+              key={item.id}
+              style={[styles.paceBtn, active && styles.paceBtnActive]}
+              onPress={() => onChange(item.id)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+            >
+              <Text style={[styles.paceLabel, active && styles.paceLabelActive]}>
+                {item.label}
+              </Text>
+              <Text style={styles.paceSub}>{item.sub}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      {pace === "push" ? (
+        <View style={styles.paceNote}>
+          {arrived ? (
+            <Text style={styles.paceArrived}>Hits the goal in week {arrived}.</Text>
+          ) : null}
+          {(demand?.requirements || []).map((line) => (
+            <Text key={line} style={styles.paceRequirement}>
+              • {line}
+            </Text>
+          ))}
+          {demand && !demand.within_surplus ? (
+            <Text style={styles.paceWarn}>
+              This is a stretch target, not a forecast. Treat it as the ceiling
+              of what the plan could ask for.
+            </Text>
+          ) : null}
+        </View>
+      ) : (
+        <Text style={styles.paceSteadyNote}>
+          Paced to what an intermediate
+          {demand?.energy_balance ? ` eating to ${demand.energy_balance}` : ""} typically
+          gains.
+          {demand?.weeks_at_current_pace
+            ? ` At this pace the goal lands around week ${demand.weeks_at_current_pace}.`
+            : ""}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function ProgressionTable({
+  exercise,
+  flat,
+  schedule: scheduleOverride,
+}: {
+  exercise: ProjectedExercise;
+  flat: boolean;
+  /** The push track's schedule when that pace is selected. */
+  schedule?: WeekPoint[];
+}) {
   const { weeks, sessionCount } = useMemo(() => {
-    const schedule = exercise.schedule || [];
+    const schedule = scheduleOverride || exercise.schedule || [];
     const byWeek = new Map<number, Map<number, WeekPoint>>();
     let maxSession = 1;
     for (const point of schedule) {
@@ -1289,7 +1409,7 @@ function ProgressionTable({ exercise, flat }: { exercise: ProjectedExercise; fla
       weeks: [...byWeek.entries()].sort((a, b) => a[0] - b[0]),
       sessionCount: maxSession,
     };
-  }, [exercise]);
+  }, [exercise, scheduleOverride]);
 
   // Older payloads have no schedule; fall back to the weekly curve so the
   // table still renders something rather than disappearing.
@@ -1514,20 +1634,13 @@ export function Trajectory({ exercise, flat }: { exercise: ProjectedExercise; fl
           : 1;
       return { x: left + ratio * (todayX - left), y: y(point.value as number), point };
     });
-    const coordFor = new Map(pastCoords.map((c) => [c.point.key, c]));
-
     const segments: Array<{ x: number; y: number }[]> = [];
-    let current: Array<{ x: number; y: number }> = [];
-    for (const point of past) {
-      if (point.value == null || point.trend === "gap") {
-        if (current.length > 1) segments.push(current);
-        current = [];
-        continue;
-      }
-      const coord = coordFor.get(point.key);
-      if (coord) current.push({ x: coord.x, y: coord.y });
+    // Connect all plotted sessions into a continuous line even when dates are
+    // far apart (e.g. layoffs or sporadic logging), eliminating disconnected
+    // fragments and isolated floating dots.
+    if (pastCoords.length > 1) {
+      segments.push(pastCoords.map((c) => ({ x: c.x, y: c.y })));
     }
-    if (current.length > 1) segments.push(current);
 
     const project = (points: WeekPoint[], values: number[]) =>
       points.map((point, i) => ({
@@ -2356,6 +2469,30 @@ const styles = StyleSheet.create({
   progressPercent: { fontSize: 10, fontWeight: "700", color: colors.textSecondary },
   progressTrack: { height: 5, borderRadius: 99, backgroundColor: colors.border, marginTop: 7, overflow: "hidden" },
   progressFill: { height: 5, borderRadius: 99, backgroundColor: colors.accentPrimary },
+  // A goal the horizon does not reach is not the same state as one on track,
+  // so it does not get the accent fill that every on-track bar uses.
+  progressFillShort: { backgroundColor: colors.warning },
+  paceWrap: { marginBottom: 14 },
+  paceRow: { flexDirection: "row", gap: 8 },
+  paceBtn: {
+    flex: 1,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  paceBtnActive: { borderColor: colors.accentPrimary, backgroundColor: colors.surfaceRaised },
+  paceLabel: { fontSize: 13, fontWeight: "700", color: colors.textSecondary },
+  paceLabelActive: { color: colors.textPrimary },
+  paceSub: { fontSize: 10, color: colors.textSecondary, marginTop: 2 },
+  paceNote: { marginTop: 10, gap: 4 },
+  paceArrived: { fontSize: 12, fontWeight: "700", color: colors.accentPrimary },
+  paceRequirement: { fontSize: 11, color: colors.textSecondary, lineHeight: 16 },
+  paceWarn: { fontSize: 11, color: colors.warning, marginTop: 4, lineHeight: 16 },
+  paceSteadyNote: { fontSize: 11, color: colors.textSecondary, marginTop: 10, lineHeight: 16 },
+  progressShortNote: { fontSize: 10, color: colors.warning, marginTop: 5 },
   chartLabel: {
     fontSize: 9,
     fontWeight: "800",

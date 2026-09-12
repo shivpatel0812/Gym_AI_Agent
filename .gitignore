@@ -29,3 +29,9 @@ secrets/
 # Expo local state (machine-specific)
 .expo/
 **/.expo/
+
+# Playwright MCP trace artifacts — regenerable, never source
+.playwright-mcp/
+
+# Cursor editor workspace settings
+.cursor/
