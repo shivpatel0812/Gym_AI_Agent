@@ -207,6 +207,15 @@ class ReasoningGenerator:
                 ref_reps = ctx.get("reference_reps", 0)
                 reference_day = ctx.get("reference_day")
                 source = f" on {reference_day}" if reference_day else " on your other plan day"
+                if ctx.get("calibration_step_up"):
+                    # Saying "calibrates to" over a load increase reads as a
+                    # conversion the user can check, and they will check it
+                    # against the session they just did.
+                    return (
+                        f"{day} day: {ref_weight:g} lbs × {ref_reps}{source} already "
+                        f"filled this rep range, so step up to {weight:g} lbs × {reps} "
+                        "and leave about a rep in the tank."
+                    )
                 return (
                     f"{day} day: your {ref_weight:g} lbs × {ref_reps}{source} "
                     f"calibrates to {weight:g} lbs × {reps}; keep 1-2 reps in reserve."

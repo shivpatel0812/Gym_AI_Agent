@@ -521,6 +521,7 @@ async def chat_with_ai(
         nutrition_context = _nutrition_context_for_chat(user_id) if mode == "nutrition" else None
         toolbox = CoachToolbox(
             db, user_id, mode=mode, conversation_id=request.conversation_id,
+            conversation_history=history,
             # Opening a meal photograph happens because the user asked for it
             # in this message, never because the model judged it might help.
             # Withheld from the toolset entirely when this is False.
@@ -660,19 +661,18 @@ async def chat_with_ai_stream(
             model=resolve_model(request.model),
             user_profile=user_profile,
         )
-        mode = _chat_mode(request)
+        store = ConversationStore(db, user_id)
+        history = _chat_history(store, request)
+        split_context = _split_context_for_plan(user_id) if mode == "plan" else None
+        nutrition_context = _nutrition_context_for_chat(user_id) if mode == "nutrition" else None
         toolbox = CoachToolbox(
             db, user_id, mode=mode, conversation_id=request.conversation_id,
+            conversation_history=history,
             # Opening a meal photograph happens because the user asked for it
             # in this message, never because the model judged it might help.
             # Withheld from the toolset entirely when this is False.
             allow_photo_view=asks_to_see_a_meal_photo(request.message),
         )
-
-        store = ConversationStore(db, user_id)
-        history = _chat_history(store, request)
-        split_context = _split_context_for_plan(user_id) if mode == "plan" else None
-        nutrition_context = _nutrition_context_for_chat(user_id) if mode == "nutrition" else None
     except Exception:
         ai_access.refund(user_id)
         raise

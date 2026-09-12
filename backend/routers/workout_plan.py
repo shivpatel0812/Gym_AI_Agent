@@ -7,6 +7,10 @@ import os
 from auth import get_user_id
 from db import db
 from ai_analysis.plan_generator import WorkoutPlanGenerator
+from ai_analysis.training_history import (
+    find_latest_workout_for_day,
+    extract_session_exercises,
+)
 from data.default_exercises import validate_exercise_id
 from models import TopLifts
 
@@ -248,7 +252,25 @@ def _load_split_context(user_id: str, split_id: str) -> dict:
     if not day_names:
         raise HTTPException(status_code=422, detail="Selected split has no workout days")
 
-    # AI-created splits link back to a full plan, which is the best source.
+    slots = _labelled_day_slots(day_names)
+
+    # Load all workout sessions for the user to search the latest workout per exercise day
+    sessions_ref = (
+        db.collection("users")
+        .document(user_id)
+        .collection("workout_sessions")
+    )
+    all_sessions = [
+        {"id": doc.id, **(doc.to_dict() or {})}
+        for doc in sessions_ref.stream()
+    ]
+    all_sessions.sort(
+        key=lambda item: (str(item.get("date") or ""), str(item.get("created_at") or "")),
+        reverse=True,
+    )
+
+    # Check fallback days from linked plan if available
+    linked_plan_days_by_name: Dict[str, List[dict]] = {}
     linked_plan_id = split.get("linked_plan_id")
     if linked_plan_id:
         plan_doc = (
@@ -259,70 +281,69 @@ def _load_split_context(user_id: str, split_id: str) -> dict:
             .get()
         )
         if plan_doc.exists:
-            plan_days = plan_doc.to_dict().get("days", [])
-            return {
-                "split_id": split_id,
-                "split_name": split.get("name", "Existing Split"),
-                "days": plan_days,
-            }
+            for p_day in plan_doc.to_dict().get("days", []):
+                p_name = str(p_day.get("day_name") or "").strip().lower()
+                if p_name:
+                    linked_plan_days_by_name[p_name] = p_day.get("exercises", [])
 
-    # User-created splits currently store day names only. Reconstruct their
-    # routine from the most recent sessions logged against the split/day.
-    sessions = []
-    sessions_ref = (
-        db.collection("users")
-        .document(user_id)
-        .collection("workout_sessions")
-    )
-    split_name_key = str(split.get("name") or "").strip().lower()
-    for session_doc in sessions_ref.stream():
-        data = session_doc.to_dict()
-        session_name_key = str(data.get("split_name") or "").strip().lower()
-        if (
-            data.get("split_id") == split_id
-            or (
-                not data.get("split_id")
-                and split_name_key
-                and session_name_key == split_name_key
-            )
-        ):
-            sessions.append(data)
-    sessions.sort(key=lambda item: item.get("date", ""), reverse=True)
-
-    sessions_by_day: Dict[str, List[dict]] = {}
-    for session in sessions:
-        sessions_by_day.setdefault(session.get("split_day"), []).append(session)
-
-    slots = _labelled_day_slots(day_names)
     days = []
+    referenced_workouts = []
+    claimed_session_ids = set()
+
     for slot in slots:
-        seen = set()
+        slot_label = slot["label"]
+        slot_base = slot["base"]
+        latest_session = find_latest_workout_for_day(
+            all_sessions, slot_label, exclude_session_ids=claimed_session_ids
+        )
+        if not latest_session and slot_base != slot_label:
+            latest_session = find_latest_workout_for_day(
+                all_sessions, slot_base, exclude_session_ids=claimed_session_ids
+            )
+
         exercises = []
-        for session in _sessions_for_slot(sessions_by_day.get(slot["base"], []), slot):
-            for exercise in session.get("exercises", []):
-                exercise_id = exercise.get("exercise_id")
-                if not exercise_id or exercise_id in seen:
-                    continue
-                seen.add(exercise_id)
-                exercises.append(_exercise_prescription(exercise, len(exercises) + 1))
-                if len(exercises) >= MAX_RECONSTRUCTED_EXERCISES:
+        if latest_session:
+            claimed_session_ids.add(str(latest_session.get("id") or latest_session.get("date") or ""))
+            exercises = extract_session_exercises(latest_session)[:MAX_RECONSTRUCTED_EXERCISES]
+            if exercises:
+                referenced_workouts.append({
+                    "date": latest_session.get("date"),
+                    "found": True,
+                    "target_day": slot_label,
+                    "split": latest_session.get("split_name"),
+                    "logged_day": latest_session.get("split_day") or latest_session.get("workout_name"),
+                    "exercise_count": len(exercises),
+                    "exercises": exercises,
+                    "source_session_id": latest_session.get("id"),
+                    "is_latest_for_day": True,
+                })
+
+        # Fallback to linked plan if no logged session was found for this day
+        if not exercises:
+            for candidate in (slot_label.lower(), slot_base.lower()):
+                if candidate in linked_plan_days_by_name:
+                    exercises = linked_plan_days_by_name[candidate]
                     break
-            if len(exercises) >= MAX_RECONSTRUCTED_EXERCISES:
-                break
+
         days.append(
             {
-                "day_name": slot["label"],
-                "focus": slot["base"],
+                "day_name": slot_label,
+                "focus": slot_base,
                 "estimated_duration_minutes": max(30, len(exercises) * 8),
                 "exercises": exercises,
             }
         )
-    return {
+
+    res = {
         "split_id": split_id,
         "split_name": split.get("name", "Existing Split"),
         "day_labels": {slot["label"]: slot["base"] for slot in slots},
         "days": days,
     }
+    if referenced_workouts:
+        res["referenced_workouts"] = referenced_workouts
+        res["referenced_workout"] = referenced_workouts[0]
+    return res
 
 
 def _weekly_schedule(day_names: List[str], preferred_days: Optional[List[str]]) -> dict:

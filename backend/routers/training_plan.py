@@ -7,7 +7,7 @@ ordinary conversation never silently changes training behaviour.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 import re
 from pydantic import BaseModel, Field, field_validator
@@ -23,13 +23,20 @@ from ai_analysis.plan_edits import (
     EDIT_STATUS_PENDING, EDIT_STATUS_APPLIED, EDIT_STATUS_DISMISSED,
 )
 from ai_analysis.plan_suggestion_store import PlanSuggestionStore
-from ai_analysis.training_history import build_history_context
+from ai_analysis.training_history import (
+    build_history_context,
+    find_latest_workout_for_day,
+    extract_session_exercises,
+    discover_days_from_history,
+)
 from ai_analysis.plan_store import PlanStore, STATUS_ACTIVE, STATUS_PAUSED, STATUS_COMPLETED
 from ai_analysis.conversation_store import ConversationStore
 from ai_analysis.profile_transformer import get_user_profile_for_ai
 from ai_analysis.data_analyzer import FitnessDataAnalyzer
 from ai_analysis.workout_recommender.plan_context import PlanContextResolver
 from ai_analysis.workout_recommender import WorkoutRecommender
+from ai_analysis.workout_recommender.prescription import working_load
+from ai_analysis.workout_recommender.goal_configs import RepRangeConfig
 from ai_analysis.plan_projection import (
     DEFAULT_PROJECTION_WEEKS,
     MAX_PROJECTION_WEEKS,
@@ -85,7 +92,11 @@ def _goal_text(request, conversation: list) -> str:
     then referred to obliquely, so an early turn can carry numbers no later one
     repeats.
     """
-    parts = [getattr(request, "goal_statement", None) or ""]
+    parts = []
+    if isinstance(request, dict):
+        parts.append(request.get("goal_statement") or "")
+    elif request is not None:
+        parts.append(getattr(request, "goal_statement", None) or "")
     parts += [
         str(m.get("content") or "")
         for m in reversed(conversation or [])
@@ -698,62 +709,137 @@ def _resolve_target_day(
 
 
 def _attach_referenced_workout(user_id: str, split_context: dict, conversation: list) -> dict:
-    """Attach and merge every exact workout a Plan Mode request names."""
+    """
+    Attach and merge workouts onto plan days.
+
+    1. If the conversation explicitly adopted specific sessions by date, those
+       are mapped to their target days first.
+    2. By default, for every exercise day in the plan (e.g. Push, Pull, Legs),
+       it searches the user's workout sessions for the latest workout for that
+       exercise day and creates the workout foundation from it.
+    3. If the user explicitly requested to start from scratch or build something new,
+       historical sessions are not auto-attached.
+    """
+    user_text = " ".join(
+        str(m.get("content") or "")
+        for m in (conversation or [])
+        if isinstance(m, dict) and str(m.get("role") or "").lower() == "user"
+    )
+    rejects = bool(_REJECTS_RE.search(user_text))
+
     mentions = _referenced_workout_mentions(conversation)
-    if not mentions:
+    if not mentions and rejects:
         return split_context
-    known_days = [day.get("day_name") for day in split_context.get("days", []) if day.get("day_name")]
+
+    sessions_ref = db.collection("users").document(user_id).collection("workout_sessions")
+    sessions = [{"id": doc.id, **(doc.to_dict() or {})} for doc in sessions_ref.stream()]
+    sessions.sort(
+        key=lambda s: (str(s.get("date") or ""), str(s.get("created_at") or "")),
+        reverse=True,
+    )
+    if not sessions:
+        return split_context
+
     enriched = {**split_context, "days": [dict(day) for day in split_context.get("days", [])]}
+    known_days = [day.get("day_name") for day in enriched.get("days", []) if day.get("day_name")]
+    if not known_days:
+        confirmed = split_context.get("confirmed_schedule") or {}
+        known_days = [day for day in confirmed.values() if day and str(day).lower() != "rest"]
+    if not known_days and not rejects:
+        known_days = discover_days_from_history(sessions)
+
     references = []
     imported_by_day = {}
-    claimed_days: set = set()
-    sessions_ref = db.collection("users").document(user_id).collection("workout_sessions")
+    claimed_days: Set[str] = set()
+    claimed_session_ids: Set[str] = set()
+
+    # Seed with any referenced_workouts already present on split_context (e.g. from _load_split_context)
+    for ref in split_context.get("referenced_workouts") or []:
+        if ref.get("found") and ref.get("target_day"):
+            t_day = str(ref["target_day"])
+            claimed_days.add(t_day)
+            s_id = str(ref.get("source_session_id") or ref.get("date") or "")
+            if s_id:
+                claimed_session_ids.add(s_id)
+            references.append(ref)
+            if ref.get("exercises"):
+                imported_by_day[t_day] = ref["exercises"]
+
+    # Explicit mentions from conversation override or add specific date workouts
     for mention in mentions:
         date = mention["date"]
-        docs = sessions_ref.where("date", "==", date).stream()
-        sessions = [{"id": doc.id, **(doc.to_dict() or {})} for doc in docs]
-        if not sessions:
+        matching = [s for s in sessions if s.get("date") == date]
+        if not matching:
             references.append({"date": date, "found": False})
             continue
-        source = sessions[-1]
+        source = matching[-1]
         target_day = _resolve_target_day(
             source, mention.get("context") or "", known_days, claimed_days
         )
         if target_day:
             claimed_days.add(target_day)
-        exercises = [{
-            "exercise_id": exercise.get("exercise_id"),
-            "exercise_name": exercise.get("exercise_name") or exercise.get("name") or "Exercise",
-            "sets": max(1, len(exercise.get("sets") or [])),
-            "reps": max([int(workout_set.get("reps") or 0)
-                         for workout_set in exercise.get("sets") or []] or [8]),
-            "order": index + 1,
-            "source_date": date,
-        } for index, exercise in enumerate(source.get("exercises") or [])
-            if exercise.get("exercise_id")]
-        references.append({
-            "date": date, "found": True, "target_day": target_day,
-            "split": source.get("split_name"), "logged_day": source.get("split_day"),
-            "exercise_count": len(exercises), "exercises": exercises,
-        })
-        bucket = imported_by_day.setdefault(target_day, [])
-        seen = {exercise.get("exercise_id") for exercise in bucket}
-        bucket.extend(exercise for exercise in exercises if exercise.get("exercise_id") not in seen)
+            s_id = str(source.get("id") or source.get("date") or "")
+            if s_id:
+                claimed_session_ids.add(s_id)
+        exercises = extract_session_exercises(source)
+        ref_entry = {
+            "date": date,
+            "found": True,
+            "target_day": target_day,
+            "split": source.get("split_name"),
+            "logged_day": source.get("split_day") or source.get("workout_name"),
+            "exercise_count": len(exercises),
+            "exercises": exercises,
+            "source_session_id": source.get("id"),
+        }
+        # Replace existing reference for this target_day if any
+        references = [r for r in references if r.get("target_day") != target_day]
+        references.append(ref_entry)
+        if target_day:
+            imported_by_day[target_day] = exercises
+
+    # Auto-search the latest workout per exercise day for any un-claimed day
+    if not rejects:
+        for day_name in known_days:
+            if day_name in claimed_days:
+                continue
+            latest_session = find_latest_workout_for_day(
+                sessions, day_name, exclude_session_ids=claimed_session_ids
+            )
+            if latest_session:
+                claimed_days.add(day_name)
+                s_id = str(latest_session.get("id") or latest_session.get("date") or "")
+                if s_id:
+                    claimed_session_ids.add(s_id)
+                exercises = extract_session_exercises(latest_session)
+                if exercises:
+                    references.append({
+                        "date": latest_session.get("date"),
+                        "found": True,
+                        "target_day": day_name,
+                        "split": latest_session.get("split_name"),
+                        "logged_day": latest_session.get("split_day") or latest_session.get("workout_name"),
+                        "exercise_count": len(exercises),
+                        "exercises": exercises,
+                        "source_session_id": latest_session.get("id"),
+                        "is_latest_for_day": True,
+                    })
+                    imported_by_day[day_name] = exercises
 
     for day in enriched["days"]:
         imported = imported_by_day.get(day.get("day_name"))
-        if not imported:
-            continue
-        imported_ids = {exercise.get("exercise_id") for exercise in imported}
-        extras = [exercise for exercise in day.get("exercises") or []
-                  if exercise.get("exercise_id") not in imported_ids]
-        day["exercises"] = imported + extras
+        if imported:
+            day["exercises"] = imported
+
     known = {day.get("day_name") for day in enriched["days"]}
     for name, exercises in imported_by_day.items():
         if name and name not in known and exercises:
             enriched["days"].append({"day_name": name, "focus": name, "exercises": exercises})
-    enriched["referenced_workouts"] = references
-    enriched["referenced_workout"] = references[0] if references else None
+
+    if references:
+        enriched["referenced_workouts"] = references
+        enriched["referenced_workout"] = references[0]
+
     return enriched
 
 
@@ -796,6 +882,26 @@ def _plan_response(plan: dict) -> dict:
     return {"plan": plan, "progress": PlanStore.progress(plan)}
 
 
+
+def _schedule_arrival(schedule, destination) -> Optional[int]:
+    """The first week whose prescription actually meets the stated finish line."""
+    if not schedule or not destination:
+        return None
+    want_weight = float(destination.get("weight") or 0)
+    want_reps = int(destination.get("reps") or 0)
+    if want_weight <= 0 or want_reps <= 0:
+        return None
+    for point in schedule:
+        for workout_set in point.sets or []:
+            if (
+                float(workout_set.get("weight") or 0) >= want_weight
+                and int(workout_set.get("reps") or 0) >= want_reps
+            ):
+                return point.week
+    return None
+
+
+
 @router.get("/modes")
 async def get_plan_modes():
     """How closely a plan may follow the user's Current Split."""
@@ -812,43 +918,62 @@ async def get_plan_modes():
     }
 
 
-@router.post("/propose")
-async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_user_id)):
+def build_and_save_proposed_plan(
+    db,
+    user_id: str,
+    conversation_id: Optional[str] = None,
+    conversation_history: Optional[List[dict]] = None,
+    goal_statement: Optional[str] = None,
+    split_id: Optional[str] = None,
+    plan_mode: Optional[str] = None,
+    duration_weeks: Optional[int] = None,
+    weekly_schedule: Optional[dict] = None,
+    nutrition_goal: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Generate a plan proposal from a coach conversation. Saved as a draft —
-    it does not affect recommendations until activated.
+    Core engine to generate a plan proposal from conversation messages and save it as a draft.
+    Used by both the POST /propose API endpoint and the CoachToolbox.propose_training_plan tool.
     """
-    conversation = _conversation_messages(user_id, request.conversation_id)
-    if request.goal_statement:
-        conversation = conversation + [{"role": "user", "content": request.goal_statement}]
+    conversation = _conversation_messages(user_id, conversation_id)
+    if not conversation and conversation_history:
+        conversation = [
+            {"role": m.get("role", "user"), "content": str(m.get("content") or "")}
+            for m in conversation_history
+            if isinstance(m, dict) and m.get("content")
+        ]
+    if goal_statement:
+        conversation = list(conversation) + [{"role": "user", "content": goal_statement}]
+
+    if not conversation:
+        profile_goal = (
+            (get_user_profile_for_ai(db, user_id) or {}).get("fitness_goal")
+            or "Build strength and muscle"
+        )
+        conversation = [{"role": "user", "content": f"Create a workout plan for my goal: {profile_goal}"}]
 
     # Plan Mode asks how much the split may change and users answer plainly.
     # That answer used to be discarded in favour of the modal's default, so a
     # user who said "keep the current structure" still got an adapt-mode plan
     # that moved their exercises around.
     scope = resolve_plan_mode(
-        requested=request.plan_mode,
+        requested=plan_mode,
         conversation=conversation,
         valid_modes=PLAN_MODES,
         default=DEFAULT_PLAN_MODE,
     )
-    plan_mode = scope["mode"]
+    resolved_plan_mode = scope["mode"]
 
-    if not conversation:
-        raise HTTPException(
-            status_code=400,
-            detail="Discuss a goal with the coach first, or provide a goal_statement.",
-        )
-
+    split_context = _load_current_split(user_id, split_id)
+    if weekly_schedule:
+        split_context["confirmed_schedule"] = weekly_schedule
     split_context = _attach_referenced_workout(
-        user_id, _load_current_split(user_id, request.split_id), conversation
+        user_id, split_context, conversation
     )
-    if request.weekly_schedule:
-        split_context["confirmed_schedule"] = request.weekly_schedule
-    if request.duration_weeks:
-        conversation.append({"role": "user", "content": f"Make this a {request.duration_weeks}-week plan."})
-    if request.nutrition_goal:
-        conversation.append({"role": "user", "content": f"My nutrition bodyweight goal is: {request.nutrition_goal}."})
+    if duration_weeks:
+        conversation.append({"role": "user", "content": f"Make this a {duration_weeks}-week plan."})
+    if nutrition_goal:
+        conversation.append({"role": "user", "content": f"My nutrition bodyweight goal is: {nutrition_goal}."})
+
     # What this proposal is revising. A live plan first; failing that, the draft
     # the user is still deciding on. Consulting only the active plan meant that
     # a user with none — having just ended one — had every regeneration built
@@ -856,27 +981,27 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
     # containing only push days and quietly lost pull and legs.
     store = PlanStore(db, user_id)
     active = store.get_active()
-    baseline = active or store.latest_draft(conversation_id=request.conversation_id)
+    baseline = active or store.latest_draft(conversation_id=conversation_id)
     result = _builder().build_plan(
         conversation=conversation,
         split_context=split_context,
         profile=get_user_profile_for_ai(db, user_id),
         history_summary=_history_summary(user_id),
-        plan_mode=plan_mode,
+        plan_mode=resolved_plan_mode,
         existing_plan=_revision_base(baseline),
         history_context=_history_context(user_id),
     )
-    if result["status"] == "error":
-        raise HTTPException(status_code=500, detail=f"Plan generation failed: {result['error']}")
+    if result.get("status") == "error":
+        return {"error": f"Plan generation failed: {result.get('error')}"}
 
     plan = result["plan"]
-    if request.duration_weeks:
-        plan["duration_weeks"] = request.duration_weeks
-    if request.nutrition_goal:
-        plan["nutrition_goal"] = request.nutrition_goal
+    if duration_weeks:
+        plan["duration_weeks"] = duration_weeks
+    if nutrition_goal:
+        plan["nutrition_goal"] = nutrition_goal
     plan["nutrition_companion"] = _nutrition_companion(user_id, plan)
     plan["source_split_id"] = split_context.get("split_id")
-    _attach_goal_destination(user_id, plan, request, conversation)
+    _attach_goal_destination(user_id, plan, {"goal_statement": goal_statement}, conversation)
     # The Active Plan references the Current Split; it never overwrites it
     plan["owns_linked_split"] = False
     # Computed from the stored plans, not narrated by the model, so the review
@@ -890,11 +1015,40 @@ async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_u
         # removed day as "this drops Legs from your last draft".
         plan["revises_draft_id"] = baseline.get("id")
 
-    plan_id = store.save_draft(plan, source_conversation_id=request.conversation_id)
+    plan_id = store.save_draft(plan, source_conversation_id=conversation_id)
     # One reviewable draft per conversation; the rest are superseded so the next
     # regeneration cannot pick up a version the user already moved past.
-    store.supersede_drafts(keep_id=plan_id, conversation_id=request.conversation_id)
+    store.supersede_drafts(keep_id=plan_id, conversation_id=conversation_id)
     saved = store.get(plan_id)
+    return {
+        "status": "success",
+        "plan": saved,
+        "progress": PlanStore.progress(saved),
+        "tokens_used": result.get("tokens_used"),
+    }
+
+
+@router.post("/propose")
+async def propose_plan(request: ProposePlanRequest, user_id: str = Depends(get_user_id)):
+    """
+    Generate a plan proposal from a coach conversation. Saved as a draft —
+    it does not affect recommendations until activated.
+    """
+    result = build_and_save_proposed_plan(
+        db=db,
+        user_id=user_id,
+        conversation_id=request.conversation_id,
+        goal_statement=request.goal_statement,
+        split_id=request.split_id,
+        plan_mode=request.plan_mode,
+        duration_weeks=request.duration_weeks,
+        weekly_schedule=request.weekly_schedule,
+        nutrition_goal=request.nutrition_goal,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    saved = result["plan"]
     return {"status": "success", **_plan_response(saved), "tokens_used": result.get("tokens_used")}
 
 
@@ -1123,6 +1277,31 @@ async def get_plan_projection(
     adherence = measure_adherence(histories, user_goal)
     projector = PlanProjector(recommender.progression_engine)
 
+    # A lift that appears on both a Heavy and a Volume day needs the two days
+    # related to each other, or the Volume day progresses from its own history
+    # until it is working the Heavy day's load for the Heavy day's reps. The
+    # reference is the load actually demonstrated, read within one set.
+    heavy_loads: dict = {}
+    for day in plan.get("days") or []:
+        if str(day.get("day_type") or "").strip().lower() != "heavy":
+            continue
+        for exercise in day.get("exercises") or []:
+            ex_id = exercise.get("exercise_id")
+            if not ex_id or ex_id in heavy_loads:
+                continue
+            sessions = histories.get(ex_id) or []
+            if not sessions:
+                continue
+            rep_range = exercise.get("target_rep_range")
+            band = (
+                RepRangeConfig(int(rep_range[0]), int(rep_range[1]))
+                if isinstance(rep_range, (list, tuple)) and len(rep_range) == 2
+                else None
+            )
+            load = working_load(sessions[0].get("sets") or [], band)
+            if load > 0:
+                heavy_loads[ex_id] = load
+
     days_out = []
     for day in plan.get("days") or []:
         day_name = day.get("day_name") or "Workout"
@@ -1163,6 +1342,11 @@ async def get_plan_projection(
                     else None
                 ),
                 adherence=adherence.rate,
+                heavy_day_weight=(
+                    heavy_loads.get(ex_id)
+                    if str(day.get("day_type") or "").strip().lower() == "volume"
+                    else None
+                ),
                 top_lifts=profile.get("top_lifts"),
                 target_weight=exercise.get("target_weight"),
                 target_reps=exercise.get("target_reps"),
@@ -1170,6 +1354,49 @@ async def get_plan_projection(
                 experience_level=experience_level,
                 energy_balance=energy_balance,
             )
+
+            # A stated finish line the steady walk misses is only half an
+            # answer. The other half is the session-by-session path that would
+            # reach it, so the user can decide whether to take it rather than
+            # being told "unreachable" and left there. Run only when there is a
+            # destination and the steady walk did not already arrive — the
+            # second walk is not free, and when steady arrives it *is* the
+            # answer.
+            push = None
+            if (
+                getattr(projection, "destination", None)
+                and getattr(projection, "reachable", None) is False
+            ):
+                push = projector.project_exercise(
+                    exercise_id=ex_id,
+                    exercise_name=exercise.get("exercise_name") or ex_id,
+                    day_name=day_name,
+                    history=projection_history,
+                    user_goal=user_goal,
+                    weeks=horizon,
+                    sessions_per_week=per_week,
+                    num_sets=exercise.get("sets") or 3,
+                    focus_goal=exercise.get("goal") or day.get("goal"),
+                    day_intensity=exercise.get("intensity") or day.get("day_type"),
+                    rep_range_override=(
+                        tuple(rep_range)
+                        if isinstance(rep_range, (list, tuple)) and len(rep_range) == 2
+                        else None
+                    ),
+                    adherence=adherence.rate,
+                    heavy_day_weight=(
+                        heavy_loads.get(ex_id)
+                        if str(day.get("day_type") or "").strip().lower() == "volume"
+                        else None
+                    ),
+                    top_lifts=profile.get("top_lifts"),
+                    target_weight=exercise.get("target_weight"),
+                    target_reps=exercise.get("target_reps"),
+                    target_weeks=exercise.get("target_weeks"),
+                    experience_level=experience_level,
+                    energy_balance=energy_balance,
+                    pace="push",
+                )
             # The chart's backward axis and the engine's input are different
             # questions. `projection_history` is what the engine may reason from:
             # 60 days, weighted sets only. That makes it the wrong source for a
@@ -1184,6 +1411,32 @@ async def get_plan_projection(
                 logged_sessions = projection_history[:CHART_HISTORY_SESSIONS]
             exercises.append({
                 **projection.to_dict(),
+                # What the stated goal would actually require, and the path
+                # that gets there. `demand` is present whenever a destination
+                # is; `push` only when steady misses it.
+                "demand": (
+                    projection.demand.to_dict()
+                    if getattr(projection, "demand", None)
+                    else None
+                ),
+                "push": (
+                    {
+                        "best_case": [p.to_dict() for p in push.best_case],
+                        "schedule": [p.to_dict() for p in push.schedule],
+                        # Read off the schedule the client actually renders,
+                        # not the unstretched curve. `best_case` is every
+                        # session hit; the table is that stretched by measured
+                        # adherence, so quoting best_case's arrival week would
+                        # promise week 6 above a table showing the goal landing
+                        # in week 8.
+                        "arrived_week": _schedule_arrival(
+                            push.schedule, push.destination
+                        ),
+                        "reachable": push.reachable,
+                    }
+                    if push
+                    else None
+                ),
                 "priority": exercise.get("priority"),
                 "goal": exercise.get("goal"),
                 "sets": exercise.get("sets"),

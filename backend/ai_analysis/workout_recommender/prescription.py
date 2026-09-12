@@ -23,6 +23,13 @@ from .exercise_metadata import ExerciseMetadata
 from .goal_configs import GoalConfig, RepRangeConfig
 
 
+# Past about a dozen reps Epley stops estimating and starts extrapolating — a
+# 30-rep set reports double the load as a 1RM. Such sets are skipped, never
+# clamped, because clamping asserts a number the set never evidenced.
+# `progression_engine` and `progress/domains.py` read the same figure.
+E1RM_MAX_REPS = 12
+
+
 class SessionOutcome(str, Enum):
     """Where the last session landed relative to its rep band."""
 
@@ -106,6 +113,23 @@ def evaluate_session(sets: List[Dict], rep_range: RepRangeConfig) -> SessionOutc
     return SessionOutcome.BELOW
 
 
+# Top-set-plus-backoff is a free-weight idiom. It exists because a near-limit
+# set under a loaded spine is genuinely costly to repeat, so you buy one hard
+# set and back off. A cable stack or a selectorised machine carries none of
+# that, and prescribing a 10% drop there just takes work away from a lifter
+# who was about to hold the load for all three sets.
+TOP_SET_EQUIPMENT = {"barbell", "dumbbell"}
+
+
+def supports_top_set(metadata: ExerciseMetadata) -> bool:
+    """Whether a heavy single-set-plus-backoff shape suits this lift at all."""
+    if not metadata.compound:
+        return False
+    equipment = str(getattr(metadata, "equipment", "") or "").strip().lower()
+    # Unknown equipment is not evidence for the heavier idiom.
+    return equipment in TOP_SET_EQUIPMENT
+
+
 def select_strategy(
     metadata: ExerciseMetadata,
     goal_config: GoalConfig,
@@ -113,13 +137,66 @@ def select_strategy(
     """
     Pick the prescription shape.
 
-    A strength-goal compound is the case where chasing a single heavy set and
-    backing off is how the lift is actually trained, and where "if you miss,
-    drop to X" is the instruction that matters. Everything else fills a band.
+    A strength-goal free-weight compound is the case where chasing a single
+    heavy set and backing off is how the lift is actually trained, and where
+    "if you miss, drop to X" is the instruction that matters. Everything else
+    fills a band.
     """
-    if goal_config.name == "strength" and metadata.compound:
+    if goal_config.name == "strength" and supports_top_set(metadata):
         return ProgressionStrategy.TOP_SET
     return ProgressionStrategy.BAND
+
+
+# At or above this, the lifter carries one load across the whole session and a
+# prescribed backoff contradicts their own log rather than describing it.
+HELD_LOAD_RATIO = 0.97
+
+
+def holds_load_across_sets(
+    recent_sessions: List[Dict],
+    rep_range: Optional[RepRangeConfig] = None,
+    limit: int = 4,
+) -> bool:
+    """
+    Does this lifter keep the same weight on the bar for every working set?
+
+    Read from their own log rather than assumed. `_top_set_shape` used a flat
+    0.9 multiplier that never saw any history at all, so a lifter logging
+    175x7, 175x6, 175x5 every session was handed 175 and then 160 -- less load
+    for more reps than they had just done, on the day meant to be the heavy
+    one.
+
+    Warmups sit below the working load too, but they are logged *before* it,
+    so only sets from the working set onward describe the shape. A session with
+    one working set says nothing either way.
+    """
+    ratios = []
+    for session in (recent_sessions or [])[:limit]:
+        sets = [
+            s
+            for s in (session.get("sets") or [])
+            if float(s.get("weight") or 0) > 0 and int(s.get("reps") or 0) > 0
+        ]
+        if len(sets) < 2:
+            continue
+        load = working_load(sets, rep_range)
+        if load <= 0:
+            continue
+        try:
+            first = next(
+                i
+                for i, s in enumerate(sets)
+                if abs(float(s.get("weight") or 0) - load) < 0.01
+            )
+        except StopIteration:
+            continue
+        tail = sets[first:]
+        if len(tail) < 2:
+            continue
+        ratios.append(min(float(s.get("weight") or 0) for s in tail) / load)
+    if not ratios:
+        return False
+    return median(ratios) >= HELD_LOAD_RATIO
 
 
 def near_top_streak(
@@ -150,10 +227,76 @@ def typical_reps(sets: List[Dict]) -> Optional[float]:
     return median(reps) if reps else None
 
 
-def working_load(sets: List[Dict]) -> float:
-    """The heaviest load worked in a session."""
-    weights = [float(s.get("weight") or 0) for s in sets or []]
-    return max(weights) if weights else 0.0
+def working_load(
+    sets: List[Dict], rep_range: Optional[RepRangeConfig] = None
+) -> float:
+    """
+    The load this session actually worked at.
+
+    Deliberately not `max(weight)`. A session that opens with a heavy single --
+    85x1, then 75x7, 75x5, 70x6 -- worked at 75. The 85 is a load the lifter
+    demonstrably could *not* hold for the band, and anchoring on it prescribes
+    85 for six reps to someone who just did it for one. That is wrong as
+    coaching on its own, and in the projection it is large enough to blow
+    through the plausibility ceiling on week one, which froze an entire
+    12-week walk at its starting point.
+
+    This is the same "within one set" rule the display path already uses for
+    estimated 1RM: a load only counts paired with the reps actually done at
+    it, never with reps borrowed from a lighter set.
+
+    So: the heaviest load carried for at least the band's floor. With no band
+    to answer to, the load of the best-e1RM set. Only then the raw maximum.
+    """
+    usable = [
+        s
+        for s in sets or []
+        if float(s.get("weight") or 0) > 0 and int(s.get("reps") or 0) > 0
+    ]
+    if not usable:
+        weights = [float(s.get("weight") or 0) for s in sets or []]
+        return max(weights) if weights else 0.0
+
+    if rep_range is not None:
+        qualifying = [
+            float(s["weight"])
+            for s in usable
+            if int(s["reps"]) >= rep_range.low
+        ]
+        if qualifying:
+            return max(qualifying)
+
+    # No set reached the floor (or no band was given): fall back to the set
+    # that represents the most strength, judged within itself.
+    readable = [s for s in usable if set_e1rm(s) > 0]
+    if readable:
+        return float(max(readable, key=set_e1rm)["weight"])
+    return max(float(s["weight"]) for s in usable)
+
+
+def set_e1rm(workout_set: Dict) -> float:
+    """
+    Epley for one set, pairing a load only with its own reps.
+
+    Returns 0 for a set Epley cannot read rather than a clamped figure: a set
+    of 20 evidences endurance, not a 1RM, and clamping it to 12 would assert a
+    number the set never demonstrated.
+    """
+    weight = float(workout_set.get("weight") or 0)
+    reps = int(workout_set.get("reps") or 0)
+    if weight <= 0 or reps <= 0 or reps > E1RM_MAX_REPS:
+        return 0.0
+    return weight * (1 + reps / 30.0)
+
+
+def sets_at_working_load(
+    sets: List[Dict], rep_range: Optional[RepRangeConfig] = None
+) -> List[Dict]:
+    """The sets performed at the session's working load, in order."""
+    load = working_load(sets, rep_range)
+    if load <= 0:
+        return list(sets or [])
+    return [s for s in sets or [] if abs(float(s.get("weight") or 0) - load) < 0.01]
 
 
 def count_regressions(

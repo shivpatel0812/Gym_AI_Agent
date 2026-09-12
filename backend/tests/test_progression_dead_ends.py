@@ -1,5 +1,5 @@
 """
-The three ways a recommendation used to stop being able to move.
+The ways a recommendation used to stop being able to move.
 
 1. Bodyweight history was deleted before the engine saw it, so pull-ups read as
    "no history" no matter how many had been logged.
@@ -7,6 +7,8 @@ The three ways a recommendation used to stop being able to move.
    prescription of 10 and calls it an increase.
 3. Repeated misses against a band re-served the session that had just missed it,
    forever, with no route back into the band.
+4. A plan-day calibration prescribed less load at fewer reps than the session it
+   was translating, and nothing about clearing it could ever earn more.
 """
 
 import os
@@ -368,3 +370,115 @@ class TestPlanTargetRepsIsUsed:
         )["recommendation"]
 
         assert out["sets"][0]["rep_high"] == 12
+
+
+# === 5. A calibration is never easier than the session it translates ===
+
+def pull_day(weight, reps, date="2026-09-07"):
+    """The reference exposure, logged on another day of the same plan."""
+    session = loaded_session(weight, reps, date=date)
+    session["split_day"] = "Pull"
+    return session
+
+
+class TestCalibrationCannotGoBackwards:
+    """
+    175 x 7/6/5 on Pull, then the first Heavy exposure of the same lift on
+    another day: Epley says 175x7 is worth 180 at 6 reps, the 5% multi-set
+    reserve takes 5% back, and 170x6 came out the other side — less weight for
+    fewer reps than the session it was reading. Clearing it proves nothing and
+    the next recommendation reads 170x6 as in-band, so the lift holds under its
+    own demonstrated load indefinitely.
+    """
+
+    def calibrate(self, engine, reference, band, intensity="heavy"):
+        return engine.compute_recommendation(
+            exercise_id="default-back-cable-lat-pulldown",
+            exercise_name="Lat Pulldowns",
+            user_goal="Build Muscle",
+            focus_goal="strength",
+            recent_sessions=[],
+            alternate_day_reference=reference,
+            num_sets=3,
+            day_intensity=intensity,
+            rep_range_override=band,
+        )
+
+    def test_a_session_that_filled_the_band_earns_load_instead(self, engine):
+        result = self.calibrate(engine, pull_day(175, [7, 6, 5]), (5, 7))
+
+        # 175x7 is a 216 e1RM; at the floor of the band that is 185.
+        assert [(s.weight, s.reps) for s in result.sets] == [(185.0, 5)] * 3
+        assert all(s.rep_low == 5 and s.rep_high == 7 for s in result.sets)
+        assert result.reasoning_context["calibration_step_up"] is True
+
+    def test_the_step_up_says_what_to_do_when_it_does_not_go(self, engine):
+        result = self.calibrate(engine, pull_day(175, [7, 6, 5]), (5, 7))
+
+        assert result.branch is not None
+        assert result.branch.kind == "miss_drop"
+        assert "175" in result.branch.action
+
+    def test_fewer_reps_never_costs_load(self, engine):
+        """In-band, not at the top: hold the demonstrated load, do not shave it."""
+        result = self.calibrate(engine, pull_day(175, [6, 6, 6]), (5, 7))
+
+        assert result.sets[0].weight == 175.0
+        assert result.reasoning_context["calibration_step_up"] is False
+
+    def test_a_higher_rep_volume_day_still_steps_down(self, engine):
+        result = self.calibrate(engine, pull_day(175, [7, 6, 5]), (8, 12), "volume")
+
+        assert result.sets[0].weight < 175.0
+        assert result.sets[0].reps == 10
+        assert result.reasoning_context["calibration_step_up"] is False
+
+    def test_a_light_day_is_still_light(self, engine):
+        """A light day is meant to be easier than what was demonstrated."""
+        result = self.calibrate(engine, pull_day(175, [7, 6, 5]), (5, 7), "light")
+
+        assert result.sets[0].weight < 175.0
+        assert result.reasoning_context["calibration_step_up"] is False
+
+    def test_a_reference_short_of_the_band_is_still_translated_down(self, engine):
+        """175x3 says nothing about 175x6 — the reserve stays where it works."""
+        result = self.calibrate(engine, pull_day(175, [3, 3, 3]), (5, 7))
+
+        assert result.sets[0].weight < 175.0
+        assert result.sets[0].reps == 6
+
+    def test_a_band_with_no_width_still_moves(self, engine):
+        """5-5 translates to exactly the reference load; a tie is not a step."""
+        result = self.calibrate(engine, pull_day(185, [5, 5, 5]), (5, 5))
+
+        assert result.sets[0].weight > 185.0
+
+    def test_a_high_rep_reference_does_not_extrapolate_a_jump(self, engine):
+        """
+        Epley reads 175x20 as a 292 lb max. Stepping to the floor of an 8-12
+        band off that number prescribes 230 lbs to someone who has never been
+        near it; the set carries no 1RM, so only the direction is known.
+        """
+        result = self.calibrate(engine, pull_day(175, [20, 20, 20]), (8, 12))
+
+        assert result.sets[0].weight == 180.0
+
+    def test_a_burnout_set_does_not_define_the_load(self, engine):
+        """The readable set is 185x8, not the 135x20 that ended the session."""
+        reference = pull_day(185, [8, 8])
+        reference["sets"].append({"set_number": 3, "reps": 20, "weight": 135})
+
+        result = self.calibrate(engine, reference, (5, 7))
+
+        assert result.reasoning_context["reference_weight"] == 185.0
+
+    def test_the_prose_does_not_call_a_load_increase_a_calibration(self, engine):
+        result = self.calibrate(engine, pull_day(175, [7, 6, 5]), (5, 7))
+        text = ReasoningGenerator(openai_client=None).generate_reasoning(
+            decision=result.decision,
+            reasoning_context=result.reasoning_context,
+            exercise_name="Lat Pulldowns",
+        )
+
+        assert "calibrates to" not in text
+        assert "185" in text and "175" in text

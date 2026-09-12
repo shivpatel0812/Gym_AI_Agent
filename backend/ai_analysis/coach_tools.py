@@ -210,6 +210,7 @@ class CoachToolbox:
         user_id: str,
         mode: str = "coach",
         conversation_id: Optional[str] = None,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
         allow_photo_view: bool = False,
     ):
         self.db = db
@@ -219,6 +220,7 @@ class CoachToolbox:
         # chat stays read-only.
         self.mode = mode
         self.conversation_id = conversation_id
+        self.conversation_history = conversation_history or []
         self._local_now: Optional[datetime] = None
         # Structured results the client should render as more than chat text
         # (a suggestion card, say). Read by the chat routers after the turn.
@@ -1224,6 +1226,63 @@ class CoachToolbox:
             ),
         }
 
+    def propose_training_plan(
+        self,
+        goal_statement: Optional[str] = None,
+        plan_mode: Optional[str] = None,
+        duration_weeks: Optional[int] = None,
+        nutrition_goal: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate and stage a complete structured workout plan draft from the
+        conversation for the user to review and activate.
+        """
+        try:
+            from routers.training_plan import build_and_save_proposed_plan
+
+            res = build_and_save_proposed_plan(
+                db=self.db,
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                conversation_history=getattr(self, "conversation_history", None),
+                goal_statement=goal_statement,
+                plan_mode=plan_mode,
+                duration_weeks=duration_weeks,
+                nutrition_goal=nutrition_goal,
+            )
+            if "error" in res:
+                return {"status": "error", "message": res["error"]}
+
+            saved = res["plan"]
+            days_count = len(saved.get("days") or [])
+            day_names = [d.get("name") or d.get("day_name", "Workout") for d in saved.get("days", [])]
+
+            self.artifacts.append({
+                "type": "plan_proposed",
+                "plan_id": saved.get("id"),
+                "plan_name": saved.get("plan_name"),
+                "summary": f"Draft plan '{saved.get('plan_name')}' generated with {days_count} days",
+                "days": days_count,
+                "day_names": day_names,
+                "plan": saved,
+            })
+
+            return {
+                "status": "success",
+                "plan_id": saved.get("id"),
+                "plan_name": saved.get("plan_name"),
+                "days_count": days_count,
+                "days": day_names,
+                "message": (
+                    f"Draft plan '{saved.get('plan_name')}' successfully generated with {days_count} workout days "
+                    f"({', '.join(day_names)}). Staged as a draft for the user to review and activate. "
+                    "Tell the user the plan has been created and is ready to review and activate below."
+                ),
+            }
+        except Exception as e:
+            print(f"propose_training_plan tool failed: {e}")
+            return {"status": "error", "message": f"Could not generate training plan: {e}"}
+
     def get_wellness_log(self, days: int = 7) -> Dict[str, Any]:
         """Day-by-day sleep, stress, and wellness-survey entries."""
         sleep = self._fetch_range("sleep", days)
@@ -1383,6 +1442,7 @@ class CoachToolbox:
             "propose_progress_goal": self.propose_progress_goal,
             "propose_nutrition_edits": self.propose_nutrition_edits,
             "propose_plan_edits": self.propose_plan_edits,
+            "propose_training_plan": self.propose_training_plan,
         }.get(name)
 
         if handler is None:
@@ -1776,7 +1836,12 @@ PHOTO_VIEW_SCHEMAS = [
 # nutrition plan for the user to review on the Plan page. It is offered only
 # in nutrition mode, and even then it cannot write the plan itself.
 
-WRITE_TOOLS = {"propose_nutrition_edits", "propose_plan_edits", "propose_progress_goal"}
+WRITE_TOOLS = {
+    "propose_nutrition_edits",
+    "propose_plan_edits",
+    "propose_progress_goal",
+    "propose_training_plan",
+}
 
 EDIT_OPS = [
     "update_targets",
@@ -1952,6 +2017,49 @@ PLAN_WRITE_SCHEMAS = [
                     },
                 },
                 "required": ["edits"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_training_plan",
+            "description": (
+                "Generate and stage a complete structured workout plan draft from the "
+                "conversation for the user to review and activate. Call this whenever "
+                "the user asks to create, generate, build, make, or set up a plan (e.g. "
+                "'create the plan', 'generate my plan', 'make this my plan', 'build it', "
+                "'set up the plan', 'create the split'). Do NOT ask them to click Plan "
+                "or switch modes — call this tool directly to build the plan."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal_statement": {
+                        "type": "string",
+                        "description": (
+                            "Summary of the primary training goal (e.g. 'Build chest "
+                            "and arms, 4 days a week', 'Squat 315 in 12 weeks')."
+                        ),
+                    },
+                    "plan_mode": {
+                        "type": "string",
+                        "enum": ["follow_split", "adapt_split", "build_for_me"],
+                        "description": (
+                            "follow_split: keep existing split structure; "
+                            "adapt_split: adapt current split with adjustments; "
+                            "build_for_me: design fresh routine from scratch."
+                        ),
+                    },
+                    "duration_weeks": {
+                        "type": "integer",
+                        "description": "Duration in weeks (default 12, max 24).",
+                    },
+                    "nutrition_goal": {
+                        "type": "string",
+                        "description": "Optional bodyweight goal: 'gain', 'lose', or 'maintain'.",
+                    },
+                },
             },
         },
     },

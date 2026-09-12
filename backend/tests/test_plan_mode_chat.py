@@ -107,3 +107,65 @@ def test_dispatch_refuses_a_write_tool_outside_nutrition_mode():
 
     assert "error" in result
     assert toolbox.artifacts == []
+
+
+def test_propose_training_plan_available_in_coach_and_plan_modes():
+    """Users can say 'create the plan' in ordinary coach chat or plan chat."""
+    from ai_analysis.coach_tools import tools_for_mode
+
+    names = lambda mode: {t["function"]["name"] for t in tools_for_mode(mode)}
+
+    assert "propose_training_plan" in names("coach")
+    assert "propose_training_plan" in names("plan")
+    assert "propose_training_plan" not in names("nutrition")
+
+
+def test_required_tool_forces_propose_training_plan_on_creation_intent():
+    """Saying 'create the plan' triggers propose_training_plan directly without clicking Plan."""
+    from ai_analysis.ai_coach import required_tool_for_turn
+
+    phrases = [
+        "create the plan",
+        "generate the plan",
+        "make this my plan",
+        "build the plan",
+        "create a plan",
+        "let's create the plan",
+        "can you create this plan",
+        "go ahead and generate the workout plan",
+        "create it",
+    ]
+    for phrase in phrases:
+        assert required_tool_for_turn(phrase, mode="coach") == "propose_training_plan", f"Failed for '{phrase}' in coach mode"
+        assert required_tool_for_turn(phrase, mode="plan") == "propose_training_plan", f"Failed for '{phrase}' in plan mode"
+
+
+def test_toolbox_propose_training_plan_emits_artifact():
+    from ai_analysis.coach_tools import CoachToolbox
+
+    toolbox = CoachToolbox(db=None, user_id="u1", mode="coach")
+
+    mock_plan = {
+        "id": "draft-123",
+        "plan_name": "Push Pull Legs Strength",
+        "status": "draft",
+        "days": [
+            {"name": "Push", "exercises": []},
+            {"name": "Pull", "exercises": []},
+            {"name": "Legs", "exercises": []},
+        ],
+    }
+
+    with patch("routers.training_plan.build_and_save_proposed_plan", return_value={"plan": mock_plan}):
+        result = toolbox.dispatch("propose_training_plan", {"goal_statement": "get strong"})
+
+    assert result["status"] == "success"
+    assert result["plan_id"] == "draft-123"
+    assert len(toolbox.artifacts) == 1
+    artifact = toolbox.artifacts[0]
+    assert artifact["type"] == "plan_proposed"
+    assert artifact["plan_id"] == "draft-123"
+    assert artifact["plan_name"] == "Push Pull Legs Strength"
+    assert artifact["days"] == 3
+
+

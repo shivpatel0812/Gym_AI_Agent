@@ -23,6 +23,7 @@ more" are one plan, and a user deciding whether a surplus is working needs to
 see both against the same calendar.
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -179,6 +180,48 @@ def exceeds_plausible_gain(
     return candidate_e1rm > plausibility_ceiling(baseline_e1rm, week, weekly_gain)
 
 
+def required_weekly_gain(
+    baseline_e1rm: Optional[float],
+    destination_e1rm: Optional[float],
+    weeks: Optional[int],
+) -> Optional[float]:
+    """
+    The weekly rate that actually reaches the finish line on time.
+
+    Uncapped on purpose. `pace_to_destination` returns the *slower* of this and
+    what training plausibly delivers, which is the right answer for the line a
+    user is asked to expect -- and the wrong answer for the question "what
+    would I have to do?". Telling someone a goal is unreachable and stopping
+    there gives them nothing to act on; the rate is the actionable part.
+    """
+    if not baseline_e1rm or baseline_e1rm <= 0 or not destination_e1rm or not weeks:
+        return None
+    if destination_e1rm <= baseline_e1rm:
+        return 0.0
+    return (destination_e1rm / baseline_e1rm) ** (1.0 / max(1, weeks)) - 1.0
+
+
+def weeks_at_rate(
+    baseline_e1rm: Optional[float],
+    destination_e1rm: Optional[float],
+    rate: Optional[float],
+) -> Optional[int]:
+    """
+    How long the finish line takes at a given weekly rate.
+
+    The other half of an honest "you will not make it by December": when the
+    date is the thing that has to move, say which date.
+    """
+    if not baseline_e1rm or baseline_e1rm <= 0 or not destination_e1rm or not rate:
+        return None
+    if destination_e1rm <= baseline_e1rm:
+        return 0
+    if rate <= 0:
+        return None
+    weeks = math.log(destination_e1rm / baseline_e1rm) / math.log(1 + rate)
+    return max(1, math.ceil(weeks))
+
+
 def pace_to_destination(
     baseline_e1rm: Optional[float],
     destination_e1rm: Optional[float],
@@ -301,6 +344,90 @@ class CardioWeekPoint:
 
 
 @dataclass
+class PaceDemand:
+    """
+    What the aggressive track actually asks of the lifter.
+
+    A goal that the steady walk misses is not finished information. The useful
+    half is the rate it *would* take and what has to change to buy it -- and,
+    when nothing can buy it, which date is honest instead. "Unreachable" on its
+    own is a verdict with no action attached to it.
+
+    Nothing here is a promise. `within_plausible` is the load-bearing field:
+    when it is False the required rate is beyond what training delivers even
+    eating for it, and the answer is to move the date rather than to try
+    harder.
+    """
+
+    required_weekly_gain: float
+    plausible_weekly_gain: float
+    # Same figure recomputed as if the lifter ate in a surplus, which is the
+    # one lever that genuinely changes the ceiling.
+    plausible_on_surplus: float
+    weeks_requested: int
+    weeks_at_current_pace: Optional[int]
+    weeks_on_surplus: Optional[int]
+    energy_balance: Optional[str]
+
+    @property
+    def ratio(self) -> float:
+        if self.plausible_weekly_gain <= 0:
+            return 0.0
+        return self.required_weekly_gain / self.plausible_weekly_gain
+
+    @property
+    def within_plausible(self) -> bool:
+        """Reachable on time by training alone, without changing anything."""
+        return self.required_weekly_gain <= self.plausible_weekly_gain
+
+    @property
+    def within_surplus(self) -> bool:
+        """Reachable on time, but only by also eating for it."""
+        return self.required_weekly_gain <= self.plausible_on_surplus
+
+    def requirements(self) -> List[str]:
+        """Plain statements of what the push track is asking for."""
+        out: List[str] = []
+        if self.within_plausible:
+            out.append("No change needed — the steady plan already gets there.")
+            return out
+        out.append(
+            f"Add {self.required_weekly_gain * 100:.1f}% to your estimated 1RM every "
+            f"week — {self.ratio:.1f}x the {self.plausible_weekly_gain * 100:.1f}% "
+            "an intermediate typically gains at your current intake."
+        )
+        out.append("Every session hit, in the band, no missed weeks.")
+        if not self.within_plausible and self.within_surplus:
+            out.append(
+                "Eat in a surplus. At maintenance this rate is not on the table; "
+                "on a surplus it is the top of the range."
+            )
+        if not self.within_surplus:
+            when = self.weeks_on_surplus or self.weeks_at_current_pace
+            out.append(
+                "This rate is beyond what training delivers even in a surplus — "
+                "the date is the problem, not the effort."
+                + (f" On a surplus the honest date is about {when} weeks out." if when else "")
+            )
+        return out
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "required_weekly_gain": round(self.required_weekly_gain, 5),
+            "plausible_weekly_gain": round(self.plausible_weekly_gain, 5),
+            "plausible_on_surplus": round(self.plausible_on_surplus, 5),
+            "ratio": round(self.ratio, 2),
+            "within_plausible": self.within_plausible,
+            "within_surplus": self.within_surplus,
+            "weeks_requested": self.weeks_requested,
+            "weeks_at_current_pace": self.weeks_at_current_pace,
+            "weeks_on_surplus": self.weeks_on_surplus,
+            "energy_balance": self.energy_balance,
+            "requirements": self.requirements(),
+        }
+
+
+@dataclass
 class ExerciseProjection:
     exercise_id: str
     exercise_name: str
@@ -329,6 +456,14 @@ class ExerciseProjection:
     destination: Optional[Dict[str, Any]] = None
     arrived_week: Optional[int] = None
     reachable: Optional[bool] = None
+
+    # Which pace produced the curves above: "steady" (what training plausibly
+    # delivers) or "push" (the rate the stated finish line actually requires).
+    pace: str = "steady"
+    # Populated on the steady projection whenever a destination exists, so a
+    # client can say what the harder path costs without running a second walk
+    # to find out whether one is even worth offering.
+    demand: Optional[PaceDemand] = None
 
     # What the curve assumed about this lifter. Reported rather than applied
     # silently: these are conventions, not measurements, and a user who trains
@@ -534,6 +669,8 @@ class PlanProjector:
         day_intensity: Optional[str] = None,
         experience_level: Optional[str] = None,
         energy_balance: Optional[str] = None,
+        heavy_day_weight: Optional[float] = None,
+        pace: str = "steady",
     ) -> ExerciseProjection:
         """
         Walk the real engine forward, assuming every prescription is met.
@@ -635,6 +772,33 @@ class PlanProjector:
         weekly_gain = pace_to_destination(
             baseline_e1rm, pace_target, weeks, plausible_rate
         )
+
+        # The push track answers "what would it take?" rather than "what will
+        # probably happen?", so the plausibility rate stops being the binding
+        # constraint. The destination *load* cap still holds — pushing harder
+        # is not licence to hand back a heavier dumbbell than was asked for.
+        required_rate = required_weekly_gain(baseline_e1rm, pace_target, weeks)
+        if pace == "push" and required_rate:
+            weekly_gain = max(weekly_gain, required_rate)
+
+        demand = None
+        if destination and baseline_e1rm and required_rate is not None:
+            surplus_rate = plausible_weekly_gain(experience_level, "gain")
+            demand = PaceDemand(
+                required_weekly_gain=required_rate,
+                plausible_weekly_gain=plausible_rate,
+                plausible_on_surplus=surplus_rate,
+                weeks_requested=weeks,
+                weeks_at_current_pace=weeks_at_rate(
+                    baseline_e1rm, pace_target, plausible_rate
+                ),
+                weeks_on_surplus=weeks_at_rate(
+                    baseline_e1rm, pace_target, surplus_rate
+                ),
+                energy_balance=(
+                    str(energy_balance).strip().lower() if energy_balance else None
+                ),
+            )
         # A stated goal is a ceiling as well as a target. Projecting past what
         # the user asked for is how a 12-week chart ended 15 lb above the
         # heaviest dumbbell they named.
@@ -693,6 +857,7 @@ class PlanProjector:
                     user_goal=user_goal,
                     focus_goal=focus_goal,
                     day_intensity=day_intensity,
+                    heavy_day_weight=heavy_day_weight,
                     rep_range_override=rep_range_override,
                     recent_sessions=simulated[:6],
                     num_sets=num_sets,
@@ -769,8 +934,20 @@ class PlanProjector:
                 held = best_case[-1] if best_case else current
                 if held is None:
                     break
+                # A held week has to say *why* it is held, or the chart draws a
+                # flat line with no account of itself. "capped" is the walk
+                # waiting for the plausibility ceiling to rise far enough to
+                # afford the next discrete step; "maintain" is having nothing
+                # left to prescribe.
+                held_decision = "capped" if plateaued_at is not None else "maintain"
                 best_case.append(
-                    WeekPoint(week=week, weight=held.weight, reps=held.reps, e1rm=held.e1rm)
+                    WeekPoint(
+                        week=week,
+                        weight=held.weight,
+                        reps=held.reps,
+                        e1rm=held.e1rm,
+                        decision=held_decision,
+                    )
                 )
                 # A held week is still a week the user trains, so the table
                 # needs its rows. Without this the schedule was empty whenever
@@ -783,7 +960,7 @@ class PlanProjector:
                             weight=held.weight,
                             reps=held.reps,
                             e1rm=held.e1rm,
-                            decision="maintain",
+                            decision=held_decision,
                             session=session_index,
                             sets=list(held.sets) or [
                                 {"set_number": i + 1, "weight": held.weight, "reps": held.reps}
@@ -831,6 +1008,8 @@ class PlanProjector:
             destination=destination,
             arrived_week=arrived_week,
             reachable=reachable,
+            pace=pace,
+            demand=demand,
             assumptions={
                 "experience_level": (
                     str(experience_level).strip().lower()

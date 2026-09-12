@@ -132,6 +132,13 @@ _PLAN_IMPROVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PLAN_CREATE_RE = re.compile(
+    r"\b(create|generate|build|make|set up|start|save)\b.{0,30}\b(the|this|my|a)?\s*(workout )?(plan|program|split|routine)\b"
+    r"|\b(create|generate|build|make)\s+(it|this)\b"
+    r"|\b(can you|please|let'?s|go ahead and)\s+(create|generate|build|make)\b.{0,25}\b(the|a|this|my)?\s*(plan|program|split|routine|it|this)\b",
+    re.IGNORECASE,
+)
+
 
 def required_tool_for_turn(
     message: str,
@@ -143,7 +150,8 @@ def required_tool_for_turn(
 
     Plan Mode always reads recent sessions on the opening turn so the interview
     cannot invent a split while logs sit unread. Improve-my-plan asks force a
-    training-plan read so edits target real day names.
+    training-plan read so edits target real day names. Create-plan asks invoke
+    propose_training_plan directly so plans can be built without manual mode toggling.
     """
     fresh = fresh_log_tool(message)
     if fresh:
@@ -153,6 +161,9 @@ def required_tool_for_turn(
     user_turns = sum(
         1 for m in history if str(m.get("role") or "").lower() == "user"
     )
+
+    if mode in ("coach", "plan") and _PLAN_CREATE_RE.search(str(message or "")):
+        return "propose_training_plan"
 
     if mode == "plan" and user_turns == 0:
         return "get_recent_sessions"
@@ -675,7 +686,7 @@ How to run the interview:
 - Explain that the weekly roadmap is conditional on hitting targets; actual
   workout recommendations adapt to logged performance and recovery.
 - Under-filling is the failure mode to avoid: chatting about incline must still leave Pull and Legs complete.
-- Do NOT output JSON. When they confirm the day lists, summarise the brief in a few bullets and tell them to tap Generate Plan so the program can be built and reviewed.
+- Do NOT output JSON. When they ask to create or generate the plan (e.g. "create the plan", "generate the plan", "make the plan", "build it"), call propose_training_plan to build and stage the structured draft plan directly. They can also tap Generate Plan if they prefer, but when they ask in chat you must call propose_training_plan directly without asking them to tap any button.
 - If they already have an ACTIVE plan and want improvements (fill missing days, retarget a lift), call propose_plan_edits with structure and/or field ops so they can Accept on Plan Hub — do not claim the live plan changed.
 - If they ask to generate now and you still have a critical gap, ask that one question first.
 
@@ -800,7 +811,13 @@ Where a metric reads "not logged", say you don't have that data instead of guess
 When the user wants to improve, fix, fill, or edit their training plan, call get_training_plan /
 use ACTIVE TRAINING PLAN, then propose_plan_edits. Prefer filling sparse days from logged
 sessions (replace_day_exercises) over inventing a one-lift plan. Those edits are staged for
-Accept on the Plan tab — never say you already changed the live plan."""
+Accept on the Plan tab — never say you already changed the live plan.
+
+When the user asks to create, generate, build, make, or set up a workout plan based on what you discussed
+(e.g. "create the plan", "generate my plan", "make this my plan", "build the plan", "set up the plan", "let's create it"):
+Call propose_training_plan. This directly builds a complete structured plan draft from the conversation for
+them to review and activate. NEVER tell them to click Plan, tap a button, or switch tabs/modes to create the plan —
+you have the tool to build it right here."""
 
             if toolbox is not None:
                 system_message += """

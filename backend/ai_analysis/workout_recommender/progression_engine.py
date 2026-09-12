@@ -16,7 +16,11 @@ from .cardio_progression import compute_cardio_progression
 from .goal_configs import get_goal_config, resolve_goal_config, GoalConfig, RepRangeConfig
 from .prescription import (
     Branch,
+    E1RM_MAX_REPS,
     count_regressions,
+    sets_at_working_load,
+    supports_top_set,
+    working_load,
     typical_reps,
     ProgressionStrategy,
     SessionOutcome,
@@ -47,6 +51,22 @@ from .weight_estimator import (
 # reps is a session to repeat; missing it with 8 means the weight was never
 # going to allow the band. Reasoned, not calibrated.
 LOAD_MISMATCH_REPS = 3
+
+# A Volume day buys reps by giving up load. Left to progress from its own
+# history it has no relationship to the Heavy day at all, so the two converge
+# and the "volume" day ends up working the same load for the same reps — at
+# which point the plan has two heavy days and calls one of them volume.
+#
+# The step-down used to be applied once, on the first exposure, by
+# `_handle_plan_day_calibration`. One-shot is not enough: day-specific
+# progression then walks each day forward independently and the gap closes
+# again within a few sessions. This is the standing relationship, re-derived
+# every session, the way `_handle_light_day` already re-derives 0.875.
+VOLUME_DAY_PCT = 0.90
+
+# Re-exported from `prescription`, which now owns the figure because
+# `working_load` needs it too. Same call as progress/domains.py: sets past the
+# cap are skipped, never clamped.
 
 # Readiness thresholds for the demotion ladder. Placeholders: nobody knows
 # how much a night of poor sleep should move a top set, so these are a
@@ -229,6 +249,12 @@ class ProgressionEngine:
             focus_goal=focus_goal,
         )
 
+        if day_intensity == "volume" and heavy_day_weight:
+            result = self._cap_to_volume_day(
+                result, float(heavy_day_weight), exercise_id, exercise_name,
+                exercise_record,
+            )
+
         if day_intensity:
             result.reasoning_context = {
                 **(result.reasoning_context or {}),
@@ -396,13 +422,22 @@ class ProgressionEngine:
         # This replaces a total-volume comparison against the previous session,
         # which scored a successful weight increase as a failure and bounced the
         # user between two loads indefinitely.
-        outcome = evaluate_session(latest_sets, rep_range)
+        # Judged on the sets at the working load. A warmup single or a backoff
+        # set carries reps that say nothing about whether the *worked* load was
+        # earned, and letting them vote meant an easy backoff sweeping its band
+        # could earn a jump on a top set that had actually been missed.
+        judged_sets = sets_at_working_load(latest_sets, rep_range) or latest_sets
+        outcome = evaluate_session(judged_sets, rep_range)
         strategy = select_strategy(metadata, goal_config)
         if day_intensity == "volume":
             # Volume work should use repeatable straight sets, even when the
             # same compound lift uses a top-set shape on its Heavy day.
             strategy = ProgressionStrategy.BAND
-        elif day_intensity == "heavy" and metadata.compound and rep_range.high <= 8:
+        elif (
+            day_intensity == "heavy"
+            and supports_top_set(metadata)
+            and rep_range.high <= 8
+        ):
             strategy = ProgressionStrategy.TOP_SET
 
         # 6. Check difficulty ratings
@@ -762,6 +797,14 @@ class ProgressionEngine:
         keeps the result suitable for several working sets rather than turning
         a best-set estimate into a failure target. This is a one-time
         calibration; future recommendations use this day's own logged history.
+
+        The reserve may never carry the prescription *below* the session it is
+        translating. Asking for fewer reps at less weight than the user has
+        already logged is a session with no possible outcome: clearing it
+        proves nothing and the next recommendation reads it as a hold, so the
+        lift sits under its own demonstrated load indefinitely. Where the
+        reference already filled today's band, the answer is more load at the
+        band's floor, not a translation of work that is finished.
         """
         usable, has_implausible = self._filter_implausible_sets(
             reference_session.get("sets") or [], metadata
@@ -769,8 +812,15 @@ class ProgressionEngine:
         if not usable:
             return None
 
+        # Epley is a straight-line fit and says nothing past about a dozen
+        # reps, so read the capacity off a set it can actually read — a
+        # 20-rep burnout set would otherwise define the load for every other
+        # day of the plan.
+        readable = [
+            item for item in usable if int(item.get("reps") or 0) <= E1RM_MAX_REPS
+        ] or usable
         best = max(
-            usable,
+            readable,
             key=lambda item: float(item.get("weight") or 0)
             * (1 + int(item.get("reps") or 0) / 30),
         )
@@ -782,12 +832,47 @@ class ProgressionEngine:
         resolution = self._weight_resolution(metadata)
         target_reps = rep_range.midpoint
         reference_e1rm = reference_weight * (1 + reference_reps / 30)
+        # Where the reference landed against *today's* band decides whether
+        # this is a translation or a step up. A reference that already filled
+        # this band has nothing left to calibrate.
+        outcome = evaluate_session(usable, rep_range)
+        # A light day is deliberately easier than what was demonstrated, and a
+        # volume day steps down to buy reps, so neither can earn load here.
+        earned = day_intensity not in ("volume", "light") and outcome in (
+            SessionOutcome.SWEPT_TOP,
+            SessionOutcome.AT_TOP,
+        )
+        branch = None
 
         if day_intensity == "light":
             estimated_weight = self._round_to_increment(
                 reference_weight * 0.875, resolution
             )
             target_reps = rep_range.high
+        elif earned:
+            # Re-enter the band at its floor with the load that costs, the
+            # same move _handle_increase_weight makes — and take no reserve.
+            # The reserve exists to keep a best-set estimate survivable across
+            # several sets; the floor of the band already is that.
+            target_reps = rep_range.low
+            estimated_weight = (
+                self._round_to_increment(
+                    reference_e1rm / (1 + target_reps / 30), resolution
+                )
+                if reference_reps <= E1RM_MAX_REPS
+                # No set here carries a readable 1RM, so there is no estimate
+                # to step to — only the direction is known. Take the smallest
+                # real step rather than extrapolating a number off a set of 20.
+                else reference_weight
+            )
+            # A band with no width, or coarse equipment rounding, must still
+            # come out above the reference rather than tying with it.
+            estimated_weight = max(estimated_weight, reference_weight + resolution)
+            branch = Branch(
+                condition=f"If set 1 misses {target_reps} reps",
+                action=f"Drop to {reference_weight:g} lbs and fill the band",
+                kind="miss_drop",
+            )
         else:
             multi_set_reserve = 0.95
             raw_weight = (
@@ -801,6 +886,14 @@ class ProgressionEngine:
                     estimated_weight,
                     max(resolution, reference_weight - resolution),
                 )
+            elif target_reps <= reference_reps:
+                # Fewer reps than were already logged, at less load, is a
+                # session that cannot say anything: the 5% reserve is larger
+                # than one rep of Epley (~3%), so a 175x7 reference asked for
+                # 6 reps came back as 170 lbs — strictly easier than what was
+                # done. A calibration may sit at the demonstrated load. It may
+                # never sit under it.
+                estimated_weight = max(estimated_weight, reference_weight)
 
         days_ago = days_since_session(reference_session.get("date"))
         if days_ago is not None and days_ago > 30:
@@ -816,8 +909,10 @@ class ProgressionEngine:
         context = {
             "reason": "plan_day_calibration",
             "plan_day_calibration": True,
+            "calibration_step_up": bool(earned),
             "reference_weight": reference_weight,
             "reference_reps": reference_reps,
+            "reference_outcome": outcome.value,
             "reference_day": reference_session.get("split_day"),
             "estimated_weight": estimated_weight,
             "target_reps": target_reps,
@@ -830,9 +925,18 @@ class ProgressionEngine:
             decision=Decision.FIRST_SESSION,
             confidence="medium",
             strategy=ProgressionStrategy.BAND.value,
+            branch=branch,
             guidance=(
-                "Treat set 1 as a calibration: keep 1-2 reps in reserve and "
-                "adjust one equipment increment if needed."
+                (
+                    f"You already filled this band at {reference_weight:g} lbs, so "
+                    f"this is a step up, not a calibration: {estimated_weight:g} lbs "
+                    f"for {target_reps}, hard but not to failure."
+                )
+                if earned
+                else (
+                    "Treat set 1 as a calibration: keep 1-2 reps in reserve and "
+                    "adjust one equipment increment if needed."
+                )
             ),
             reasoning_context=context,
         )
@@ -1097,7 +1201,7 @@ class ProgressionEngine:
         metadata: ExerciseMetadata,
     ) -> ProgressionResult:
         """Deload at ~80% of last working weight, midrange reps."""
-        max_weight = max((s.get("weight", 0) for s in latest_sets), default=0)
+        max_weight = working_load(latest_sets, rep_range)
         resolution = self._weight_resolution(metadata)
         deload_weight = self._round_to_increment(max_weight * 0.8, resolution)
         deload_reps = rep_range.midpoint
@@ -1133,7 +1237,7 @@ class ProgressionEngine:
         if heavy_day_weight:
             reference_weight = heavy_day_weight
         else:
-            reference_weight = max((s.get("weight", 0) for s in latest_sets), default=0)
+            reference_weight = working_load(latest_sets, rep_range)
 
         # 85-90% — use 87.5% as midpoint
         resolution = self._weight_resolution(metadata)
@@ -1166,7 +1270,7 @@ class ProgressionEngine:
         strategy: ProgressionStrategy = ProgressionStrategy.BAND,
     ) -> ProgressionResult:
         """Ceiling reached → move the load up and re-enter the band at its floor."""
-        max_weight = max((s.get("weight", 0) for s in latest_sets), default=0)
+        max_weight = working_load(latest_sets, rep_range)
         # Round to weight resolution (5 lbs for all standard equipment)
         resolution = self._weight_resolution(metadata)
         new_weight = self._round_to_increment(max_weight + increment, resolution)
@@ -1292,8 +1396,11 @@ class ProgressionEngine:
         # Do not round 12 lb down to 10 merely because generic cable metadata
         # assumes 5 lb increments. Resolution matters when moving to a NEW
         # load, not while adding reps at the same proven load.
-        weight = max((s.get("weight", 0) for s in latest_sets), default=0)
-        reps = [int(s.get("reps") or 0) for s in latest_sets if (s.get("reps") or 0) > 0]
+        weight = working_load(latest_sets, rep_range)
+        # Judged on the sets that were actually at the working load. A warmup
+        # single or a backoff set is not evidence about the load being worked.
+        judged = sets_at_working_load(latest_sets, rep_range) or latest_sets
+        reps = [int(s.get("reps") or 0) for s in judged if (s.get("reps") or 0) > 0]
         lowest = min(reps) if reps else rep_range.low
         typical = int(median(reps)) if reps else rep_range.low
 
@@ -1698,6 +1805,50 @@ class ProgressionEngine:
             (s.get("weight") or 0) * (s.get("reps") or 0) for s in previous_sets[:n]
         )
         return current_volume >= previous_volume
+
+    def _cap_to_volume_day(
+        self,
+        result: ProgressionResult,
+        heavy_day_weight: float,
+        exercise_id: str,
+        exercise_name: str,
+        exercise_record: Optional[Dict],
+    ) -> ProgressionResult:
+        """
+        A Volume day may never out-load the Heavy day it hangs off.
+
+        Applied to the finished prescription rather than inside each handler,
+        so every path out of the engine answers to it — including the ones
+        that read a shared, undifferentiated history and would otherwise hand
+        the volume day the heavy day's load verbatim.
+
+        Only ever lowers. A volume day already below the ceiling is left alone;
+        pulling it *up* to the cap would invent load the history never
+        evidenced.
+        """
+        loaded = [s for s in (result.sets or []) if (s.weight or 0) > 0]
+        if not loaded:
+            return result
+        metadata = resolve_exercise_metadata(exercise_id, exercise_name, exercise_record)
+        resolution = self._weight_resolution(metadata)
+        ceiling = self._round_to_increment(heavy_day_weight * VOLUME_DAY_PCT, resolution)
+        # Coarse rounding must not let the cap tie with the heavy day.
+        if ceiling >= heavy_day_weight:
+            ceiling = max(resolution, heavy_day_weight - resolution)
+        top = max(s.weight for s in loaded)
+        if top <= ceiling:
+            return result
+        scale = ceiling / top
+        for s in result.sets:
+            if (s.weight or 0) > 0:
+                s.weight = self._round_to_increment(s.weight * scale, resolution)
+        result.reasoning_context = {
+            **(result.reasoning_context or {}),
+            "volume_day_capped_from": top,
+            "volume_day_ceiling": ceiling,
+            "heavy_day_weight": heavy_day_weight,
+        }
+        return result
 
     def _weight_resolution(self, metadata: ExerciseMetadata) -> float:
         """

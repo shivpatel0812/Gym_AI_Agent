@@ -16,6 +16,8 @@ from ai_analysis.workout_recommender.recommendation_metrics import (
     summarize_recommendation_metrics,
 )
 
+from ai_analysis.session_day import resolve_plan_day
+
 router = APIRouter(prefix="/api/workout-sessions", tags=["workout-sessions"])
 
 
@@ -402,11 +404,46 @@ async def get_workout_sessions(user_id: str = Depends(get_user_id), date_filter:
         ), reverse=True)
     return [{"id": session.id, **session.to_dict()} for session in sessions]
 
+def _stamp_plan_day(session_dict: dict, user_id: str) -> None:
+    """
+    Record *which* exposure of a repeated day this session was.
+
+    The client sends the split day the user picked -- "Pull" -- but a plan that
+    trains Pull twice a week has a Pull A and a Pull B with different bands and
+    different loads. Stored generically, both plan days read one shared history
+    and the volume exposure inherits the heavy one's load.
+
+    Best effort and non-fatal: a session that cannot be attributed keeps the
+    label the user gave it, and a lookup failure must never cost the log.
+    """
+    if not session_dict.get("split_day"):
+        return
+    try:
+        plans_ref = (
+            db.collection("users").document(user_id).collection("workout_plans")
+        )
+        active = list(plans_ref.where("is_active", "==", True).limit(1).stream())
+        if not active:
+            return
+        resolved = resolve_plan_day(
+            session_dict.get("split_day"),
+            active[0].to_dict() or {},
+            session_dict.get("date"),
+        )
+        if resolved:
+            session_dict["split_day_logged"] = session_dict["split_day"]
+            session_dict["split_day"] = resolved
+            session_dict["split_day_source"] = "schedule"
+    except Exception as exc:  # noqa: BLE001 - attribution is never worth a 500
+        print(f"[workout_sessions] plan-day attribution skipped: {exc}")
+
+
 @router.post("")
 async def create_workout_session(session: WorkoutSession, user_id: str = Depends(get_user_id)):
     try:
         session_dict = session.model_dump(exclude={"id"}) if hasattr(session, "model_dump") else session.dict(exclude={"id"})
         session_dict["created_at"] = datetime.now().isoformat()
+        _stamp_plan_day(session_dict, user_id)
         doc_ref = db.collection("users").document(user_id).collection("workout_sessions").document()
         doc_ref.set(session_dict)
         return {"id": doc_ref.id, **session_dict}
@@ -420,6 +457,7 @@ async def update_workout_session(session_id: str, session: WorkoutSession, user_
     try:
         session_dict = session.model_dump(exclude={"id"}) if hasattr(session, "model_dump") else session.dict(exclude={"id"})
         session_dict["updated_at"] = datetime.now().isoformat()
+        _stamp_plan_day(session_dict, user_id)
         doc_ref = db.collection("users").document(user_id).collection("workout_sessions").document(session_id)
         # merge write so a race with first-time auto-save doesn't 404
         doc_ref.set(session_dict, merge=True)

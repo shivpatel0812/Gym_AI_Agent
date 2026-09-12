@@ -28,6 +28,8 @@ from .readiness_context import ReadinessResolver, ReadinessContext
 from .weight_estimator import days_since_session, infer_top_lifts_from_related_history
 from .exercise_metadata import resolve_exercise_metadata, is_bodyweight
 from .personalization import learn_position_factor, apply_position_factor
+from .prescription import working_load
+from .goal_configs import RepRangeConfig
 
 
 # Persisted recommendations live inside draft workout sessions. Increment this
@@ -186,6 +188,38 @@ class WorkoutRecommender:
                 })
         result.sort(key=lambda item: item.get("date") or "", reverse=True)
         return result
+
+    def _heavy_day_load(
+        self,
+        exercise_id: str,
+        rep_range_override: Optional[tuple],
+        exclude_session_id: Optional[str] = None,
+    ) -> Optional[float]:
+        """
+        The load this lift is actually worked at on its Heavy exposure.
+
+        Read from the heaviest recent session rather than from the plan, so it
+        tracks what the lifter is doing rather than what was written down
+        months ago. Returns None when there is nothing to reference, which
+        leaves the volume day uncapped rather than capped against a guess.
+        """
+        history = self._get_exercise_history(
+            exercise_id, days=90, exclude_session_id=exclude_session_id
+        )
+        if not history:
+            return None
+        band = None
+        if rep_range_override:
+            try:
+                low, high = int(rep_range_override[0]), int(rep_range_override[1])
+                band = RepRangeConfig(low, high)
+            except (TypeError, ValueError, IndexError):
+                band = None
+        loads = [
+            working_load(session.get("sets") or [], band) for session in history[:8]
+        ]
+        loads = [load for load in loads if load > 0]
+        return max(loads) if loads else None
 
     @staticmethod
     def _history_for_plan_day(history: List[Dict], day_name: Optional[str]) -> List[Dict]:
@@ -433,6 +467,16 @@ class WorkoutRecommender:
             if related_lift_context:
                 top_lifts = related_lift_context
 
+        # A Volume exposure of a lift that is also trained Heavy has to answer
+        # to the Heavy day's load. Passed as None until now, which left the two
+        # days unrelated: each progressed from its own history until the volume
+        # day was working the heavy day's weight for the heavy day's reps.
+        heavy_day_weight = None
+        if day_intensity == "volume":
+            heavy_day_weight = self._heavy_day_load(
+                exercise_id, rep_range_override, exclude_session_id
+            )
+
         # Use deterministic progression engine for all cases
         progression_result = self.progression_engine.compute_recommendation(
             exercise_id=exercise_id,
@@ -443,7 +487,7 @@ class WorkoutRecommender:
             recent_sessions=recent_exercise_data,
             num_sets=num_sets,
             day_intensity=day_intensity,
-            heavy_day_weight=None,
+            heavy_day_weight=heavy_day_weight,
             exercise_record=exercise_record,
             top_lifts=top_lifts,
             stale_last_session=stale_last_session,

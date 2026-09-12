@@ -45,6 +45,26 @@ Dashboard TodaysWorkoutCard → `/workouts?tab=sessions&startPlan=true&planDay={
 ### Recommender integration
 `plan_target_sets`, `plan_target_reps`, `plan_notes` are threaded through: `workout_sessions.py` router → `WorkoutRecommender.get_exercise_recommendation()` → `RecommendationEngine.generate_recommendation()` → `PromptBuilder.build_recommendation_prompt()` (adds "PLAN CONTEXT" section to the AI prompt)
 
+### Conversational Plan Creation (Sep 2026)
+Users can discuss a routine with the coach in natural language and say "create the plan" (or "generate the plan", "make this my plan", "build it") directly in chat without needing to manually toggle "Plan" mode or click "Plan" first.
+
+- **Backend Tool (`propose_training_plan`):** Added to `CoachToolbox` in `coach_tools.py` and included in `PLAN_WRITE_SCHEMAS`. Offered in both `coach` and `plan` modes. Calls `build_and_save_proposed_plan` in `routers/training_plan.py` to generate and save a draft plan, emitting a `plan_proposed` artifact.
+- **Deterministic routing:** `required_tool_for_turn` in `ai_coach.py` matches creation intent (`_PLAN_CREATE_RE`) and forces `propose_training_plan` on round 0, preventing the coach from asking the user to tap Plan or switch tabs.
+- **Frontend Proposal Cards:** Both mobile (`AIChat.tsx`) and web (`ChatbotPage.tsx`) listen for the `plan_proposed` artifact and render an interactive "Workout Plan Created" card showing plan name, day count/names, and direct "Review Plan" / "Activate Plan" actions.
+- **Action Bar:** When a workout discussion is detected (`hasPlanDiscussion`), the "Generate Workout Plan" action bar is also surfaced without needing to toggle to Plan mode first.
+
+### Latest Workout Per Exercise Day in Plan Generation (Sep 2026)
+When generating a workout plan (via chat proposal or wizard/split context), the system **always searches for the latest workout per exercise day by default**:
+- **Automatic Matching Engine (`backend/ai_analysis/training_history.py`):**
+  - `find_latest_workout_for_day(sessions, day_name, exclude_session_ids)`: Scans all logged sessions and finds the latest matching session using `match_session_to_day_score`.
+  - Day matching considers exact naming ("Push" -> "Push"), day family keywords (Push, Pull, Legs, Upper, Lower, Arms, etc.), and exercise category composition for unlabelled sessions (e.g. >=50% Chest/Shoulders/Triceps -> Push).
+  - Occurrence qualifiers prevent cross-contamination ("Push A" matches "Push A" or generic "Push", but refuses "Push B"; alternating days get distinct sessions via `exclude_session_ids`).
+  - `extract_session_exercises`: Extracts exercises in order, with working sets, reps, and weights from the user's latest logged session.
+- **Router Integration (`backend/routers/training_plan.py` & `backend/routers/workout_plan.py`):**
+  - `_attach_referenced_workout` in `training_plan.py`: Attaches the latest workout session for each plan day as a `referenced_workout`. This instructs `PlanBuilder` to use the user's proven exercise order, sets, and rep targets from their latest workout for that day.
+  - Bypassed only if the user explicitly says to "start from scratch" or "don't use my old workouts".
+  - `_load_split_context` in `workout_plan.py`: Finds the latest logged workout per split slot rather than aggregating multiple stale sessions or relying solely on default templates.
+
 ## Plan Roadmap (Aug 2026)
 Visual timeline of where the Active Plan leads. Route `/plan` ("Roadmap" in nav);
 distinct from `/plan-generator`, which is the creation wizard.
@@ -178,6 +198,29 @@ most needs to know what they are aiming at.
 only fills in when the plan resolver found no `target_rep_range`; a plan's own band is
 the better statement of intent than the legacy single figure, and `normalize_rep_range`
 reads a bare count as `(n, n)` rather than inventing a width around it.
+
+**A calibration is never easier than the session it translates.** When a plan
+repeats a lift across days, the first exposure on a new day translates the other
+day's work into today's band (`_handle_plan_day_calibration`). The 5% multi-set
+reserve is larger than one rep of Epley (~3%), so 175x7 asked for 6 reps came
+back as **170** — less load for fewer reps than was just logged. Nothing about
+clearing it can earn anything: the next session reads 170x6 as in-band and holds,
+so the lift sits under its own demonstrated load indefinitely.
+
+Two rules, pinned in `tests/test_progression_dead_ends.py`. Where the reference
+already filled today's band (`AT_TOP`/`SWEPT_TOP`, judged by the same
+`evaluate_session` as everything else), there is nothing left to calibrate: step
+up to the band's *floor* with no reserve, the same move `_handle_increase_weight`
+makes — 175x7 becomes 185x5 — and carry a `miss_drop` branch back to the known
+load. Otherwise the reserve stays, but the result may never fall below the
+reference weight when it is asking for equal or fewer reps. Volume days still
+step down (that is what buys the reps) and light days are still light; neither
+can earn load here.
+
+`E1RM_MAX_REPS` (12) matches `progress/domains.py`: past a dozen reps Epley
+extrapolates rather than estimates, so the load is read off a set it can read,
+and a reference with no readable set takes the smallest real step instead of a
+number invented from a set of 20.
 
 **Est. 1RM is computed within one set.** `max_weight × (1 + max_reps/30)` pairs a heavy
 set's load with a light set's reps and reports a 1RM the user has never been near — a
