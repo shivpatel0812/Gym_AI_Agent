@@ -81,7 +81,10 @@ V2_RULES = """- Treat the title and description as strong identity and quantity 
 - Look for portion cues already in frame. A known package is strong; a plate, bowl, utensil, or hand is weak-to-medium unless its size is known.
 - When no reliable scale reference is present, do NOT shrink the estimate to stay safe. Anchor on standard servingware — dinner plate ~26cm, side plate ~19cm, katori or small bowl ~150ml, soup or cereal bowl ~350ml, tablespoon ~15ml — and widen the low/high gram range instead. Uncertainty belongs in the range, never in a smaller central estimate.
 - Estimate a best gram amount plus a realistic low/high gram range. A single image without scale should have a wider range.
-- Infer cooking fat from the dish you identified, not from whether the food is homemade. But be conservative: use TYPICAL home-cooking amounts, not restaurant amounts. A home-cooked dal tadka is 1-2 tsp oil, not the 2+ tbsp a restaurant might use. A paratha has ~1 tsp ghee/oil per side unless it visibly glistens. Only add cooking fat for preparations that genuinely require it.
+- Infer cooking fat based on BOTH the dish and the meal context you detected:
+  HOME context: Use conservative home-cooking amounts. A dal tadka is 1-2 tsp oil total, a paratha ~1 tsp ghee per side, a sabzi 1-2 tsp oil. Home cooks generally use less fat than restaurants.
+  RESTAURANT/TAKEOUT context: Restaurants use significantly more fat for flavor. A restaurant dal may have 2-3 tbsp oil, a paratha 1-2 tbsp ghee, fried items are generously oiled. Still be reasonable — not every restaurant dish is swimming in oil.
+  UNCERTAIN context: Default to home-cooking amounts unless the dish itself suggests restaurant preparation (e.g., clearly deep-fried, heavy sauce pooling).
 - A stated cooking style, "homemade", or "less oil" MODULATES that amount down further. Glistening can be water, sauce, or glaze, so report visible oil evidence separately from the amount you assume.
 - Include hidden ingredients, sauces, and drinks when stated, visible, or customary for the identified preparation. Put uncertain choices in assumptions or uncertainties.
 - Break mixed meals into components. Component nutrition and the top-level macros describe the FULL quantity, not per 100g. NEVER count a dish both as a whole and as its parts — either "1 samosa: 150 kcal" OR "pastry + filling + frying oil", not both.
@@ -96,7 +99,12 @@ V2_RULES = """- Treat the title and description as strong identity and quantity 
 _V3_INVENTORY = """- FIRST, before estimating anything, inventory the frame: list every distinct edible item you can see, including items in separate bowls, katoris, side plates, cups and glasses. A side of yogurt, raita, chutney, pickle or a drink is part of the meal and each is its own item. Do this as a list, then estimate.
 - Every item in that inventory must end up either in `components` or in `scene.excluded` with a reason. Never drop one silently. If you are unsure what a side dish is, include it with your best guess and say so in uncertainties — an item counted approximately is far closer to the truth than an item left out.
 - The user's title usually names the MAIN dish, not the whole meal. Take it as strong evidence of what the main dish is, and as no evidence at all about what else is on the table.
-- Aim for accuracy, not caution. Overestimating is just as wrong as underestimating — users rely on these numbers to make dietary decisions, and systematic overestimation leads to under-eating."""
+- Aim for accuracy, not caution. Overestimating is just as wrong as underestimating — users rely on these numbers to make dietary decisions, and systematic overestimation leads to under-eating.
+- INFER MEAL CONTEXT from visual cues in the photo:
+  HOME-COOKED signals: plain ceramic/glass/steel plates, home tableware (mismatched or everyday dishes), dining table with tablecloth or placemat, simple/casual plating, domestic kitchen background, home storage containers (glass/steel dabba, Tupperware with leftovers look), regular cutlery
+  RESTAURANT/TAKEOUT signals: branded bowls or containers, foil/plastic takeout boxes, paper bags, restaurant-style trays, heavy garnish/professional presentation, visible logos or brand names, disposable cutlery or packaging, Chipotle/Subway/fast-food style bowls, portion cups for sauces
+  When uncertain: If home cues dominate (glass plate on dining table), assume home. If restaurant cues dominate (takeout box), assume restaurant. If mixed or unclear, mark as uncertain but lean toward home for typical domestic settings.
+  This context affects cooking fat estimates: home cooking uses less oil than restaurants."""
 
 # The title rule v3 replaces — restated in _V3_INVENTORY so the two cannot
 # contradict each other in the same prompt.
@@ -114,6 +122,11 @@ DEFAULT_VARIANT = "v3"
 _V3_SCHEMA = """  "scene": {
     "items_seen": ["every distinct edible item visible, side bowls and drinks included"],
     "excluded": [{"item": "an item you chose not to count", "reason": "why"}]
+  },
+  "meal_context": {
+    "setting": "home|restaurant_or_takeout|uncertain",
+    "confidence": "high|medium|low",
+    "cues": ["visual cue that drove this inference, e.g. 'glass plate on dining table', 'takeout container with logo'"]
   },
 """
 

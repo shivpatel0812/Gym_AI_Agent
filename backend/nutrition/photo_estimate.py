@@ -12,30 +12,36 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 COOKING_STYLES = ("light", "normal", "generous")
+MEAL_CONTEXTS = ("home", "restaurant_or_takeout", "uncertain")
 MAX_COMPONENTS = 12
 MAX_PORTION_GRAMS = 5000.0
 MAX_OIL_GRAMS = 150.0
 
-# Reasonable cooking fat limits per portion size. Home cooking typically uses
-# less oil than these caps; restaurant cooking uses more. These are generous
-# ceilings to catch clear overestimates while letting real restaurant-style
-# dishes through.
-# Key: portion grams threshold, Value: max oil grams
+# Reasonable cooking fat limits per portion size, by meal context.
+# Home cooking uses less oil; restaurants use more for flavor.
+# Key: portion grams threshold, Value: (home_max, restaurant_max)
 _OIL_PER_PORTION_CAPS = [
-    (100, 15),    # Small snack: max ~1 tbsp
-    (200, 25),    # Light meal: max ~2 tbsp
-    (400, 40),    # Regular meal: max ~3 tbsp
-    (600, 55),    # Large meal: max ~4 tbsp
-    (float("inf"), 70),  # Very large: max ~5 tbsp
+    (100, (10, 20)),    # Small snack: home ~2 tsp, restaurant ~1.5 tbsp
+    (200, (18, 35)),    # Light meal: home ~1.5 tbsp, restaurant ~2.5 tbsp
+    (400, (30, 55)),    # Regular meal: home ~2 tbsp, restaurant ~4 tbsp
+    (600, (40, 70)),    # Large meal: home ~3 tbsp, restaurant ~5 tbsp
+    (float("inf"), (55, 90)),  # Very large: home ~4 tbsp, restaurant ~6 tbsp
 ]
 
 
-def _reasonable_oil_cap(portion_grams: float) -> float:
-    """Maximum cooking fat that makes sense for this portion size."""
-    for threshold, cap in _OIL_PER_PORTION_CAPS:
+def _reasonable_oil_cap(portion_grams: float, context: str = "home") -> float:
+    """Maximum cooking fat that makes sense for this portion size and context.
+    
+    Home cooking uses significantly less oil than restaurants. The caps are
+    generous ceilings — most home-cooked meals use far less — but they catch
+    the clear overestimates while letting real restaurant dishes through.
+    """
+    is_restaurant = context == "restaurant_or_takeout"
+    for threshold, (home_cap, restaurant_cap) in _OIL_PER_PORTION_CAPS:
         if portion_grams <= threshold:
-            return cap
-    return _OIL_PER_PORTION_CAPS[-1][1]
+            return restaurant_cap if is_restaurant else home_cap
+    last_home, last_restaurant = _OIL_PER_PORTION_CAPS[-1][1]
+    return last_restaurant if is_restaurant else last_home
 
 
 def normalize_cooking_style(value: Optional[str]) -> str:
@@ -188,6 +194,60 @@ def normalize_scene(parsed: Dict[str, Any], components: List[Dict[str, Any]]) ->
     }
 
 
+def normalize_meal_context(
+    parsed: Dict[str, Any],
+    user_override: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Extract and normalize meal context (home vs restaurant) from model output.
+    
+    The model infers context from visual cues in the photo. A user override
+    (from text description or Fix Results correction) takes precedence.
+    
+    Returns:
+        {
+            "setting": "home" | "restaurant_or_takeout" | "uncertain",
+            "confidence": "high" | "medium" | "low",
+            "cues": ["list of visual cues"],
+            "source": "photo_inference" | "user_override" | "default"
+        }
+    """
+    # User override takes precedence
+    if user_override and user_override in MEAL_CONTEXTS:
+        return {
+            "setting": user_override,
+            "confidence": "high",
+            "cues": ["user stated this is " + user_override.replace("_", "/")],
+            "source": "user_override",
+        }
+    
+    raw = parsed.get("meal_context") if isinstance(parsed.get("meal_context"), dict) else {}
+    
+    setting = _choice(raw.get("setting"), MEAL_CONTEXTS, "uncertain")
+    confidence = _choice(raw.get("confidence"), ("high", "medium", "low"), "low")
+    
+    cues: List[str] = []
+    for value in (raw.get("cues") if isinstance(raw.get("cues"), list) else [])[:5]:
+        text = _short_text(value, 100)
+        if text and text not in cues:
+            cues.append(text)
+    
+    # If no cues and uncertain, this is likely v1/v2 or model didn't fill it
+    if not cues and setting == "uncertain":
+        return {
+            "setting": "uncertain",
+            "confidence": "low",
+            "cues": [],
+            "source": "default",
+        }
+    
+    return {
+        "setting": setting,
+        "confidence": confidence,
+        "cues": cues,
+        "source": "photo_inference",
+    }
+
+
 def _normalize_portion(parsed: Dict[str, Any]) -> Dict[str, float]:
     raw = parsed.get("portion") if isinstance(parsed.get("portion"), dict) else {}
     estimated = _number(
@@ -236,8 +296,17 @@ def build_photo_analysis(
     has_user_hint: bool = False,
     has_saved_prior: bool = False,
     cooking_style: Optional[str] = None,
+    user_context_override: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return sanitized observations plus a server-calculated confidence score."""
+    """Return sanitized observations plus a server-calculated confidence score.
+    
+    Args:
+        parsed: Raw model output
+        has_user_hint: Whether user provided a title or description
+        has_saved_prior: Whether we found relevant prior foods
+        cooking_style: User's stated cooking style preference ("light", "normal", "generous")
+        user_context_override: User override for meal context ("home", "restaurant_or_takeout")
+    """
     quality_raw = parsed.get("image_quality") if isinstance(parsed.get("image_quality"), dict) else {}
     image_quality = {
         "lighting": _choice(quality_raw.get("lighting"), ("good", "usable", "poor"), "unknown"),
@@ -256,13 +325,21 @@ def build_photo_analysis(
     references = _normalize_references(parsed.get("scale_references"))
     components = normalize_components(parsed.get("components"))
     scene = normalize_scene(parsed, components)
+    
+    # Parse meal context (home vs restaurant) from model or user override
+    meal_context = normalize_meal_context(parsed, user_context_override)
 
     fat_raw = parsed.get("cooking_fat") if isinstance(parsed.get("cooking_fat"), dict) else {}
     normalized_style = normalize_cooking_style(cooking_style)
     raw_oil = _number(fat_raw.get("estimated_grams"), maximum=MAX_OIL_GRAMS)
-    # Cap oil based on portion size — a small katori of dal cannot absorb 50g of oil.
+    # Cap oil based on portion size AND meal context — home cooking uses less oil.
     portion_grams = portion.get("estimated_grams") or 0.0
-    portion_cap = _reasonable_oil_cap(portion_grams)
+    context_setting = meal_context.get("setting", "uncertain")
+    # For uncertain context, use home caps unless cooking style is "generous"
+    effective_context = context_setting
+    if context_setting == "uncertain" and normalized_style != "generous":
+        effective_context = "home"
+    portion_cap = _reasonable_oil_cap(portion_grams, effective_context)
     capped_oil = min(raw_oil, portion_cap)
     oil_was_capped = raw_oil > portion_cap
 
@@ -270,6 +347,7 @@ def build_photo_analysis(
         "style": normalized_style,
         "oil_grams": round(capped_oil, 1),
         "oil_capped_from": round(raw_oil, 1) if oil_was_capped else None,
+        "context_used": effective_context,  # Which context was used for oil cap
         "basis": _choice(
             fat_raw.get("basis"),
             ("description", "user_preference", "visible_evidence", "typical_recipe", "none", "unknown"),
@@ -383,6 +461,7 @@ def build_photo_analysis(
         "cooking": cooking,
         "components": components,
         "scene": scene,
+        "meal_context": meal_context,
         "assumptions": _text_list(parsed.get("assumptions")),
         "uncertainties": _text_list(parsed.get("uncertainties")),
         "matched_saved_food": bool(has_saved_prior),

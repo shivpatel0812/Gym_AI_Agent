@@ -246,22 +246,38 @@ class TestFinalizeUsesCoherence:
 
 
 class TestCookingFatCaps:
-    """Cooking fat is capped based on portion size."""
+    """Cooking fat is capped based on portion size and meal context."""
 
-    def test_small_portion_oil_cap(self):
-        """A 100g snack shouldn't have more than ~15g oil."""
-        assert _reasonable_oil_cap(100) == 15
+    def test_small_portion_home_oil_cap(self):
+        """A 100g home snack shouldn't have more than ~10g oil."""
+        assert _reasonable_oil_cap(100, "home") == 10
 
-    def test_regular_meal_oil_cap(self):
-        """A 400g meal is capped at ~40g oil (~3 tbsp)."""
-        assert _reasonable_oil_cap(400) == 40
+    def test_small_portion_restaurant_oil_cap(self):
+        """A 100g restaurant snack can have up to ~20g oil."""
+        assert _reasonable_oil_cap(100, "restaurant_or_takeout") == 20
 
-    def test_large_meal_oil_cap(self):
-        """A 600g meal is capped at ~55g oil."""
-        assert _reasonable_oil_cap(600) == 55
+    def test_regular_meal_home_oil_cap(self):
+        """A 400g home meal is capped at ~30g oil (~2 tbsp)."""
+        assert _reasonable_oil_cap(400, "home") == 30
 
-    def test_oil_capped_in_analysis(self):
-        """build_photo_analysis caps oil based on portion and records if capped."""
+    def test_regular_meal_restaurant_oil_cap(self):
+        """A 400g restaurant meal can have up to ~55g oil (~4 tbsp)."""
+        assert _reasonable_oil_cap(400, "restaurant_or_takeout") == 55
+
+    def test_large_meal_home_oil_cap(self):
+        """A 600g home meal is capped at ~40g oil."""
+        assert _reasonable_oil_cap(600, "home") == 40
+
+    def test_large_meal_restaurant_oil_cap(self):
+        """A 600g restaurant meal can have up to ~70g oil."""
+        assert _reasonable_oil_cap(600, "restaurant_or_takeout") == 70
+
+    def test_default_context_is_home(self):
+        """Without context specified, default to home (conservative)."""
+        assert _reasonable_oil_cap(400) == 30  # Same as home
+
+    def test_oil_capped_in_analysis_home_context(self):
+        """build_photo_analysis caps oil based on portion and home context."""
         parsed = {
             "image_quality": {"lighting": "good", "sharpness": "sharp", "full_meal_visible": True},
             "identity_confidence": "high",
@@ -269,12 +285,32 @@ class TestCookingFatCaps:
             "scale_references": [],
             "cooking_fat": {"estimated_grams": 50, "basis": "typical_recipe"},  # Too high!
             "components": [{"item": "dal", "estimated_grams": 200, "calories": 200}],
+            "meal_context": {"setting": "home", "confidence": "high", "cues": ["glass plate"]},
         }
         analysis = build_photo_analysis(parsed)
 
-        # 200g portion caps oil at 25g, but model claimed 50g
-        assert analysis["cooking"]["oil_grams"] == 25.0
+        # 200g home portion caps oil at 18g, but model claimed 50g
+        assert analysis["cooking"]["oil_grams"] == 18.0
         assert analysis["cooking"]["oil_capped_from"] == 50.0
+        assert analysis["cooking"]["context_used"] == "home"
+
+    def test_oil_cap_higher_for_restaurant(self):
+        """Restaurant context allows more oil."""
+        parsed = {
+            "image_quality": {"lighting": "good", "sharpness": "sharp", "full_meal_visible": True},
+            "identity_confidence": "high",
+            "portion": {"estimated_grams": 200, "low_grams": 180, "high_grams": 220},
+            "scale_references": [],
+            "cooking_fat": {"estimated_grams": 30, "basis": "typical_recipe"},
+            "components": [{"item": "dal", "estimated_grams": 200, "calories": 300}],
+            "meal_context": {"setting": "restaurant_or_takeout", "confidence": "high", "cues": ["takeout box"]},
+        }
+        analysis = build_photo_analysis(parsed)
+
+        # 200g restaurant portion caps at 35g, claimed 30g — not capped
+        assert analysis["cooking"]["oil_grams"] == 30.0
+        assert analysis["cooking"]["oil_capped_from"] is None
+        assert analysis["cooking"]["context_used"] == "restaurant_or_takeout"
 
     def test_reasonable_oil_not_capped(self):
         """When oil is reasonable for portion size, it's not capped."""
@@ -288,7 +324,7 @@ class TestCookingFatCaps:
         }
         analysis = build_photo_analysis(parsed)
 
-        # 400g portion caps at 40g, claimed 20g — no capping needed
+        # 400g home portion caps at 30g, claimed 20g — no capping needed
         assert analysis["cooking"]["oil_grams"] == 20.0
         assert analysis["cooking"]["oil_capped_from"] is None
 
@@ -324,8 +360,8 @@ class TestOverestimationScenarios:
         assert calories == 726
         assert coherence["lowered"] is True
 
-    def test_restaurant_style_oil_assumption_capped(self):
-        """Model assumes restaurant-style oil but this is home cooking."""
+    def test_restaurant_style_oil_assumption_capped_for_home(self):
+        """Model assumes restaurant-style oil but photo shows home cooking."""
         parsed = {
             "image_quality": {"lighting": "good", "sharpness": "sharp", "full_meal_visible": True},
             "identity_confidence": "high",
@@ -338,12 +374,156 @@ class TestOverestimationScenarios:
             "components": [
                 {"item": "dal tadka", "estimated_grams": 150, "calories": 180},
             ],
+            # Model inferred home from the glass katori
+            "meal_context": {"setting": "home", "confidence": "high", "cues": ["katori on dining table"]},
         }
         analysis = build_photo_analysis(parsed, cooking_style="light")
 
-        # 150g portion caps oil at 15g for small portion
-        # But wait, 150g is between 100 and 200, so cap is 15 (at 100 threshold)
-        # Actually looking at the thresholds: 100->15, 200->25
-        # 150g > 100, so it falls into next bracket: 200 -> 25g max
-        assert analysis["cooking"]["oil_grams"] == 25.0  # Capped from 40 to 25
+        # 150g home portion: 100->10, 200->18, so 150g gets 10 (threshold is <=100)
+        # Actually 150 > 100 so it uses 200 bracket: 18g max for home
+        assert analysis["cooking"]["oil_grams"] == 18.0  # Capped from 40 to 18
         assert analysis["cooking"]["oil_capped_from"] == 40.0
+        assert analysis["cooking"]["context_used"] == "home"
+
+
+# --------------------------------------------------------------------------
+# Meal context inference
+# --------------------------------------------------------------------------
+
+
+class TestMealContextInference:
+    """Meal context (home vs restaurant) is inferred from visual and text cues."""
+
+    def test_home_context_from_photo_cues(self):
+        """Glass plate on dining table should infer home context."""
+        from nutrition.photo_estimate import normalize_meal_context
+
+        parsed = {
+            "meal_context": {
+                "setting": "home",
+                "confidence": "high",
+                "cues": ["glass plate on dining table", "simple plating"],
+            }
+        }
+        context = normalize_meal_context(parsed)
+
+        assert context["setting"] == "home"
+        assert context["confidence"] == "high"
+        assert "glass plate" in context["cues"][0]
+        assert context["source"] == "photo_inference"
+
+    def test_restaurant_context_from_takeout_box(self):
+        """Takeout container should infer restaurant context."""
+        from nutrition.photo_estimate import normalize_meal_context
+
+        parsed = {
+            "meal_context": {
+                "setting": "restaurant_or_takeout",
+                "confidence": "high",
+                "cues": ["foil takeout container", "plastic lid visible"],
+            }
+        }
+        context = normalize_meal_context(parsed)
+
+        assert context["setting"] == "restaurant_or_takeout"
+        assert context["confidence"] == "high"
+        assert context["source"] == "photo_inference"
+
+    def test_user_override_takes_precedence(self):
+        """User saying 'homemade' overrides photo inference."""
+        from nutrition.photo_estimate import normalize_meal_context
+
+        parsed = {
+            "meal_context": {
+                "setting": "restaurant_or_takeout",  # Model guessed wrong
+                "confidence": "medium",
+                "cues": ["professional plating"],
+            }
+        }
+        context = normalize_meal_context(parsed, user_override="home")
+
+        assert context["setting"] == "home"
+        assert context["confidence"] == "high"
+        assert context["source"] == "user_override"
+
+    def test_text_detection_homemade(self):
+        """Text description mentioning 'homemade' triggers home context."""
+        from nutrition.text_estimate import detect_meal_context_from_text
+
+        context = detect_meal_context_from_text("2 rotis with dal, homemade")
+
+        assert context["setting"] == "home"
+        assert context["confidence"] == "high"
+        assert "homemade" in context["cues"]
+        assert context["source"] == "text_detection"
+
+    def test_text_detection_restaurant_chain(self):
+        """Text description mentioning Chipotle triggers restaurant context."""
+        from nutrition.text_estimate import detect_meal_context_from_text
+
+        context = detect_meal_context_from_text("chipotle burrito bowl with chicken")
+
+        assert context["setting"] == "restaurant_or_takeout"
+        assert context["confidence"] == "high"
+        assert "chipotle" in context["cues"][0]
+        assert context["source"] == "text_detection"
+
+    def test_text_detection_takeout(self):
+        """Text description mentioning 'takeout' triggers restaurant context."""
+        from nutrition.text_estimate import detect_meal_context_from_text
+
+        context = detect_meal_context_from_text("indian takeout, butter chicken and naan")
+
+        assert context["setting"] == "restaurant_or_takeout"
+        assert context["confidence"] == "high"
+        assert "takeout" in context["cues"]
+        assert context["source"] == "text_detection"
+
+    def test_text_detection_no_markers(self):
+        """Text without context markers returns uncertain."""
+        from nutrition.text_estimate import detect_meal_context_from_text
+
+        context = detect_meal_context_from_text("2 rotis with dal")
+
+        assert context["setting"] == "uncertain"
+        assert context["confidence"] == "low"
+        assert context["source"] == "default"
+
+    def test_uncertain_context_defaults_to_home_caps(self):
+        """Uncertain context uses home oil caps (conservative)."""
+        parsed = {
+            "image_quality": {"lighting": "good", "sharpness": "sharp", "full_meal_visible": True},
+            "identity_confidence": "high",
+            "portion": {"estimated_grams": 300, "low_grams": 250, "high_grams": 350},
+            "scale_references": [],
+            "cooking_fat": {"estimated_grams": 50, "basis": "typical_recipe"},
+            "components": [{"item": "curry", "estimated_grams": 300, "calories": 350}],
+            # No meal_context or uncertain
+        }
+        analysis = build_photo_analysis(parsed)
+
+        # Uncertain defaults to home. 300g > 200 so uses 400 bracket: 30g cap for home
+        assert analysis["cooking"]["context_used"] == "home"
+        assert analysis["cooking"]["oil_grams"] == 30.0  # Capped from 50 to 30
+        assert analysis["cooking"]["oil_capped_from"] == 50.0
+
+    def test_meal_context_in_analysis_output(self):
+        """build_photo_analysis includes meal_context in output."""
+        parsed = {
+            "image_quality": {"lighting": "good", "sharpness": "sharp", "full_meal_visible": True},
+            "identity_confidence": "high",
+            "portion": {"estimated_grams": 300},
+            "scale_references": [],
+            "cooking_fat": {"estimated_grams": 15},
+            "components": [{"item": "rice", "calories": 300}],
+            "meal_context": {
+                "setting": "home",
+                "confidence": "high",
+                "cues": ["ceramic plate", "dining table"],
+            },
+        }
+        analysis = build_photo_analysis(parsed)
+
+        assert "meal_context" in analysis
+        assert analysis["meal_context"]["setting"] == "home"
+        assert analysis["meal_context"]["source"] == "photo_inference"
