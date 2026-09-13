@@ -133,11 +133,13 @@ def test_default_prompt_supplies_anchors_instead_of_prohibitions(monkeypatch, tm
     # A default anchor plus a wider range, rather than a smaller central guess.
     assert "dinner plate ~26cm" in prompt
     assert "Uncertainty belongs in the range" in prompt
-    # Dish-defining fat is recipe knowledge, not a homemade stereotype.
-    assert "carries its tadka" in prompt
-    assert "never reduces it to zero" in prompt
-    # The whole-plate check that keeps per-item shortfalls from compounding.
-    assert "those shortfalls add up" in prompt
+    # Dish-defining fat is recipe knowledge, but with home-cooking guidance.
+    assert "dal tadka is 1-2 tsp oil" in prompt
+    assert "MODULATES that amount down further" in prompt
+    # The whole-plate check that avoids both under- AND over-estimation.
+    assert "Check BOTH directions" in prompt
+    # Explicit anti-overestimate guidance.
+    assert "Overestimating is just as wrong" in prompt
     # v1 forced the total to match the component sum, which hides the
     # disagreement `assess_macro_coherence` reads as an escalation signal.
     assert "should match the component calorie sum" not in prompt

@@ -179,6 +179,124 @@ _PREPARATION_WORDS = (
     "with oil", "with butter", "with ghee", "no oil", "dry",
 )
 
+# ---------------------------------------------------------------------------
+# Meal context detection from text
+# ---------------------------------------------------------------------------
+
+# Words/phrases that indicate home cooking
+_HOME_MARKERS = (
+    "homemade", "home-made", "home made", "home cooked", "home-cooked",
+    "homecooked", "from scratch", "i made", "we made", "i cooked", "we cooked",
+    "my kitchen", "our kitchen", "cooked at home", "made at home",
+    "mom made", "mum made", "mother made", "wife made", "husband made",
+    "i prepared", "we prepared", "leftovers from home", "packed from home",
+)
+
+# Words/phrases that indicate restaurant/takeout
+_RESTAURANT_MARKERS = (
+    "takeout", "take-out", "take out", "delivery", "delivered",
+    "restaurant", "dine out", "dining out", "ate out", "eating out",
+    "ordered", "uber eats", "ubereats", "doordash", "grubhub", "swiggy", "zomato",
+    "from ", "at ", "got from",  # Often precedes restaurant name
+)
+
+# Known restaurant/chain names (partial list — the model fills gaps)
+_CHAIN_NAMES = (
+    "chipotle", "mcdonald", "mcdonalds", "mcdonald's", "burger king", "wendy",
+    "subway", "taco bell", "kfc", "chick-fil-a", "chick fil a", "chickfila",
+    "panda express", "domino", "pizza hut", "papa john", "five guys",
+    "shake shack", "in-n-out", "popeye", "dunkin", "starbuck",
+    "panera", "qdoba", "nando", "sweetgreen", "cava", "halal guys",
+    "wingstop", "jersey mike", "jimmy john", "firehouse sub", "potbelly",
+    "culver", "whataburger", "carl's jr", "hardee", "arby", "sonic",
+    "dairy queen", "baskin", "cold stone", "jamba", "smoothie king",
+    # Indian chains/delivery
+    "faasos", "behrouz", "freshmenu", "box8", "biryani by kilo",
+)
+
+
+def detect_meal_context_from_text(query: str) -> Dict[str, Any]:
+    """Detect meal context (home vs restaurant) from a text description.
+    
+    Returns:
+        {
+            "setting": "home" | "restaurant_or_takeout" | "uncertain",
+            "confidence": "high" | "medium" | "low",
+            "cues": ["detected cue"],
+            "source": "text_detection" | "default"
+        }
+    """
+    text = " ".join(str(query or "").split())
+    lowered = text.lower()
+    
+    home_cues = []
+    restaurant_cues = []
+    
+    # Check home markers
+    for marker in _HOME_MARKERS:
+        if marker in lowered:
+            home_cues.append(marker)
+            break  # One is enough
+    
+    # Check restaurant/takeout markers
+    for marker in _RESTAURANT_MARKERS:
+        if marker in lowered:
+            restaurant_cues.append(marker)
+            break
+    
+    # Check chain names
+    for chain in _CHAIN_NAMES:
+        if chain in lowered:
+            restaurant_cues.append(f"chain: {chain}")
+            break
+    
+    # Decide based on cues
+    if home_cues and not restaurant_cues:
+        return {
+            "setting": "home",
+            "confidence": "high",
+            "cues": home_cues[:2],
+            "source": "text_detection",
+        }
+    elif restaurant_cues and not home_cues:
+        return {
+            "setting": "restaurant_or_takeout",
+            "confidence": "high",
+            "cues": restaurant_cues[:2],
+            "source": "text_detection",
+        }
+    elif home_cues and restaurant_cues:
+        # Conflicting signals — go with whichever appeared first in text
+        home_pos = min(lowered.find(cue) for cue in home_cues if lowered.find(cue) >= 0)
+        rest_pos = min(
+            lowered.find(cue.replace("chain: ", ""))
+            for cue in restaurant_cues
+            if lowered.find(cue.replace("chain: ", "")) >= 0
+        )
+        if home_pos < rest_pos:
+            return {
+                "setting": "home",
+                "confidence": "medium",
+                "cues": home_cues[:1],
+                "source": "text_detection",
+            }
+        else:
+            return {
+                "setting": "restaurant_or_takeout",
+                "confidence": "medium",
+                "cues": restaurant_cues[:1],
+                "source": "text_detection",
+            }
+    
+    # No cues found
+    return {
+        "setting": "uncertain",
+        "confidence": "low",
+        "cues": [],
+        "source": "default",
+    }
+
+
 MIN_KCAL_PER_GRAM = 0.15
 MAX_KCAL_PER_GRAM = 8.0
 
@@ -311,6 +429,9 @@ def build_text_analysis(
     if not reasons:
         reasons.append("You gave an amount and a preparation, which is most of it")
 
+    # Detect meal context from the text description
+    meal_context = detect_meal_context_from_text(query)
+
     return {
         "source": "text",
         "confidence": {
@@ -327,10 +448,12 @@ def build_text_analysis(
             "oil_grams": 0.0,
             "basis": "description" if evidence["has_preparation"] else "typical_recipe",
             "visible_evidence": "unknown",
+            "context_used": meal_context.get("setting", "uncertain"),
         },
         # No frame to inventory, so nothing can be seen-and-not-counted. The key
         # is present so the client renders one shape for both paths.
         "scene": {"items_seen": [], "excluded": [], "uncounted": []},
+        "meal_context": meal_context,
         "assumptions": _text_list(parsed.get("assumptions")),
         "uncertainties": _text_list(parsed.get("uncertainties")),
         "matched_saved_food": bool(has_saved_prior),

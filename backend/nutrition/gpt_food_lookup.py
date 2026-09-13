@@ -33,20 +33,23 @@ Rules:
    add components on top of it, and never treat it as a floor to build up from. Estimate the meal
    independently, then compare against their figure:
      - within 25%: your estimate agrees with them; keep it.
-     - more than 25% apart: keep your own estimate — people routinely undercount oil, sauces and
-       portion size — but you MUST fill in "hint_disagreement" naming the specific items or amounts
-       that account for the gap, e.g. "roughly 350 kcal of it is the 3 tbsp of oil a paratha is
-       shallow-fried in". If you cannot name what accounts for the gap, then your estimate is the one
-       that is wrong: revise it toward their figure before answering.
-6. Aim for the most likely central estimate. Do not systematically overestimate or underestimate.
-7. Include cooking oil only when the user states it or the named preparation normally requires it. Do
-   not infer extra oil merely because a dish is homemade.
-8. If the description is sparse, use a typical preparation as a neutral prior and avoid unusually lean
-   or unusually rich assumptions. Push that uncertainty into portion.low_grams / portion.high_grams,
-   never into a smaller central estimate.
-9. Calories must be at least 4*protein + 4*carbs + 9*fats (within 20 kcal). If not, raise calories to
-   maintain basic consistency.
-10. calories MUST equal the sum of component calories when component calories are provided.
+     - more than 25% HIGHER: you may be overestimating. Re-examine each component — did you assume
+       restaurant portions when they said homemade? Did you add too much cooking oil? Did you count
+       something twice? Fill in "hint_disagreement" naming SPECIFIC items that justify the gap. If you
+       cannot name concrete reasons, your estimate is likely wrong: revise it toward their figure.
+     - more than 25% LOWER: the user may have undercounted. Keep your estimate but fill in
+       "hint_disagreement" naming what they may have missed (e.g. "the oil a paratha is fried in").
+6. Aim for accuracy, not caution. Overestimating is just as wrong as underestimating — users rely on
+   these numbers to make dietary decisions, and systematic overestimation leads to under-eating.
+7. Include cooking oil only when the user states it or the named preparation normally requires it. Be
+   conservative with amounts: home cooking uses LESS oil than restaurants. A home-cooked dal tadka is
+   1-2 tsp oil total, a paratha ~1 tsp per side. Do not infer extra oil merely because a dish is homemade.
+8. If the description is sparse, use a typical HOME-COOKED preparation as a neutral prior, not
+   restaurant-style. Push uncertainty into portion.low_grams / portion.high_grams.
+9. Calories must be at least 4*protein + 4*carbs + 9*fats (within 20 kcal). If your macro math gives
+   MORE calories than you stated, lower the macros to match — do not inflate the calorie total.
+10. calories MUST equal the sum of component calories. If they don't match, trust your component work
+    and adjust the stated total to match, not the other way around.
 
 Return JSON only with:
 """
@@ -117,6 +120,59 @@ def _component_macro_sums(components) -> Dict[str, float]:
     return sums
 
 
+def _ledger_looks_complete(components) -> bool:
+    """Whether a component ledger appears to account for the whole meal.
+
+    A ledger is "complete" when every row has a calorie value and there is at
+    least one row. This matters for *lowering* an overestimate: when the ledger
+    is partial (some components missing calories), the sum understates the real
+    total and we must not bring the stated total down to match it.
+    """
+    if not isinstance(components, list) or not components:
+        return False
+    for part in components:
+        if not isinstance(part, dict):
+            continue
+        cal = part.get("calories")
+        # A zero is a stated value; None / missing means the model didn't price it.
+        if cal is None:
+            return False
+    return True
+
+
+def _macro_complete(components, keys) -> bool:
+    """Whether all components have a value for this specific macro.
+
+    Unlike _ledger_looks_complete which checks calories, this checks a specific
+    macro (protein, carbs, etc). We only apply bidirectional correction to a
+    macro when ALL components have that macro filled in — otherwise the sum is
+    partial and lowering to match it would replace a whole-plate estimate with
+    a fragment.
+    """
+    if not isinstance(components, list) or not components:
+        return False
+    for part in components:
+        if not isinstance(part, dict):
+            continue
+        found = False
+        for key in keys:
+            if part.get(key) is not None:
+                found = True
+                break
+        if not found:
+            return False
+    return True
+
+
+# When the stated total is more than this ratio above the component sum AND the
+# ledger looks complete, lower the total to match. This catches estimates where
+# the model stated a high number but its own itemized work tells a different
+# story. Too tight a threshold would penalize legitimate cooking-fat or hidden-
+# ingredient assumptions; 25% is generous enough to let those pass while still
+# catching the "stated 1100, components sum to 650" failure mode.
+OVERESTIMATE_GAP_RATIO = 0.25
+
+
 def assess_macro_coherence(parsed: Dict) -> Dict:
     """Compare a model's stated totals against what its own parts imply.
 
@@ -132,20 +188,41 @@ def assess_macro_coherence(parsed: Dict) -> Dict:
     Protein is the macro users track most closely and the one a forgotten side
     of yogurt or dal costs the most.
 
-    The repair only ever raises a figure. A model that itemises four components
-    and fills protein in on two of them would otherwise drag the total DOWN to
-    a partial sum, which is a worse answer than the one it replaced.
+    **Bidirectional repair (Sep 2026).** Originally the repair only raised.
+    That protected against underestimates (forgotten components) but not against
+    overestimates (inflated stated totals). When a model states 1100 kcal but its
+    own ledger sums to 650, keeping 1100 is the wrong answer — the model's
+    itemized work is the more reliable number. Now: when the stated total is
+    more than OVERESTIMATE_GAP_RATIO above a complete component ledger, the total
+    is brought down to match the ledger plus a small headroom for cooking fat and
+    rounding. Incomplete ledgers (some components missing calories) still only
+    raise, because a partial sum is not evidence of overestimation.
     """
     reported = int(round(_num(parsed.get("calories"))))
-    sums = _component_macro_sums(parsed.get("components"))
+    components = parsed.get("components")
+    sums = _component_macro_sums(components)
     component_sum = sums["calories"]
+    ledger_complete = _ledger_looks_complete(components)
 
     macros = {}
     macro_repaired = False
     for name, keys in _COMPONENT_MACROS:
         stated = round(_stated(parsed, keys), 1)
         from_parts = round(sums[name], 1)
-        resolved_macro = max(stated, from_parts)
+        # Bidirectional for macros: only apply when THIS MACRO is complete in all
+        # components. A ledger with calories for all items but protein for only 2
+        # of 4 should not drag protein down to a partial sum.
+        macro_is_complete = _macro_complete(components, keys)
+        if macro_is_complete and from_parts > 0:
+            macro_gap = abs(stated - from_parts) / from_parts
+            # Use the ledger when it differs by more than 20% in either direction.
+            if macro_gap > 0.20:
+                resolved_macro = from_parts
+            else:
+                resolved_macro = max(stated, from_parts)
+        else:
+            # Incomplete ledger for this macro — only raise, never lower.
+            resolved_macro = max(stated, from_parts)
         macros[name] = resolved_macro
         if resolved_macro != stated:
             macro_repaired = True
@@ -153,11 +230,23 @@ def assess_macro_coherence(parsed: Dict) -> Dict:
     macro_kcal = 4 * macros["protein"] + 4 * macros["carbs"] + 9 * macros["fats"]
 
     resolved = reported
+    lowered = False
+
+    # Raise when components or macro arithmetic justify more than reported.
     if component_sum > resolved:
         resolved = int(round(component_sum))
     if macro_kcal > resolved + 20:
-        # Macros already justify more calories than reported — trust the macros.
         resolved = int(round(macro_kcal))
+
+    # Lower when a complete ledger is far below the stated total. The ledger is
+    # the model's own itemized work, so when it contradicts the stated total by
+    # a large margin, trust the ledger. Add a 10% headroom to account for
+    # cooking fat and rounding that might not be fully itemized.
+    if ledger_complete and component_sum > 0:
+        ceiling = int(round(component_sum * 1.10))
+        if reported > ceiling and (reported - component_sum) / component_sum > OVERESTIMATE_GAP_RATIO:
+            resolved = ceiling
+            lowered = True
 
     gap = abs(resolved - reported)
     stated_protein = round(_stated(parsed, ("protein",)), 1)
@@ -174,6 +263,8 @@ def assess_macro_coherence(parsed: Dict) -> Dict:
         "reported_protein": stated_protein,
         "component_protein": round(sums["protein"], 1),
         "repaired": resolved != reported or macro_repaired,
+        "lowered": lowered,
+        "ledger_complete": ledger_complete,
         # Share of the final number that the model did not account for.
         "gap_ratio": round(gap / resolved, 3) if resolved > 0 else 0.0,
         # Tracked separately: a plate can be right on calories and badly wrong

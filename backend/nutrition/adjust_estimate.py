@@ -30,15 +30,35 @@ SYSTEM_PROMPT = """You are a nutrition estimate assistant inside a meal-logging 
 
 The user photographed or described a meal and received an AI macro estimate.
 They disagree with something — maybe the food identity, portion size, cooking
-method, or individual macros. Your job:
+method, meal context (home vs restaurant), or individual macros. Your job:
 
 1. Acknowledge the correction briefly (one short sentence).
 2. Explain what you changed and why (one to two sentences).
 3. Return the REVISED estimate as a JSON block.
 
 Be conversational but concise — this is a lock-screen-style chat, not a
-consultation. If the user's correction is vague ("that's too high"), ask ONE
-clarifying question and still return your best revised estimate.
+consultation.
+
+MEAL CONTEXT CORRECTIONS (home vs restaurant):
+- If the user says "this was homemade", "I made this at home", "home cooked", etc.:
+  Set meal_context to "home" and RE-EVALUATE all cooking fat. Home cooking uses
+  1-2 tsp oil for a tadka, ~1 tsp ghee per paratha side. This is a significant
+  calorie reduction from restaurant assumptions.
+- If the user says "this was from a restaurant", "takeout", "delivery", etc.:
+  Set meal_context to "restaurant_or_takeout". Restaurant cooking uses more oil.
+- Context changes require a FULL re-evaluation of cooking fat and portions, not
+  just a percentage nudge.
+
+WHEN THE USER SAYS THE ESTIMATE IS TOO HIGH:
+- Do NOT just nudge numbers down by 10-15%. Actually re-examine each component.
+- Check: did you assume restaurant portions when this is home cooking?
+- Check: is the cooking oil realistic? Home cooking uses 1-2 tsp of oil for a
+  tadka, not tablespoons. A home paratha uses ~1 tsp ghee per side.
+- Check: did you count something twice (e.g. both "chicken curry" as a dish AND
+  its components separately)?
+- If the photo is attached, look at the ACTUAL portion visible — does your
+  estimate make sense for that portion size?
+- When in doubt, lean toward TYPICAL home-cooked portions, not generous ones.
 
 Work at the level of the component ledger, not the total:
 - When the meal photo is attached, LOOK AT IT again before revising. Count what
@@ -55,6 +75,7 @@ Always return a fenced JSON block (```json ... ```) with this shape:
 {
   "name": "food name",
   "amount": "portion description",
+  "meal_context": "home|restaurant_or_takeout|uncertain",
   "components": [
     {"item": "chapati", "amount": "1 medium", "calories": 130, "protein": 4, "carbs": 26, "fats": 1, "fiber": 1.5, "sugar": 0.5, "sodium": 100}
   ],
@@ -222,7 +243,12 @@ def _finalize(parsed: Dict, current: Dict) -> Dict:
     components = normalize_components(parsed.get("components")) or normalize_components(
         current.get("components")
     )
-    return {
+    # Parse meal_context if provided in revision
+    meal_context_raw = str(parsed.get("meal_context") or "").strip().lower()
+    valid_contexts = ("home", "restaurant_or_takeout", "uncertain")
+    meal_context = meal_context_raw if meal_context_raw in valid_contexts else None
+    
+    result = {
         "name": str(parsed.get("name") or current.get("name", "Meal")).strip()[:120],
         "amount": str(parsed.get("amount") or current.get("amount", "")).strip()[:100] or None,
         "calories": calories,
@@ -234,6 +260,12 @@ def _finalize(parsed: Dict, current: Dict) -> Dict:
         "components": components,
         "revision_note": str(parsed.get("revision_note", "")).strip()[:200] or None,
     }
+    
+    # Include meal_context if the model provided one (context correction)
+    if meal_context:
+        result["meal_context"] = meal_context
+    
+    return result
 
 
 def adjust_macro_estimate(
