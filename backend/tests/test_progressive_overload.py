@@ -515,3 +515,46 @@ class TestAHeldWeekHoldsTheSameSession:
             weights = [s["weight"] for s in point.sets or []]
             if len(set(weights)) == 1 and len(weights) > 1:
                 assert False, f"week {point.week} flattened to {weights}"
+
+
+class TestTheVolumeCapIsNotDefeatedByAnExerciseLabel:
+    """
+    A plan day typed "volume" routinely carries exercises whose own `intensity`
+    says "normal", and the router resolves `exercise.intensity or day.day_type`.
+    The engine therefore saw "normal" and skipped the cap on exactly the days
+    it exists for — the volume exposure went back to working the heavy day's
+    load for the heavy day's reps.
+    """
+
+    SESSIONS = [
+        {
+            "date": "2026-09-07",
+            "sets": [
+                {"weight": 175, "reps": 7},
+                {"weight": 175, "reps": 6},
+                {"weight": 175, "reps": 5},
+            ],
+        }
+    ]
+
+    def _run(self, day_intensity):
+        return ProgressionEngine().compute_recommendation(
+            exercise_id="default-back-cable-lat-pulldown",
+            exercise_name="Lat Pulldowns",
+            user_goal="hypertrophy",
+            recent_sessions=self.SESSIONS,
+            num_sets=3,
+            day_intensity=day_intensity,
+            heavy_day_weight=175,
+            rep_range_override=(8, 12),
+        )
+
+    def test_an_exercise_labelled_normal_on_a_volume_day_is_still_capped(self):
+        assert max(s.weight for s in self._run("normal").sets) < 175
+
+    def test_the_cap_still_applies_when_the_day_says_volume(self):
+        assert max(s.weight for s in self._run("volume").sets) < 175
+
+    def test_a_heavy_exposure_is_never_capped(self):
+        """The reference weight is the heavy day's own load; it may sit at it."""
+        assert max(s.weight for s in self._run("heavy").sets) >= 175

@@ -250,7 +250,15 @@ class ProgressionEngine:
             focus_goal=focus_goal,
         )
 
-        if day_intensity == "volume" and heavy_day_weight:
+        # Keyed on the caller having supplied a Heavy-day reference, not on
+        # `day_intensity`. A plan day typed "volume" routinely carries
+        # exercises whose own `intensity` says "normal", and the router resolves
+        # `exercise.intensity or day.day_type` — so the engine saw "normal" and
+        # skipped the cap on exactly the days it exists for. The load
+        # relationship is a property of the *day*, and the reference weight
+        # being present is what says this is the lighter exposure of a lift
+        # trained heavy elsewhere.
+        if heavy_day_weight and day_intensity != "heavy":
             result = self._cap_to_volume_day(
                 result, float(heavy_day_weight), exercise_id, exercise_name,
                 exercise_record,
