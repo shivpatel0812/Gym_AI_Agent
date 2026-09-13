@@ -356,3 +356,154 @@ class TestWhatWouldItTake:
         assert easy.demand.requirements() == [
             "No change needed — the steady plan already gets there."
         ]
+
+
+class TestStartFromWhatWasDemonstrated:
+    """
+    Week 1 must never sit under what the lifter has already done.
+
+    The engine read `recent_sessions[0]` and nothing else, so one light day
+    reset the whole plan to that day's load. A lifter who hit 80x6 on Sep 4 and
+    had a 75x7 day on Sep 11 was started at 75 and spent a month re-earning 80 —
+    their own reading of it was exact: "my latest workout is already week 4 or 5
+    of this plan".
+
+    Peak-anchoring is the stance progress/domains.py, plan_projection and
+    progress/goals.py already take. This is the engine catching up.
+    """
+
+    HISTORY = [
+        {"date": "2026-09-11", "sets": [{"weight": 75, "reps": 7}, {"weight": 75, "reps": 5}]},
+        {"date": "2026-09-08", "sets": [{"weight": 80, "reps": 4}, {"weight": 80, "reps": 4}]},
+        {"date": "2026-09-04", "sets": [{"weight": 80, "reps": 6}, {"weight": 80, "reps": 4}]},
+    ]
+
+    def test_the_best_recent_session_is_the_reference(self):
+        from ai_analysis.workout_recommender.prescription import best_recent_session
+
+        picked = best_recent_session(self.HISTORY, BAND_4_6)
+        assert picked["date"] == "2026-09-04"
+
+    def test_a_lighter_session_can_never_be_reached_back_to(self):
+        """
+        Epley rates 50x10 (66.7) above 55x6 (66.0). Ranking on e1RM alone would
+        hand back 50 to someone who had just completed the prescribed jump to
+        55 — the oscillation bug arriving by a new route.
+        """
+        from ai_analysis.workout_recommender.prescription import best_recent_session
+
+        history = [
+            {"date": "2026-08-10", "sets": [{"weight": 55, "reps": 6}] * 3},
+            {"date": "2026-08-07", "sets": [{"weight": 50, "reps": 10}] * 3},
+        ]
+        assert best_recent_session(history, BAND_4_6)["date"] == "2026-08-10"
+
+    def test_a_stale_peak_does_not_count(self):
+        """Seven months ago is not evidence of what can be lifted today."""
+        from ai_analysis.workout_recommender.prescription import best_recent_session
+
+        history = list(self.HISTORY) + [
+            {"date": "2026-02-05", "sets": [{"weight": 95, "reps": 8}]}
+        ]
+        assert best_recent_session(history, BAND_4_6)["date"] == "2026-09-04"
+
+    def test_a_reported_failure_is_never_skipped_past(self):
+        """
+        Difficulty ratings describe the most recent session and are read off
+        whichever session becomes the reference. Reaching past a "failed" day
+        for a better-scoring earlier one discards the lifter's own report.
+        """
+        from ai_analysis.workout_recommender.prescription import best_recent_session
+
+        history = [
+            {
+                "date": "2026-09-11",
+                "sets": [{"weight": 75, "reps": 6, "difficulty": "failed"}] * 3,
+            },
+            {"date": "2026-09-08", "sets": [{"weight": 75, "reps": 8}] * 3},
+        ]
+        assert best_recent_session(history, BAND_4_6)["date"] == "2026-09-11"
+
+    def test_the_prescription_opens_at_the_demonstrated_load(self):
+        engine = ProgressionEngine()
+        result = engine.compute_recommendation(
+            exercise_id="default-chest-db-incline-press",
+            exercise_name="Incline Dumbbell Press",
+            user_goal="hypertrophy",
+            recent_sessions=self.HISTORY,
+            num_sets=4,
+            day_intensity="heavy",
+            rep_range_override=(4, 6),
+        )
+        top = max(s.weight for s in result.sets)
+        assert top >= 80, f"opened below the demonstrated load: {top}"
+
+    def test_the_projection_baseline_agrees_with_the_engine(self):
+        """
+        Both must read the same session. With the baseline on the last session
+        and the prescription on the best one, the plausibility ceiling rejects
+        the engine's own answer on week one and the walk holds forever.
+        """
+        p = PlanProjector().project_exercise(
+            exercise_id="default-chest-db-incline-press",
+            exercise_name="Incline Dumbbell Press",
+            day_name="Push A",
+            history=self.HISTORY,
+            user_goal="hypertrophy",
+            weeks=6,
+            sessions_per_week=1,
+            num_sets=4,
+            day_intensity="heavy",
+            rep_range_override=(4, 6),
+            experience_level="advanced",
+            energy_balance="lose",
+        )
+        assert p.best_case
+        assert p.best_case[0].weight >= 80
+        assert max(w.weight for w in p.best_case) > p.best_case[0].weight
+
+
+class TestAHeldWeekHoldsTheSameSession:
+    """
+    A held week must be the *same workout* as the week it holds.
+
+    The held WeekPoint carried only its top set, so the next held week found no
+    `sets` and fabricated num_sets copies of that top set. A lift running
+    85x5 + 3x75x6 silently became 85x5, 85x5, 85x5, 85x5 partway down the
+    roadmap: a different shape, and materially more work than the week it
+    claimed to be repeating.
+    """
+
+    def test_the_shape_survives_a_run_of_held_weeks(self):
+        p = PlanProjector().project_exercise(
+            exercise_id="default-chest-db-incline-press",
+            exercise_name="Incline Dumbbell Press",
+            day_name="Push A",
+            history=[
+                {"date": "2026-09-11", "sets": [{"weight": 75, "reps": 7}, {"weight": 75, "reps": 5}]},
+                {"date": "2026-09-04", "sets": [{"weight": 80, "reps": 6}, {"weight": 80, "reps": 4}]},
+            ],
+            user_goal="hypertrophy",
+            weeks=12,
+            sessions_per_week=1,
+            num_sets=4,
+            day_intensity="heavy",
+            rep_range_override=(4, 6),
+            # A rate this low guarantees a long run of held weeks.
+            experience_level="advanced",
+            energy_balance="lose",
+        )
+        shapes = {
+            tuple((s["weight"], s["reps"]) for s in point.sets)
+            for point in p.schedule
+            if point.sets
+        }
+        # Distinct loads are expected; a set *count* that changes is not.
+        counts = {len(shape) for shape in shapes}
+        assert counts == {4}, f"set count changed across the horizon: {counts}"
+
+        # A top-set lift must never collapse into N copies of its top set.
+        for point in p.schedule:
+            weights = [s["weight"] for s in point.sets or []]
+            if len(set(weights)) == 1 and len(weights) > 1:
+                assert False, f"week {point.week} flattened to {weights}"

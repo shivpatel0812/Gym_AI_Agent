@@ -28,7 +28,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .workout_recommender.goal_configs import RepRangeConfig, resolve_goal_config
-from .workout_recommender.prescription import SessionOutcome, evaluate_session
+from .workout_recommender.prescription import (
+    SessionOutcome,
+    best_recent_session,
+    evaluate_session,
+)
 from .workout_recommender.exercise_metadata import is_cardio
 from .workout_recommender.cardio_progression import (
     CardioModality,
@@ -712,7 +716,23 @@ class PlanProjector:
 
         current = None
         if simulated:
-            latest = simulated[0].get("sets") or []
+            # Peak-anchored, exactly as the engine now is. These two must agree
+            # about where the lifter is standing: with the baseline read off the
+            # last session and the prescription read off the best recent one,
+            # the engine proposes 80x6 (e1RM 96) and the plausibility ceiling
+            # -- built from the lighter 75x7 (92.5) -- rejects it on week one
+            # and the whole walk holds at the lighter number. Same class of bug
+            # as anchoring load on max weight while judging on max e1RM.
+            band = None
+            if rep_range_override:
+                try:
+                    band = RepRangeConfig(
+                        int(rep_range_override[0]), int(rep_range_override[1])
+                    )
+                except (TypeError, ValueError, IndexError):
+                    band = None
+            reference = best_recent_session(simulated, band) or simulated[0]
+            latest = reference.get("sets") or []
             if latest:
                 # Judged by estimated 1RM, not weight x reps. Raw volume picks
                 # the lightest set whenever it carries the most reps — for a
@@ -947,6 +967,14 @@ class PlanProjector:
                         reps=held.reps,
                         e1rm=held.e1rm,
                         decision=held_decision,
+                        # Carry the prescription forward, not just its top set.
+                        # Dropping `sets` here made the *next* held week fall
+                        # back to fabricating num_sets copies of the top set —
+                        # so a top-set-plus-backoff lift silently became four
+                        # straight sets at the heavy weight, which is both a
+                        # different shape and materially more work than the
+                        # week it claims to be holding.
+                        sets=list(held.sets),
                     )
                 )
                 # A held week is still a week the user trains, so the table

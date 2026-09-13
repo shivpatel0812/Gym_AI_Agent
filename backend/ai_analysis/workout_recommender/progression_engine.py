@@ -17,6 +17,7 @@ from .goal_configs import get_goal_config, resolve_goal_config, GoalConfig, RepR
 from .prescription import (
     Branch,
     E1RM_MAX_REPS,
+    best_recent_session,
     count_regressions,
     sets_at_working_load,
     supports_top_set,
@@ -380,8 +381,14 @@ class ProgressionEngine:
                 exercise_record=exercise_record,
             )
 
-        # Get the latest session data
-        latest = recent_sessions[0]
+        # Progress from the best recent session, not simply the last one. A
+        # light day after a good one otherwise resets the whole prescription to
+        # the light day's load, and the plan spends weeks re-earning a number
+        # already demonstrated. Peak-anchoring matches progress/domains.py,
+        # plan_projection and progress/goals.py, which all read peak for the
+        # same reason. `evaluate_session` still judges this session on its own
+        # merits — this chooses which session to read, not what to conclude.
+        latest = best_recent_session(recent_sessions, rep_range) or recent_sessions[0]
         latest_sets = latest.get("sets", [])
         if not latest_sets:
             estimated = estimate_starting_weight(
@@ -1403,6 +1410,22 @@ class ProgressionEngine:
         reps = [int(s.get("reps") or 0) for s in judged if (s.get("reps") or 0) > 0]
         lowest = min(reps) if reps else rep_range.low
         typical = int(median(reps)) if reps else rep_range.low
+        best = max(reps) if reps else rep_range.low
+
+        # A load already beaten past the band's ceiling is a load that has been
+        # outgrown, whatever the rest of the session did. Closing out the band
+        # here would prescribe 75x6 to someone whose last session opened 75x7 —
+        # and because the next session then reads as in-band and holds, the
+        # plan spends a month climbing back to a number already demonstrated.
+        # The lifter's own reading of this was exact: "my latest workout is
+        # already week 4 or 5 of this plan".
+        if (
+            outcome in (SessionOutcome.AT_TOP, SessionOutcome.IN_BAND)
+            and best > rep_range.high
+        ):
+            return self._handle_increase_weight(
+                latest_sets, num_sets, rep_range, increment, metadata, strategy
+            )
 
         if outcome == SessionOutcome.AT_TOP:
             # One clean sweep away from earning the weight — say exactly that.
@@ -1421,6 +1444,14 @@ class ProgressionEngine:
             aim = rep_range.low
             decision = Decision.FILL_BAND
             reason = "fill_band"
+
+        # Never hand back fewer reps than were already done at this load. The
+        # same rule `_handle_increase_reps` has carried since the rep-step
+        # clamp was fixed; this path never got it. Only on a session that
+        # actually went well — a PARTIAL session's best set is the one that
+        # worked, not a target the whole session earned.
+        if outcome in (SessionOutcome.AT_TOP, SessionOutcome.IN_BAND):
+            aim = max(aim, best)
 
         if strategy == ProgressionStrategy.TOP_SET:
             sets, branch = self._top_set_shape(
@@ -1780,8 +1811,18 @@ class ProgressionEngine:
             SessionOutcome.SWEPT_TOP,
             SessionOutcome.AT_TOP,
         ):
+            # Carry the shape through. Dropping it here defaulted to BAND, so a
+            # lift running a top set plus backoffs silently flipped to straight
+            # sets on whichever week this guard happened to fire — the roadmap
+            # then alternated between two prescription shapes for no reason the
+            # user could see.
+            strategy = ProgressionStrategy.BAND
+            try:
+                strategy = ProgressionStrategy(result.strategy)
+            except (ValueError, TypeError):
+                pass
             return self._handle_increase_weight(
-                latest_sets, num_sets, rep_range, increment, metadata
+                latest_sets, num_sets, rep_range, increment, metadata, strategy
             )
         bumped = self._handle_increase_reps(
             latest_sets, num_sets, rep_range, metadata

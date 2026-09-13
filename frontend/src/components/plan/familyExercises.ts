@@ -174,6 +174,37 @@ export function mergeSessionVariants(
     (a, b) => a.week - b.week || (a.session || 1) - (b.session || 1)
   );
 
+  // The push track has to be folded the same way, or toggling to it drops
+  // every exposure that has no goal on it. A destination lives on one plan day
+  // — Push A carries "90 lb x 3", Push B carries nothing — so only Push A gets
+  // a `push` payload from the API. Passing `primary.push` straight through
+  // rendered Workout 1 alone and made Workout 2 vanish from the week, which
+  // reads as the plan dropping a session rather than as the goal belonging to
+  // one day.
+  //
+  // An exposure with no push track keeps doing its steady work: the volume day
+  // is not asked to chase a heavy day's finish line.
+  const pushSchedule: WeekPoint[] = [];
+  let pushArrived: number | null | undefined;
+  let pushReachable: boolean | null | undefined;
+  let anyPush = false;
+  exercises.forEach((exercise, index) => {
+    const session = index + 1;
+    const own = exercise.push?.schedule;
+    if (own && own.length) {
+      anyPush = true;
+      if (pushArrived == null) pushArrived = exercise.push?.arrived_week;
+      if (pushReachable == null) pushReachable = exercise.push?.reachable;
+    }
+    const points = own && own.length ? own : exercise.schedule || [];
+    for (const point of points) {
+      pushSchedule.push({ ...point, session });
+    }
+  });
+  pushSchedule.sort(
+    (a, b) => a.week - b.week || (a.session || 1) - (b.session || 1)
+  );
+
   // Pick the richest single history payload rather than merging copies.
   const historySource = exercises.reduce((best, exercise) => {
     const bestN = (best.recent_sessions || []).length;
@@ -191,6 +222,15 @@ export function mergeSessionVariants(
       exercises.length
     ),
     schedule,
+    push: anyPush
+      ? {
+          best_case: primary.push?.best_case || [],
+          schedule: pushSchedule,
+          arrived_week: pushArrived ?? null,
+          reachable: pushReachable ?? null,
+        }
+      : primary.push,
+    demand: exercises.find((item) => item.demand)?.demand ?? primary.demand,
     recent_sessions: historySource.recent_sessions,
     history_context: historySource.history_context
       ? {

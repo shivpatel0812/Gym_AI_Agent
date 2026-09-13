@@ -198,3 +198,66 @@ describe("mergeSessionVariants", () => {
     expect(merged.recent_sessions?.[0].sets).toHaveLength(4);
   });
 });
+
+describe("push track across A/B exposures", () => {
+  const base = {
+    exercise_id: "default-chest-db-incline-press",
+    exercise_name: "Incline Dumbbell Press",
+    sessions_per_week: 1,
+    seeded_from_history: true,
+    current: null,
+    best_case: [],
+    realistic: [],
+    gain: {
+      best_case_e1rm: 0,
+      realistic_e1rm: 0,
+      best_case_pct: null,
+      realistic_pct: null,
+    },
+  } as any;
+
+  const pushA = {
+    ...base,
+    day_name: "Push A",
+    priority: "high",
+    schedule: [{ week: 1, weight: 80, reps: 4, e1rm: 90, session: 1, sets: [] }],
+    push: {
+      best_case: [],
+      schedule: [{ week: 1, weight: 85, reps: 4, e1rm: 96, session: 1, sets: [] }],
+      arrived_week: 10,
+      reachable: true,
+    },
+  } as any;
+
+  const pushB = {
+    ...base,
+    day_name: "Push B",
+    // No goal on the volume day, so the API sends no push payload for it.
+    schedule: [{ week: 1, weight: 65, reps: 9, e1rm: 84, session: 1, sets: [] }],
+    push: null,
+  } as any;
+
+  it("keeps both workouts when only one exposure carries the goal", () => {
+    const merged = mergeSessionVariants([pushA, pushB]);
+    const week1 = (merged.push?.schedule || []).filter((p) => p.week === 1);
+    expect(week1.map((p) => p.session)).toEqual([1, 2]);
+  });
+
+  it("falls back to steady work for the exposure with no goal", () => {
+    const merged = mergeSessionVariants([pushA, pushB]);
+    const week1 = (merged.push?.schedule || []).filter((p) => p.week === 1);
+    // Workout 1 chases the goal; Workout 2 keeps its own volume prescription.
+    expect(week1[0].weight).toBe(85);
+    expect(week1[1].weight).toBe(65);
+  });
+
+  it("carries the arrival week from whichever exposure has the goal", () => {
+    const merged = mergeSessionVariants([pushA, pushB]);
+    expect(merged.push?.arrived_week).toBe(10);
+  });
+
+  it("leaves push alone when no exposure has one", () => {
+    const merged = mergeSessionVariants([{ ...pushA, push: null }, pushB]);
+    expect(merged.push).toBeNull();
+  });
+});

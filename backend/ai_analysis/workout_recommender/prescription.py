@@ -17,7 +17,8 @@ next depending on where in the band they landed.
 from dataclasses import dataclass
 from statistics import median
 from enum import Enum
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from .exercise_metadata import ExerciseMetadata
 from .goal_configs import GoalConfig, RepRangeConfig
@@ -145,6 +146,91 @@ def select_strategy(
     if goal_config.name == "strength" and supports_top_set(metadata):
         return ProgressionStrategy.TOP_SET
     return ProgressionStrategy.BAND
+
+
+def days_between_sessions(newer: Any, older: Any) -> Optional[int]:
+    """Whole days between two session dates, or None if either is unreadable."""
+    parsed = []
+    for value in (newer, older):
+        if value is None:
+            return None
+        try:
+            parsed.append(datetime.fromisoformat(str(value)[:10]))
+        except (ValueError, TypeError):
+            return None
+    return abs((parsed[0] - parsed[1]).days)
+
+
+# How far back a peak still counts as "what this lifter can do". Beyond it,
+# the honest reading is that conditions have changed and the recent sessions
+# are the evidence. Reasoned, not calibrated — `estimate_comeback_weight`
+# already handles genuine layoffs, and this only has to survive an off week.
+PEAK_WINDOW_DAYS = 42
+PEAK_WINDOW_SESSIONS = 6
+
+
+def best_recent_session(
+    recent_sessions: List[Dict],
+    rep_range: Optional[RepRangeConfig] = None,
+) -> Optional[Dict]:
+    """
+    The session to progress from: the best one recently, not the last one.
+
+    Reading `recent_sessions[0]` treats whatever happened last as the whole
+    truth. A lifter who hit 80x6 nine days ago and had a light 75x7 day since
+    gets anchored to 75, and the plan then spends a month climbing back to a
+    load already demonstrated -- which is exactly how a user reads it: "my
+    latest workout is already week 4 or 5 of this plan".
+
+    Peak-anchoring is the stance this codebase already takes everywhere else.
+    `progress/domains.py` anchors a strength level on peak e1RM so a bad week
+    cannot lower it; `plan_projection` reports gains from peak; `progress/
+    goals.py` reads peak so a goal cannot un-achieve itself on one bad
+    session. The progression engine was the one place still reading last-only.
+
+    Bounded in both directions: only sessions inside the recent window, and
+    only ever *forward* of the most recent one. A genuine decline still shows
+    up, because `count_regressions` and the readiness ladder judge the trend
+    separately -- this picks the reference to progress from, not the verdict
+    on how training is going.
+    """
+    sessions = [s for s in (recent_sessions or []) if s.get("sets")]
+    if not sessions:
+        return None
+    latest = sessions[0]
+    # Difficulty ratings are the lifter telling you how the most recent session
+    # actually felt, and they are read off whichever session becomes the
+    # reference. Reaching past a session marked "failed" to a better-scoring
+    # earlier one would silently discard that report and prescribe as though
+    # the failure had not happened. An explicit signal about today outranks a
+    # better number from last week.
+    if any((s.get("difficulty") or "") for s in latest.get("sets") or []):
+        return latest
+    latest_load = working_load(latest.get("sets") or [], rep_range)
+    candidates = [latest]
+    for session in sessions[1:PEAK_WINDOW_SESSIONS]:
+        gap = days_between_sessions(latest.get("date"), session.get("date"))
+        # An undated session cannot be shown to be recent, so it does not vote.
+        if gap is None or gap > PEAK_WINDOW_DAYS:
+            continue
+        # Never reach back to a *lighter* session, however well it scores.
+        # Epley rates 50x10 (66.7) above 55x6 (66.0), so ranking on e1RM alone
+        # would hand back 50 to a lifter who had just completed the prescribed
+        # jump to 55 — the exact oscillation the volume comparison used to
+        # cause, arriving by a different route. Peak-anchoring may only ever
+        # look sideways or up.
+        if working_load(session.get("sets") or [], rep_range) < latest_load:
+            continue
+        candidates.append(session)
+
+    def peak_of(session: Dict) -> float:
+        usable = [s for s in session.get("sets") or [] if set_e1rm(s) > 0]
+        return max((set_e1rm(s) for s in usable), default=0.0)
+
+    best = max(candidates, key=peak_of)
+    # Ties and regressions both keep the latest session: it carries the most
+    # current information about what the lifter is ready for today.
+    return best if peak_of(best) > peak_of(latest) else latest
 
 
 # At or above this, the lifter carries one load across the whole session and a
