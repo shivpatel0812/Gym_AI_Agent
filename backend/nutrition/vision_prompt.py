@@ -81,13 +81,13 @@ V2_RULES = """- Treat the title and description as strong identity and quantity 
 - Look for portion cues already in frame. A known package is strong; a plate, bowl, utensil, or hand is weak-to-medium unless its size is known.
 - When no reliable scale reference is present, do NOT shrink the estimate to stay safe. Anchor on standard servingware — dinner plate ~26cm, side plate ~19cm, katori or small bowl ~150ml, soup or cereal bowl ~350ml, tablespoon ~15ml — and widen the low/high gram range instead. Uncertainty belongs in the range, never in a smaller central estimate.
 - Estimate a best gram amount plus a realistic low/high gram range. A single image without scale should have a wider range.
-- Infer cooking fat from the dish you identified, not from whether the food is homemade. Many preparations are defined by their fat: a tempered dal or kadhi carries its tadka, a sabzi is cooked in oil, a paratha is griddled. Include that fat by default for such dishes.
-- A stated cooking style, "homemade", or "less oil" MODULATES that amount down; it never reduces it to zero. Glistening can be water, sauce, or glaze, so report visible oil evidence separately from the amount you assume.
+- Infer cooking fat from the dish you identified, not from whether the food is homemade. But be conservative: use TYPICAL home-cooking amounts, not restaurant amounts. A home-cooked dal tadka is 1-2 tsp oil, not the 2+ tbsp a restaurant might use. A paratha has ~1 tsp ghee/oil per side unless it visibly glistens. Only add cooking fat for preparations that genuinely require it.
+- A stated cooking style, "homemade", or "less oil" MODULATES that amount down further. Glistening can be water, sauce, or glaze, so report visible oil evidence separately from the amount you assume.
 - Include hidden ingredients, sauces, and drinks when stated, visible, or customary for the identified preparation. Put uncertain choices in assumptions or uncertainties.
-- Break mixed meals into components. Component nutrition and the top-level macros describe the FULL quantity, not per 100g.
-- Estimate each component independently, then stop and check the plate as a whole: is this a plausible total for a meal of this type and size? Independent per-item estimates on a multi-part plate tend to each land low, and those shortfalls add up. If the total reads low against the whole plate, raise it and note that in assumptions.
+- Break mixed meals into components. Component nutrition and the top-level macros describe the FULL quantity, not per 100g. NEVER count a dish both as a whole and as its parts — either "1 samosa: 150 kcal" OR "pastry + filling + frying oil", not both.
+- Estimate each component independently, then stop and check the plate as a whole: is this a plausible total for a meal of this type and size? Check BOTH directions — the total should not read suspiciously low OR suspiciously high for what you see. A home-cooked vegetarian Indian meal is typically 400-700 kcal; a light breakfast 200-400 kcal. If your total seems too high for the portion visible, re-examine your component estimates.
 - Report the component figures you actually derived. Do not quietly adjust individual components to make them add up. If your plate-level total differs from the component sum, keep both honest and explain the gap in assumptions.
-- Calories should be arithmetically compatible with protein, carbs, and fat."""
+- Calories should be arithmetically compatible with protein, carbs, and fat. The top-level calories MUST match the component sum — do not state a higher total than your components justify."""
 
 # v3 is v2 with the inventory step in front, and the title rule reworded so a
 # single-dish name cannot cap the meal. Built by extension rather than rewritten
@@ -95,7 +95,8 @@ V2_RULES = """- Treat the title and description as strong identity and quantity 
 # lost by accident.
 _V3_INVENTORY = """- FIRST, before estimating anything, inventory the frame: list every distinct edible item you can see, including items in separate bowls, katoris, side plates, cups and glasses. A side of yogurt, raita, chutney, pickle or a drink is part of the meal and each is its own item. Do this as a list, then estimate.
 - Every item in that inventory must end up either in `components` or in `scene.excluded` with a reason. Never drop one silently. If you are unsure what a side dish is, include it with your best guess and say so in uncertainties — an item counted approximately is far closer to the truth than an item left out.
-- The user's title usually names the MAIN dish, not the whole meal. Take it as strong evidence of what the main dish is, and as no evidence at all about what else is on the table."""
+- The user's title usually names the MAIN dish, not the whole meal. Take it as strong evidence of what the main dish is, and as no evidence at all about what else is on the table.
+- Aim for accuracy, not caution. Overestimating is just as wrong as underestimating — users rely on these numbers to make dietary decisions, and systematic overestimation leads to under-eating."""
 
 # The title rule v3 replaces — restated in _V3_INVENTORY so the two cannot
 # contradict each other in the same prompt.

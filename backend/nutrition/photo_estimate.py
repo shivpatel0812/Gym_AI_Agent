@@ -16,6 +16,27 @@ MAX_COMPONENTS = 12
 MAX_PORTION_GRAMS = 5000.0
 MAX_OIL_GRAMS = 150.0
 
+# Reasonable cooking fat limits per portion size. Home cooking typically uses
+# less oil than these caps; restaurant cooking uses more. These are generous
+# ceilings to catch clear overestimates while letting real restaurant-style
+# dishes through.
+# Key: portion grams threshold, Value: max oil grams
+_OIL_PER_PORTION_CAPS = [
+    (100, 15),    # Small snack: max ~1 tbsp
+    (200, 25),    # Light meal: max ~2 tbsp
+    (400, 40),    # Regular meal: max ~3 tbsp
+    (600, 55),    # Large meal: max ~4 tbsp
+    (float("inf"), 70),  # Very large: max ~5 tbsp
+]
+
+
+def _reasonable_oil_cap(portion_grams: float) -> float:
+    """Maximum cooking fat that makes sense for this portion size."""
+    for threshold, cap in _OIL_PER_PORTION_CAPS:
+        if portion_grams <= threshold:
+            return cap
+    return _OIL_PER_PORTION_CAPS[-1][1]
+
 
 def normalize_cooking_style(value: Optional[str]) -> str:
     raw = str(value or "").strip().lower()
@@ -238,9 +259,17 @@ def build_photo_analysis(
 
     fat_raw = parsed.get("cooking_fat") if isinstance(parsed.get("cooking_fat"), dict) else {}
     normalized_style = normalize_cooking_style(cooking_style)
+    raw_oil = _number(fat_raw.get("estimated_grams"), maximum=MAX_OIL_GRAMS)
+    # Cap oil based on portion size — a small katori of dal cannot absorb 50g of oil.
+    portion_grams = portion.get("estimated_grams") or 0.0
+    portion_cap = _reasonable_oil_cap(portion_grams)
+    capped_oil = min(raw_oil, portion_cap)
+    oil_was_capped = raw_oil > portion_cap
+
     cooking = {
         "style": normalized_style,
-        "oil_grams": round(_number(fat_raw.get("estimated_grams"), maximum=MAX_OIL_GRAMS), 1),
+        "oil_grams": round(capped_oil, 1),
+        "oil_capped_from": round(raw_oil, 1) if oil_was_capped else None,
         "basis": _choice(
             fat_raw.get("basis"),
             ("description", "user_preference", "visible_evidence", "typical_recipe", "none", "unknown"),
