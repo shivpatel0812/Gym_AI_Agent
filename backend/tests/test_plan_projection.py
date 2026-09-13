@@ -680,12 +680,27 @@ class TestDestinationPacing:
         assert rate < 0.02
         assert 96.0 * ((1 + rate) ** 12) == pytest.approx(102.0, rel=1e-6)
 
-    def test_a_goal_beyond_reach_is_not_sped_up_to_meet_it(self):
-        """The gap is the finding; `reachable` is where it gets reported."""
+    def test_a_stated_goal_is_paced_to_even_when_it_is_a_stretch(self):
+        """
+        A goal is the user's intent, and it is followed rather than overruled.
+        Re-pacing it to the typical rate and then reporting "unreachable" told
+        someone their target was wrong without ever showing them the sessions
+        that would meet it. What the goal costs is reported through
+        `PaceDemand` instead — see TestWhatWouldItTake.
+        """
         rate = pace_to_destination(
             baseline_e1rm=96.0, destination_e1rm=200.0, weeks=12, plausible_rate=0.004
         )
-        assert rate == 0.004
+        assert rate > 0.004
+        assert 96.0 * ((1 + rate) ** 12) == pytest.approx(200.0, rel=1e-6)
+
+    def test_a_lift_with_no_goal_is_still_bounded(self):
+        """
+        Nothing to follow means something has to hold the line: unbounded
+        double progression compounds a 20 lb lateral raise 95% in twelve weeks
+        because the smallest plate is a 25% jump.
+        """
+        assert pace_to_destination(96.0, None, 12, 0.004) == 0.004
 
     def test_no_destination_leaves_the_rate_alone(self):
         assert pace_to_destination(96.0, None, 12, 0.008) == 0.008
@@ -799,11 +814,16 @@ class TestTheWalkCanActuallyReachTheGoal:
                 f"{experience}/{balance} overshot the stated goal"
             )
 
-    def test_a_deficit_does_not_reach_a_goal_that_needs_maintenance(self, projector):
+    def test_a_stretch_goal_is_drawn_and_its_cost_reported(self, projector):
         """
-        The projection and the feasibility verdict have to agree. `assess_goal`
-        reports 90x3 unreachable for an advanced lifter in a deficit; the walk
-        must not then draw a line to it.
+        The walk and the feasibility verdict still have to agree — but they
+        agree by saying the same thing in two places, not by refusing to draw.
+
+        `assess_goal` reports 90x3 a stretch for an advanced lifter in a
+        deficit. The walk now shows the sessions that would meet it, and
+        `demand` carries the verdict: the rate needed, how it compares to what
+        training typically delivers, and the date that would work instead.
+        Refusing to draw the path left the user with a verdict and no plan.
         """
         from ai_analysis.goal_feasibility import assess_goal, parse_lift_goal
 
@@ -819,7 +839,12 @@ class TestTheWalkCanActuallyReachTheGoal:
             energy_balance="lose",
         )
         assert verdict.reachable is False
-        assert result.reachable is False
+        # The path exists now...
+        assert result.reachable is True
+        # ...and the cost of taking it is stated rather than hidden.
+        assert result.demand is not None
+        assert result.demand.within_plausible is False
+        assert result.demand.weeks_at_current_pace > result.demand.weeks_requested
 
     def test_a_volume_goal_still_climbs_reps_across_the_block(self, projector):
         result = project(

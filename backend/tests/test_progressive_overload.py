@@ -292,25 +292,33 @@ class TestWhatWouldItTake:
             pace=pace,
         )
 
-    def test_the_steady_walk_still_reports_the_goal_as_missed(self):
-        """Offering a harder path must not quietly soften the honest one."""
-        assert self._project().reachable is False
+    def test_a_stated_goal_is_paced_to(self):
+        """
+        The steady walk follows the user's finish line rather than overruling
+        it. Telling someone their goal is unreachable and stopping there is a
+        verdict with no action attached; the sessions that would meet it are
+        the actionable half.
+        """
+        assert self._project().reachable is True
 
-    def test_the_push_walk_reaches_the_goal(self):
-        push = self._project(pace="push")
-        assert push.reachable is True
-        assert push.arrived_week is not None
+    def test_the_walk_says_what_to_do_each_workout(self):
+        p = self._project()
+        assert p.schedule
+        assert all(point.sets for point in p.schedule[:4])
 
-    def test_the_push_walk_says_what_to_do_each_workout(self):
-        """The actionable half: a prescription per session, not just a verdict."""
-        push = self._project(pace="push")
-        assert push.schedule
-        assert all(point.sets for point in push.schedule[:4])
+    def test_the_cost_is_reported_rather_than_enforced(self):
+        """
+        Following the goal must not mean pretending it is easy. Everything the
+        old refusal used to encode still has to be visible.
+        """
+        demand = self._project().demand
+        assert demand.within_plausible is False
+        assert demand.ratio > 1
+        assert demand.weeks_at_current_pace > demand.weeks_requested
 
-    def test_the_push_walk_still_respects_the_destination_load(self):
-        """Pushing harder is not licence to hand back a heavier weight than asked."""
-        push = self._project(pace="push")
-        assert max(w.weight for w in push.best_case) <= 90
+    def test_the_walk_still_respects_the_destination_load(self):
+        """Following a goal is not licence to hand back a heavier weight than asked."""
+        assert max(w.weight for w in self._project().best_case) <= 90
 
     def test_the_demand_is_reported_on_the_steady_projection(self):
         """So a client knows whether a harder path is worth offering at all."""

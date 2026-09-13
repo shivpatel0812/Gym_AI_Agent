@@ -240,15 +240,23 @@ def pace_to_destination(
     drew a flat line for ten weeks — which reads as a plan with nothing left to
     do. Pacing spreads the same gain across the horizon the user chose.
 
-    A goal that needs more than the plausible rate is not sped up to meet it.
-    That gap is the finding, and `reachable` is where it gets reported.
+    A stated goal is followed, not overruled. This used to return the *slower*
+    of the required and plausible rates, so a goal needing more than the
+    typical rate was quietly re-paced to something else and then reported
+    unreachable — which told the user their target was wrong without ever
+    showing them the sessions that would meet it.
+
+    The plausible rate still bounds a lift with **no** stated goal, where there
+    is no user intent to follow and something has to stop double progression
+    compounding a lateral raise 95% in twelve weeks. Where a goal exists, the
+    goal is the intent, and what it costs is reported through `PaceDemand`
+    rather than enforced by refusing to draw it.
     """
     if not baseline_e1rm or baseline_e1rm <= 0 or not destination_e1rm or not weeks:
         return plausible_rate
     if destination_e1rm <= baseline_e1rm:
         return plausible_rate
-    required = (destination_e1rm / baseline_e1rm) ** (1.0 / max(1, weeks)) - 1.0
-    return min(plausible_rate, required)
+    return (destination_e1rm / baseline_e1rm) ** (1.0 / max(1, weeks)) - 1.0
 
 
 # Epley, matching _compute_e1rm_history in the progression engine.
@@ -408,10 +416,20 @@ class PaceDemand:
             )
         if not self.within_surplus:
             when = self.weeks_on_surplus or self.weeks_at_current_pace
+            # The path is drawn either way — this says what it is banking on,
+            # rather than refusing. Phrasing it as "the date is the problem"
+            # read as a verdict, which is the thing the goal-paced walk exists
+            # to stop doing.
             out.append(
-                "This rate is beyond what training delivers even in a surplus — "
-                "the date is the problem, not the effort."
-                + (f" On a surplus the honest date is about {when} weeks out." if when else "")
+                "This is faster than training usually delivers even in a "
+                "surplus, so treat the later weeks as the stretch half of the "
+                "plan."
+                + (
+                    f" A pace that needs nothing to go right lands this around "
+                    f"week {when}."
+                    if when
+                    else ""
+                )
             )
         return out
 
@@ -782,10 +800,16 @@ class PlanProjector:
         pace_target = destination_e1rm
         if destination and rep_range_override:
             try:
-                band_high = int(max(rep_range_override))
+                # The band's FLOOR, not its ceiling. Reaching a load means being
+                # prescribed it at the bottom of the band — `_handle_increase_weight`
+                # re-enters there — so 90 is first touched at 90x4 (e1RM 102),
+                # never 90x6 (108). Pacing to the ceiling inflated the required
+                # rate by half again and made an ordinary twelve-week goal read
+                # as six times harder than it is.
+                band_low = int(min(rep_range_override))
                 pace_target = max(
                     destination_e1rm or 0,
-                    e1rm(destination.get("weight"), band_high),
+                    e1rm(destination.get("weight"), band_low),
                 )
             except (TypeError, ValueError):
                 pass
