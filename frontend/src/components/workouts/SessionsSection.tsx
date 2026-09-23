@@ -2159,6 +2159,23 @@ export default function SessionsSection({
                               ))}
                             </View>
                           )}
+                          {/* The branch — what to do when the first set says the
+                              load was wrong, or what earns the next jump. A step
+                              up without it is a number with no way out. */}
+                          {aiRec.branch?.condition && aiRec.branch?.action ? (
+                            <View style={styles.branchBox}>
+                              <MaterialCommunityIcons
+                                name="lightning-bolt"
+                                size={13}
+                                color={colors.ai}
+                                style={styles.branchIcon}
+                              />
+                              <Text style={styles.branchText}>
+                                <Text style={styles.branchCondition}>{aiRec.branch.condition}</Text>
+                                {` → ${aiRec.branch.action}`}
+                              </Text>
+                            </View>
+                          ) : null}
                           {aiRec.calibration_required ? (
                             <Text style={styles.calibrationHint}>
                               Calibration set: complete 6 controlled reps, choose how it felt, and the next set will adapt.
@@ -3170,6 +3187,21 @@ const styles = StyleSheet.create({
   undoRecommendation: { alignSelf: "flex-start", marginTop: 8, paddingVertical: 4 },
   undoRecommendationText: { color: colors.ai, fontSize: 11, fontWeight: "700" },
   calibrationHint: { color: colors.ai, fontSize: 11, lineHeight: 16, marginBottom: 10 },
+  branchBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    backgroundColor: "rgba(11,12,16,0.4)",
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    marginBottom: 8,
+  },
+  branchIcon: { marginTop: 1 },
+  branchText: { flex: 1, color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
+  branchCondition: { color: colors.text, fontWeight: "600" },
   applySets: {
     borderWidth: 1,
     borderColor: "rgba(94,234,212,0.4)",

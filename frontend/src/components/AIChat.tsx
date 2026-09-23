@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -24,6 +24,7 @@ import CreatePlanModal from "./plan/CreatePlanModal";
 import CreateNutritionPlanModal from "./nutrition/plan/CreateNutritionPlanModal";
 import apiClient from "../api/client";
 import { streamChat, StreamError } from "../api/streamChat";
+import { activatePlan } from "../api/trainingPlan";
 import RequestAiAccessModal from "./ai/RequestAiAccessModal";
 import ReportContentModal from "./ai/ReportContentModal";
 import { fetchAiAccessStatus, AiAccessStatus, quotaDetailFromError, blockedDetailFromError } from "../api/aiAccess";
@@ -53,11 +54,23 @@ type SuggestionArtifact = {
   suggestion_set_id?: string;
 };
 
+export interface PlanProposalArtifact {
+  type: "plan_proposed";
+  plan_id: string;
+  plan_name: string;
+  summary: string;
+  days: number;
+  day_names?: string[];
+  plan: any;
+}
+
 interface Message {
   role: "user" | "assistant";
   content: string;
   /** Plan edits this turn staged for review. Chat never writes the plan. */
   suggestions?: SuggestionArtifact;
+  /** Complete workout plan proposed this turn. Ready to review and activate. */
+  planProposal?: PlanProposalArtifact;
   /** Coach-mode message that sounds like a durable program decision. */
   planIntent?: boolean;
 }
@@ -79,12 +92,22 @@ const STRONG_PLAN_EDIT_PATTERNS = [
   /\b(add|remove|replace)\b.{0,35}\b(exercise|lift|day)\b.{0,20}\b(to |on |from )?(my )?(plan|push|pull|legs)\b/i,
 ];
 
+const PLAN_CREATE_PATTERNS = [
+  /\b(create|generate|build|make|set up|start|save)\b.{0,30}\b(the|this|my|a)?\s*(workout )?(plan|program|split|routine)\b/i,
+  /\b(create|generate|build|make)\s+(it|this)\b/i,
+  /\b(can you|please|let'?s|go ahead and)\s+(create|generate|build|make)\b.{0,25}\b(the|a|this|my)?\s*(plan|program|split|routine|it|this)\b/i,
+];
+
 function looksLikePlanIntent(message: string): boolean {
   return PLAN_INTENT_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 function looksLikeStrongPlanEdit(message: string): boolean {
   return STRONG_PLAN_EDIT_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function looksLikePlanCreate(message: string): boolean {
+  return PLAN_CREATE_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 function suggestionArtifact(artifacts?: any[]): SuggestionArtifact | undefined {
@@ -101,6 +124,20 @@ function suggestionArtifact(artifacts?: any[]): SuggestionArtifact | undefined {
   };
 }
 
+function planProposalArtifact(artifacts?: any[]): PlanProposalArtifact | undefined {
+  const hit = (artifacts || []).find((a) => a?.type === "plan_proposed");
+  if (!hit) return undefined;
+  return {
+    type: "plan_proposed",
+    plan_id: hit.plan_id,
+    plan_name: hit.plan_name || "Workout Plan",
+    summary: hit.summary || "Draft plan ready",
+    days: hit.days || (hit.plan?.days?.length ?? 0),
+    day_names: hit.day_names || (hit.plan?.days || []).map((d: any) => d.name || d.day_name),
+    plan: hit.plan,
+  };
+}
+
 // Shown while the coach is pulling data mid-answer
 const TOOL_LABELS: Record<string, string> = {
   get_recent_activity: "Reviewing your recent workouts and nutrition...",
@@ -114,6 +151,7 @@ const TOOL_LABELS: Record<string, string> = {
   propose_nutrition_edits: "Drafting plan updates...",
   get_training_plan: "Looking at your training plan...",
   propose_plan_edits: "Drafting plan updates...",
+  propose_training_plan: "Building your workout plan...",
   get_wellness_log: "Reviewing your sleep and recovery...",
   get_personal_records: "Looking up your personal bests...",
   get_meal_photo_history: "Reviewing your meal photo history...",
@@ -161,6 +199,8 @@ export default function AIChat({
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameText, setRenameText] = useState("");
   const [createPlanOpen, setCreatePlanOpen] = useState(false);
+  const [createPlanDraft, setCreatePlanDraft] = useState<any | null>(null);
+  const [createPlanAutoGenerate, setCreatePlanAutoGenerate] = useState(false);
   const [createNutritionOpen, setCreateNutritionOpen] = useState(false);
   const [chatMode, setChatMode] = useState<ChatMode>("coach");
   const [aiModel, setAiModel] = useState<AiModelId>(DEFAULT_AI_MODEL);
@@ -339,6 +379,34 @@ export default function AIChat({
     }, [refreshAiStatus])
   );
 
+  const hasPlanDiscussion = useMemo(() => {
+    return messages.some(
+      (m) =>
+        Boolean(m.planIntent) ||
+        Boolean(m.planProposal) ||
+        (m.role === "user" && (looksLikePlanIntent(m.content) || looksLikePlanCreate(m.content)))
+    );
+  }, [messages]);
+
+  const openPlanReview = (plan: any) => {
+    setCreatePlanDraft(plan);
+    setCreatePlanAutoGenerate(false);
+    setCreatePlanOpen(true);
+  };
+
+  const handleActivateProposedPlan = async (planId: string) => {
+    try {
+      await activatePlan(planId);
+      Alert.alert("Plan active", "Your workouts and recommendations now follow this plan.");
+    } catch (err: any) {
+      console.error("Could not activate plan:", err);
+      Alert.alert(
+        "Activation error",
+        err?.response?.data?.detail || "Could not activate this plan. Try reviewing it first."
+      );
+    }
+  };
+
   /** Show the limit message as a coach turn and offer the request-access flow. */
   const showQuotaMessage = (baseMessages: Message[], message: string) => {
     setMessages([...baseMessages, { role: "assistant", content: message }]);
@@ -374,6 +442,7 @@ export default function AIChat({
           role: "assistant",
           content: res.data.response,
           suggestions: suggestionArtifact(res.data.artifacts),
+          planProposal: planProposalArtifact(res.data.artifacts),
         },
       ]);
       setConversationHistory(res.data.conversation_history || []);
@@ -429,7 +498,9 @@ export default function AIChat({
         role: "user",
         content: messageToSend,
         planIntent:
-          modeForSend === "coach" && looksLikePlanIntent(messageToSend),
+          modeForSend === "coach" &&
+          looksLikePlanIntent(messageToSend) &&
+          !looksLikePlanCreate(messageToSend),
       },
     ];
     setMessages(updatedMessages);
@@ -462,6 +533,7 @@ export default function AIChat({
               role: "assistant",
               content: payload.response || streamed,
               suggestions: suggestionArtifact(payload.artifacts),
+              planProposal: planProposalArtifact(payload.artifacts),
             },
           ]);
           setConversationHistory(payload.conversation_history || []);
@@ -576,6 +648,39 @@ export default function AIChat({
                     : "Review updates →"}
                 </Text>
               </TouchableOpacity>
+            ) : null}
+            {item.planProposal ? (
+              <View style={styles.planProposalCard}>
+                <View style={styles.planProposalHeader}>
+                  <View style={styles.planProposalBadge}>
+                    <MaterialCommunityIcons name="dumbbell" size={14} color={colors.accentPrimary} />
+                    <Text style={styles.planProposalBadgeText}>WORKOUT PLAN CREATED</Text>
+                  </View>
+                  <Text style={styles.planProposalTitle}>{item.planProposal.plan_name}</Text>
+                  <Text style={styles.planProposalSummary}>
+                    {item.planProposal.days} workout {item.planProposal.days === 1 ? "day" : "days"} scheduled
+                    {item.planProposal.day_names?.length ? ` (${item.planProposal.day_names.join(", ")})` : ""}
+                  </Text>
+                </View>
+                <View style={styles.planProposalActions}>
+                  <TouchableOpacity
+                    style={styles.reviewPlanButton}
+                    onPress={() => openPlanReview(item.planProposal!.plan)}
+                    activeOpacity={0.85}
+                  >
+                    <MaterialCommunityIcons name="eye-outline" size={15} color="#fff" />
+                    <Text style={styles.reviewPlanButtonText}>Review Plan</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.activatePlanButton}
+                    onPress={() => handleActivateProposedPlan(item.planProposal!.plan_id)}
+                    activeOpacity={0.85}
+                  >
+                    <MaterialCommunityIcons name="check-circle-outline" size={15} color="#0B0C10" />
+                    <Text style={styles.activatePlanButtonText}>Activate</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             ) : null}
             {/* Guideline 1.2: every AI response must be reportable */}
             <TouchableOpacity
@@ -885,10 +990,14 @@ export default function AIChat({
             </TouchableOpacity>
           </View>
         ) : null}
-        {chatMode === "plan" && hasUserMessage ? (
+        {(chatMode === "plan" || hasPlanDiscussion) && hasUserMessage ? (
           <TouchableOpacity
             style={styles.generateBar}
-            onPress={() => setCreatePlanOpen(true)}
+            onPress={() => {
+              setCreatePlanDraft(null);
+              setCreatePlanAutoGenerate(true);
+              setCreatePlanOpen(true);
+            }}
             disabled={loading}
           >
             <MaterialCommunityIcons name="auto-fix" size={18} color="#fff" />
@@ -959,13 +1068,23 @@ export default function AIChat({
       <CreatePlanModal
         visible={createPlanOpen}
         conversationId={conversationId}
-        onClose={() => setCreatePlanOpen(false)}
+        initialDraft={createPlanDraft}
+        autoGenerate={createPlanAutoGenerate}
+        onClose={() => {
+          setCreatePlanOpen(false);
+          setCreatePlanDraft(null);
+          setCreatePlanAutoGenerate(false);
+        }}
         onAdjustWithCoach={(prompt) => {
           setCreatePlanOpen(false);
+          setCreatePlanDraft(null);
+          setCreatePlanAutoGenerate(false);
           setInputMessage(prompt);
         }}
         onCreated={() => {
           setCreatePlanOpen(false);
+          setCreatePlanDraft(null);
+          setCreatePlanAutoGenerate(false);
           Alert.alert("Plan active", "Your workouts and recommendations now follow this plan.");
         }}
       />
@@ -1399,6 +1518,73 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     marginTop: spacing.sm,
+  },
+  planProposalCard: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: borderRadius.lg,
+    backgroundColor: "rgba(255,107,53,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,107,53,0.4)",
+  },
+  planProposalHeader: {
+    marginBottom: spacing.xs,
+  },
+  planProposalBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 4,
+  },
+  planProposalBadgeText: {
+    color: colors.accentPrimary,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  planProposalTitle: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  planProposalSummary: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  planProposalActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  reviewPlanButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.accentPrimary,
+    paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.md,
+    borderRadius: borderRadius.md,
+  },
+  reviewPlanButtonText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  activatePlanButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#fff",
+    paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.md,
+    borderRadius: borderRadius.md,
+  },
+  activatePlanButtonText: {
+    color: "#0B0C10",
+    fontSize: 12,
+    fontWeight: "700",
   },
   planButton: {
     flexDirection: "row",

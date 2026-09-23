@@ -7,6 +7,7 @@ import CreateNutritionPlanModal from "../components/nutrition/plan/CreateNutriti
 import ConversationSidebar from "../components/chat/ConversationSidebar";
 import { NutritionSuggestionArtifact } from "../api/nutritionPlan";
 import { streamChat, StreamError } from "../api/streamChat";
+import { activatePlan } from "../api/trainingPlan";
 import { getConversation } from "../api/conversations";
 import {
   MdSend,
@@ -24,11 +25,46 @@ import {
   persistAiModel,
 } from "../lib/aiModels";
 
+export interface PlanProposalArtifact {
+  plan_id: string;
+  plan_name: string;
+  summary: string;
+  days: number;
+  day_names?: string[];
+  plan: any;
+}
+
 interface Message {
   role: "user" | "assistant";
   content: string;
   /** Plan edits this turn staged for review. Chat never writes the plan. */
   suggestions?: NutritionSuggestionArtifact;
+  /** Proposed training plan draft ready to review or activate. */
+  planProposal?: PlanProposalArtifact;
+}
+
+const PLAN_INTENT_PATTERNS = [
+  /\b(add|remove|replace|swap|change)\b.{0,35}\b(exercise|lift|movement|workout|day)\b/i,
+  /\b(change|switch|update|redo|edit|adjust|improve|fix|fill|complete)\b.{0,30}\b(plan|split|program|routine|goal)\b/i,
+  /\b(push\s*pull\s*legs|upper\s*lower|full[ -]?body|training split)\b/i,
+  /\b(build|building|maintain|maintaining)\b.{0,35}\b(bench|press|squat|deadlift|row|lift|strength|muscle)\b/i,
+  /\b(goal|target)\b.{0,45}\b(by|within|for my|on my plan|this block)\b/i,
+  /\b(make|set)\b.{0,25}\b(my )?(goal|target)\b/i,
+  /\bput\b.{0,25}\b(in|into|on)\b.{0,15}\b(my )?plan\b/i,
+];
+
+const PLAN_CREATE_PATTERNS = [
+  /\b(create|generate|build|make|set up|start|save)\b.{0,30}\b(the|this|my|a)?\s*(workout )?(plan|program|split|routine)\b/i,
+  /\b(create|generate|build|make)\s+(it|this)\b/i,
+  /\b(can you|please|let'?s|go ahead and)\s+(create|generate|build|make)\b.{0,25}\b(the|a|this|my)?\s*(plan|program|split|routine|it|this)\b/i,
+];
+
+function looksLikePlanIntent(message: string): boolean {
+  return PLAN_INTENT_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function looksLikePlanCreate(message: string): boolean {
+  return PLAN_CREATE_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 type ChatMode = "coach" | "plan" | "nutrition";
@@ -59,6 +95,7 @@ export default function ChatbotPage() {
   const [aiModel, setAiModel] = useState<AiModelId>(() => loadStoredAiModel());
   const [createPlanOpen, setCreatePlanOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [toolStatus, setToolStatus] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const seededPrompt = useRef(false);
   const cancelStreamRef = useRef<(() => void) | null>(null);
@@ -158,15 +195,33 @@ export default function ChatbotPage() {
     }
   };
 
-  const sendMessage = () => {
-    if (!inputMessage.trim() || loading) return;
+  const handleActivatePlan = async (planId: string) => {
+    try {
+      await activatePlan(planId);
+      alert("Workout plan activated! Your workouts and roadmap now follow this plan.");
+    } catch (err: any) {
+      console.error("Could not activate plan:", err);
+      alert(err?.response?.data?.detail || "Could not activate this plan. Try reviewing it first.");
+    }
+  };
 
-    const messageToSend = inputMessage.trim();
+  const hasPlanDiscussion = messages.some(
+    (m) =>
+      Boolean(m.planProposal) ||
+      (m.role === "user" && (looksLikePlanIntent(m.content) || looksLikePlanCreate(m.content)))
+  );
+
+  const sendMessage = (override?: string) => {
+    const messageText = typeof override === "string" ? override : inputMessage;
+    if (!messageText.trim() || loading) return;
+
+    const messageToSend = messageText.trim();
     const userMessage: Message = { role: "user", content: messageToSend };
     const updatedMessages = [...messages, userMessage];
     setMessages(updatedMessages);
     setInputMessage("");
     setLoading(true);
+    setToolStatus(null);
 
     let streamed = "";
 
@@ -180,20 +235,41 @@ export default function ChatbotPage() {
         model: aiModel,
       },
       {
+        onTool: (name) => {
+          if (name === "propose_training_plan") {
+            setToolStatus("Building your workout plan...");
+          } else {
+            setToolStatus("Reviewing workout records...");
+          }
+        },
         onDelta: (text) => {
           streamed += text;
+          setToolStatus(null);
           setMessages([...updatedMessages, { role: "assistant", content: streamed }]);
         },
         onDone: (payload) => {
           const staged = (payload.artifacts || []).find(
             (a: any) => a?.type === "nutrition_suggestions"
           ) as NutritionSuggestionArtifact | undefined;
+          const proposedPlan = (payload.artifacts || []).find(
+            (a: any) => a?.type === "plan_proposed"
+          );
           setMessages([
             ...updatedMessages,
             {
               role: "assistant",
               content: payload.response || streamed,
               suggestions: staged,
+              planProposal: proposedPlan
+                ? {
+                    plan_id: proposedPlan.plan_id,
+                    plan_name: proposedPlan.plan_name || "Workout Plan",
+                    summary: proposedPlan.summary || "Draft plan ready",
+                    days: proposedPlan.days || (proposedPlan.plan?.days?.length ?? 0),
+                    day_names: proposedPlan.day_names,
+                    plan: proposedPlan.plan,
+                  }
+                : undefined,
             },
           ]);
           setConversationHistory(payload.conversation_history || []);
@@ -201,10 +277,12 @@ export default function ChatbotPage() {
             setConversationId(payload.conversation_id);
           }
           setLoading(false);
+          setToolStatus(null);
           cancelStreamRef.current = null;
         },
         onError: (error: StreamError) => {
           cancelStreamRef.current = null;
+          setToolStatus(null);
           if (streamed) {
             setMessages([...updatedMessages, { role: "assistant", content: streamed }]);
             setLoading(false);
@@ -413,9 +491,48 @@ export default function ChatbotPage() {
                         </span>
                       </button>
                     ) : null}
+                    {message.planProposal ? (
+                      <div className="mt-3 rounded-xl border border-[#FF6B35]/40 bg-[rgba(255,107,53,0.08)] p-3 text-left">
+                        <div className="flex items-center gap-2 mb-1">
+                          <MdFitnessCenter className="text-[#FF6B35] shrink-0" size={16} />
+                          <span className="text-xs font-bold uppercase tracking-wider text-[#FF6B35]">
+                            Workout Plan Created
+                          </span>
+                        </div>
+                        <div className="text-sm font-bold text-white mb-0.5">
+                          {message.planProposal.plan_name}
+                        </div>
+                        <p className="text-xs text-[#8E8E93] mb-2.5">
+                          {message.planProposal.days} workout {message.planProposal.days === 1 ? "day" : "days"} scheduled
+                          {message.planProposal.day_names?.length ? ` (${message.planProposal.day_names.join(", ")})` : ""}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => navigate("/plan")}
+                            className="px-3 py-1.5 rounded-lg bg-[#FF6B35] text-white text-xs font-bold hover:bg-[#E2622B] transition-colors"
+                          >
+                            Review on Plan Hub
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleActivatePlan(message.planProposal!.plan_id)}
+                            className="px-3 py-1.5 rounded-lg border border-[#2A2D35] bg-[#161A22] text-white text-xs font-semibold hover:border-[#FF6B35] transition-colors"
+                          >
+                            Activate Plan
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ))
+            )}
+            {toolStatus && (
+              <div className="flex items-center gap-2 text-xs text-[#FF6B35] font-semibold px-2 py-1">
+                <div className="w-2 h-2 rounded-full bg-[#FF6B35] animate-ping" />
+                <span>{toolStatus}</span>
+              </div>
             )}
             {showTyping && (
               <div className="flex justify-start">
@@ -440,6 +557,17 @@ export default function ChatbotPage() {
             <div ref={messagesEndRef} />
           </div>
 
+          {(chatMode === "plan" || hasPlanDiscussion) && hasUserMessage && !loading ? (
+            <button
+              type="button"
+              onClick={() => sendMessage("Create the plan")}
+              className="mx-4 mb-2 flex items-center justify-center gap-2 py-3 rounded-xl border border-[rgba(255,107,53,0.45)] bg-[rgba(255,107,53,0.08)] text-[#FF6B35] font-bold text-sm hover:bg-[rgba(255,107,53,0.15)] transition-colors"
+            >
+              <MdAutoAwesome size={18} />
+              Generate Workout Plan
+            </button>
+          ) : null}
+
           {chatMode === "nutrition" && hasUserMessage ? (
             <button
               type="button"
@@ -462,7 +590,7 @@ export default function ChatbotPage() {
                 className="flex-1"
               />
               <Button
-                onClick={sendMessage}
+                onClick={() => sendMessage()}
                 disabled={!inputMessage.trim() || loading}
                 loading={loading}
                 icon={<MdSend />}

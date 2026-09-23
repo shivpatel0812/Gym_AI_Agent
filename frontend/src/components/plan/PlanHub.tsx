@@ -1040,6 +1040,7 @@ function GoalHistoryTab({
               height={132}
               flat={role === "maintaining"}
               connectGaps={true}
+              spacing="even"
               unit={chart.metric === "reps" ? "reps" : "e1RM"}
               onScrub={(point) => {
                 const found = sessionsForPoint(point);
@@ -1620,18 +1621,11 @@ export function Trajectory({ exercise, flat }: { exercise: ProjectedExercise; fl
     const share = plottedPast.length < 2 ? 0.12 : Math.min(0.5, Math.max(0.2, rawShare));
     const todayX = left + share * (right - left);
 
-    // History is spaced by date, like every other chart here, so a layoff
-    // reads as a layoff rather than as one more evenly spaced session.
-    const times = plottedPast.map((p) => p.t).filter((t) => !Number.isNaN(t));
-    const t0 = times.length ? Math.min(...times) : 0;
-    const tSpan = times.length ? Math.max(...times) - t0 : 0;
-
+    // Space history by session order, not calendar date — a multi-month
+    // layoff must not leave a blank stretch that pushes recent work into a
+    // tight cluster against TODAY.
     const pastCoords = plottedPast.map((point, index) => {
-      const ratio = tSpan && !Number.isNaN(point.t)
-        ? (point.t - t0) / tSpan
-        : historySteps
-          ? index / historySteps
-          : 1;
+      const ratio = historySteps ? index / historySteps : 1;
       return { x: left + ratio * (todayX - left), y: y(point.value as number), point };
     });
     const segments: Array<{ x: number; y: number }[]> = [];

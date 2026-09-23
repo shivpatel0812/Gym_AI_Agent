@@ -58,7 +58,7 @@ function base(overrides: Partial<ProjectedExercise>): ProjectedExercise {
   } as ProjectedExercise;
 }
 
-/** A three-month layoff mid-history — the line must break, not flatline. */
+/** A three-month layoff mid-history — points stay connected and evenly spaced. */
 const withGap = base({
   exercise_id: "gap",
   exercise_name: "Incline Dumbbell Press",
@@ -195,9 +195,9 @@ export default function ChartHarness() {
 
       <Case
         title="Layoff"
-        note="Three-month gap between Apr 18 and Aug 1. The line must break and the spacing must reflect real time."
+        note="Three-month gap between Apr 18 and Aug 1. Points stay evenly spaced and connected — no blank stretch for the layoff."
       >
-        <ScrubbableLineChart points={gapChart.points} height={140} unit="e1RM" />
+        <ScrubbableLineChart points={gapChart.points} height={140} unit="e1RM" spacing="even" />
       </Case>
 
       <Case

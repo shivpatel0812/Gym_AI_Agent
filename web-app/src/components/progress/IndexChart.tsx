@@ -78,16 +78,10 @@ export default function IndexChart({
     }));
 
     const segments: string[] = [];
-    let current: string[] = [];
-    coords.forEach((c) => {
-      if (c.y == null) {
-        if (current.length > 1) segments.push(current.join(" "));
-        current = [];
-      } else {
-        current.push(`${c.x},${c.y}`);
-      }
-    });
-    if (current.length > 1) segments.push(current.join(" "));
+    const validCoords = coords.filter((c) => c.y != null);
+    if (validCoords.length > 1) {
+      segments.push(validCoords.map((c) => `${c.x},${c.y}`).join(" "));
+    }
 
     const lastMeasured = [...coords].reverse().find((c) => c.y != null);
     const forwardLine = (rows: { level: number }[]) => {

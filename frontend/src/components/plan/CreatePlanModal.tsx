@@ -37,6 +37,10 @@ interface Props {
   conversationId?: string | null;
   /** Hands the user back to Coach with a prompt to refine the draft. */
   onAdjustWithCoach?: (prompt: string) => void;
+  /** If a draft plan was already generated (e.g. from chat), open straight to review. */
+  initialDraft?: TrainingPlan | null;
+  /** Automatically trigger generation immediately on open instead of waiting on the setup form. */
+  autoGenerate?: boolean;
 }
 
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -70,6 +74,8 @@ export default function CreatePlanModal({
   onCreated,
   conversationId,
   onAdjustWithCoach,
+  initialDraft,
+  autoGenerate,
 }: Props) {
   const [durationWeeks, setDurationWeeks] = useState<number | null>(null);
   const [nutritionGoal, setNutritionGoal] = useState<string | null>(null);
@@ -93,6 +99,11 @@ export default function CreatePlanModal({
 
   useEffect(() => {
     if (!visible) return;
+    if (initialDraft) {
+      setDraft(initialDraft);
+      setStep("review");
+      return;
+    }
     setStep("setup");
     setDurationWeeks(null);
     setNutritionGoal(null);
@@ -132,7 +143,7 @@ export default function CreatePlanModal({
         })
         .catch(() => {});
     }
-  }, [visible, conversationId]);
+  }, [visible, conversationId, initialDraft]);
 
   const generate = async () => {
     if (!selectedConversation && !goalText.trim()) {
@@ -169,6 +180,13 @@ export default function CreatePlanModal({
       );
     }
   };
+
+  useEffect(() => {
+    if (!visible || !autoGenerate || initialDraft || step !== "setup") return;
+    if (selectedConversation || goalText.trim()) {
+      generate();
+    }
+  }, [visible, autoGenerate, selectedConversation, goalText, initialDraft, step]);
 
   const confirm = async () => {
     if (!draft) return;

@@ -100,6 +100,8 @@ function MuscleGroupBlock({
         points={points}
         height={112}
         accent={colors.accentPrimary}
+        connectGaps={true}
+        spacing="even"
         onScrub={onScrub}
       />
       {scrubSessions.length ? (

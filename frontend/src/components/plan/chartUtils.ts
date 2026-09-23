@@ -559,3 +559,120 @@ export function sessionsForPoint(point: ChartPoint | null): LoggedSession[] {
   if (point.sessions?.length) return point.sessions;
   return point.session ? [point.session] : [];
 }
+
+export const CHART_PAD_X = 8;
+export const CHART_PAD_Y = 10;
+export const CHART_AXIS_H = 14;
+export const CHART_GUTTER = 34;
+export const DEFAULT_MAX_POINT_GAP = 32;
+
+export type ChartGeometry = {
+  coords: Array<{ index: number; x: number | null; y: number | null; point: ChartPoint }>;
+  segments: string[];
+  left: number;
+  right: number;
+  innerW: number;
+  innerH: number;
+  lo: number;
+  hi: number;
+  dateTicks: Array<{ index: number; x: number | null; y: number | null; point: ChartPoint }>;
+};
+
+export function computeChartGeometry({
+  points,
+  width,
+  height,
+  flat = false,
+  showAxis = true,
+  connectGaps = true,
+  spacing = "even",
+  maxPointGap = DEFAULT_MAX_POINT_GAP,
+}: {
+  points: ChartPoint[];
+  width: number;
+  height: number;
+  flat?: boolean;
+  showAxis?: boolean;
+  connectGaps?: boolean;
+  spacing?: "time" | "even";
+  maxPointGap?: number;
+}): ChartGeometry | null {
+  const plotted = points.filter((p) => p.value != null) as Array<ChartPoint & { value: number }>;
+  if (!plotted.length || !width) return null;
+  const values = plotted.map((p) => p.value);
+  const rawLo = Math.min(...values);
+  const rawHi = Math.max(...values);
+
+  const pad = rawHi - rawLo < 1e-6 ? Math.max(Math.abs(rawHi) * 0.1, 1) : 0;
+  const lo = pad ? rawLo - pad : rawLo - (rawHi - rawLo) * (flat ? 0.2 : 0.12);
+  const hi = pad ? rawHi + pad : rawHi + (rawHi - rawLo) * (flat ? 0.2 : 0.12);
+  const span = Math.max(hi - lo, 1e-6);
+
+  const left = CHART_PAD_X + (showAxis ? CHART_GUTTER : 0);
+  const right = width - CHART_PAD_X;
+  const innerW = Math.max(right - left, 1);
+  const innerH = Math.max(height - CHART_PAD_Y * 2 - (showAxis ? CHART_AXIS_H : 0), 1);
+
+  const slotOf = new Map<string, number>();
+  plotted.forEach((p, i) => slotOf.set(p.key, i));
+
+  let xFor: (point: ChartPoint, fallbackSlot: number) => number;
+  if (spacing === "even") {
+    const gaps = Math.max(plotted.length - 1, 1);
+    const step = Math.min(innerW / gaps, maxPointGap);
+    const used = step * gaps;
+    const start = left + (innerW - used) / 2;
+    xFor = (_point, fallbackSlot) => start + fallbackSlot * step;
+  } else {
+    const times = plotted.map((p) => p.t).filter((t) => !Number.isNaN(t));
+    const t0 = times.length ? Math.min(...times) : 0;
+    const t1 = times.length ? Math.max(...times) : 0;
+    const tSpan = t1 - t0;
+    xFor = (point, fallbackSlot) => {
+      if (!tSpan || Number.isNaN(point.t)) {
+        return left + (fallbackSlot / Math.max(plotted.length - 1, 1)) * innerW;
+      }
+      return left + ((point.t - t0) / tSpan) * innerW;
+    };
+  }
+
+  const coords = points.map((point, index) => {
+    if (point.value == null) return { index, x: null, y: null, point };
+    const x = xFor(point, slotOf.get(point.key) ?? 0);
+    const y = CHART_PAD_Y + innerH * (1 - (point.value - lo) / span);
+    return { index, x, y, point };
+  }) as Array<{ index: number; x: number | null; y: number | null; point: ChartPoint }>;
+
+  const segments: string[] = [];
+  if (connectGaps) {
+    const joined = coords
+      .filter((c) => c.x != null && c.y != null)
+      .map((c) => `${c.x},${c.y}`)
+      .join(" ");
+    if (joined) segments.push(joined);
+  } else {
+    let current: string[] = [];
+    for (const c of coords) {
+      if (c.x == null || c.y == null) {
+        if (current.length > 1) segments.push(current.join(" "));
+        current = [];
+        continue;
+      }
+      current.push(`${c.x},${c.y}`);
+    }
+    if (current.length > 1) segments.push(current.join(" "));
+  }
+
+  const plottedCoords = coords.filter((c) => c.x != null && c.y != null);
+  let dateTicks = plottedCoords;
+  if (plottedCoords.length > 5) {
+    const mid = Math.floor(plottedCoords.length / 2);
+    dateTicks = [
+      plottedCoords[0],
+      plottedCoords[mid],
+      plottedCoords[plottedCoords.length - 1],
+    ];
+  }
+
+  return { coords, segments, left, right, innerW, innerH, lo, hi, dateTicks };
+}

@@ -13,6 +13,7 @@ import {
   sessionValue,
   trendColor,
   type LoggedSession,
+  computeChartGeometry,
 } from "./chartUtils";
 
 type RawSet = { set_number?: number; weight?: number; reps?: number; completed?: boolean };
@@ -415,5 +416,99 @@ describe("muscleGroupsForPlanFamily", () => {
       "SHOULDERS",
       "TRICEPS",
     ]);
+  });
+});
+
+describe("computeChartGeometry", () => {
+  it("connects all points into a single segment across date gaps when connectGaps is true", () => {
+    const { points } = buildExerciseChart(
+      exercise([
+        { date: "2026-01-07", sets: [s(80, 6)] },
+        { date: "2026-01-14", sets: [s(80, 6)] },
+        // 7 month gap
+        { date: "2026-09-01", sets: [s(80, 5)] },
+        { date: "2026-09-11", sets: [s(75, 7)] },
+      ])
+    );
+
+    const geo = computeChartGeometry({
+      points,
+      width: 400,
+      height: 130,
+      connectGaps: true,
+    });
+
+    expect(geo).not.toBeNull();
+    // Exactly 1 continuous polyline segment connecting all 4 sessions across the 7-month gap
+    expect(geo!.segments.length).toBe(1);
+    expect(geo!.segments[0].split(" ").length).toBe(4);
+  });
+
+  it("spaces sessions evenly so a long layoff does not leave empty chart width", () => {
+    const { points } = buildExerciseChart(
+      exercise([
+        { date: "2026-01-07", sets: [s(80, 6)] },
+        { date: "2026-01-14", sets: [s(80, 6)] },
+        { date: "2026-09-01", sets: [s(80, 5)] },
+        { date: "2026-09-11", sets: [s(75, 7)] },
+      ])
+    );
+
+    const even = computeChartGeometry({
+      points,
+      width: 400,
+      height: 130,
+      spacing: "even",
+      maxPointGap: 999,
+    });
+    const timed = computeChartGeometry({
+      points,
+      width: 400,
+      height: 130,
+      spacing: "time",
+      maxPointGap: 999,
+    });
+
+    expect(even).not.toBeNull();
+    expect(timed).not.toBeNull();
+
+    const xs = (geo: NonNullable<typeof even>) =>
+      geo.coords.filter((c) => c.x != null).map((c) => c.x as number);
+
+    const evenXs = xs(even!);
+    const timedXs = xs(timed!);
+    expect(evenXs.length).toBe(4);
+
+    // Even: equal steps between consecutive sessions.
+    const evenGaps = [1, 2, 3].map((i) => evenXs[i] - evenXs[i - 1]);
+    expect(Math.max(...evenGaps) - Math.min(...evenGaps)).toBeLessThan(0.5);
+
+    // Time: the Jan→Sep step dominates the width; even packing keeps that
+    // step comparable to the neighbouring session gaps.
+    const timedGaps = [1, 2, 3].map((i) => timedXs[i] - timedXs[i - 1]);
+    expect(Math.max(...timedGaps)).toBeGreaterThan(Math.max(...evenGaps) * 2);
+  });
+
+  it("splits segments when connectGaps is explicitly false", () => {
+    const { points } = buildExerciseChart(
+      exercise([
+        { date: "2026-01-07", sets: [s(80, 6)] },
+        { date: "2026-01-14", sets: [s(80, 6)] },
+        // 7 month gap
+        { date: "2026-09-01", sets: [s(80, 5)] },
+        { date: "2026-09-11", sets: [s(75, 7)] },
+      ])
+    );
+
+    const geo = computeChartGeometry({
+      points,
+      width: 400,
+      height: 130,
+      connectGaps: false,
+    });
+
+    expect(geo).not.toBeNull();
+    // Two separate segments because of the gap between Jan and Sep
+    expect(geo!.segments.length).toBe(2);
   });
 });

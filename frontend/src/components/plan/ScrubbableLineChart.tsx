@@ -2,7 +2,15 @@ import { useMemo, useRef, useState } from "react";
 import { PanResponder, View, Text, StyleSheet } from "react-native";
 import Svg, { Circle, Line, Polyline, Text as SvgText } from "react-native-svg";
 import { colors, spacing, typography, weight } from "../../theme";
-import { type ChartPoint, formatShortDate, trendColor } from "./chartUtils";
+import {
+  type ChartPoint,
+  computeChartGeometry,
+  formatShortDate,
+  trendColor,
+  CHART_PAD_X,
+  CHART_PAD_Y,
+  CHART_GUTTER,
+} from "./chartUtils";
 
 type Props = {
   points: ChartPoint[];
@@ -14,8 +22,9 @@ type Props = {
   /** Dates under the plot (first / mid / last, or every point when few). */
   showDateAxis?: boolean;
   /**
-   * `time` — space by calendar date (default, honest for layoffs).
-   * `even` — equal gaps between sessions so the series reads dense.
+   * `even` — equal gaps between sessions (default). A layoff does not leave a
+   * blank stretch of chart; points stay readable and close together.
+   * `time` — space by calendar date, so months off show as empty width.
    */
   spacing?: "time" | "even";
   /** Cap the gap between even-spaced points (px). Keeps short histories compact. */
@@ -24,19 +33,15 @@ type Props = {
   unit?: string;
   /**
    * Draw one continuous polyline through every plotted point.
-   * Default breaks the line across layoff/null markers so a gap reads as a gap.
+   * Defaults to true so points across layoffs remain connected.
    */
   connectGaps?: boolean;
   onScrub?: (point: ChartPoint | null) => void;
 };
 
-const PAD_X = 8;
-const PAD_Y = 10;
-const AXIS_H = 14;
-/** Room for the y-axis value labels on the left. */
-const GUTTER = 34;
-/** Default max px between even-spaced session marks. */
-const DEFAULT_MAX_POINT_GAP = 32;
+const PAD_X = CHART_PAD_X;
+const PAD_Y = CHART_PAD_Y;
+const GUTTER = CHART_GUTTER;
 /** Gridline positions as a fraction of plot height, top to bottom. */
 const gridRatios = [0, 0.5, 1];
 
@@ -47,10 +52,10 @@ export default function ScrubbableLineChart({
   flat = false,
   showAxis = true,
   showDateAxis = false,
-  spacing = "time",
-  maxPointGap = DEFAULT_MAX_POINT_GAP,
+  spacing = "even",
+  maxPointGap,
   unit,
-  connectGaps = false,
+  connectGaps = true,
   onScrub,
 }: Props) {
   // Nothing is drawn until the real width arrives, so the chart never paints
@@ -64,92 +69,19 @@ export default function ScrubbableLineChart({
   );
 
   const geometry = useMemo(() => {
-    if (!plotted.length || !width) return null;
-    const values = plotted.map((p) => p.value);
-    const rawLo = Math.min(...values);
-    const rawHi = Math.max(...values);
-    // A flat series has no span to scale by, so pad it absolutely. Scaling by
-    // a percentage collapsed to nothing at zero and pinned every point to the
-    // top of the plot.
-    const pad = rawHi - rawLo < 1e-6 ? Math.max(Math.abs(rawHi) * 0.1, 1) : 0;
-    const lo = pad ? rawLo - pad : rawLo - (rawHi - rawLo) * (flat ? 0.2 : 0.12);
-    const hi = pad ? rawHi + pad : rawHi + (rawHi - rawLo) * (flat ? 0.2 : 0.12);
-    const span = Math.max(hi - lo, 1e-6);
-
-    const left = PAD_X + (showAxis ? GUTTER : 0);
-    const right = width - PAD_X;
-    const innerW = Math.max(right - left, 1);
-    const innerH = Math.max(height - PAD_Y * 2 - (showAxis ? AXIS_H : 0), 1);
-
-    const slotOf = new Map<string, number>();
-    plotted.forEach((p, i) => slotOf.set(p.key, i));
-
-    let xFor: (point: ChartPoint, fallbackSlot: number) => number;
-    if (spacing === "even") {
-      // Equal steps, capped so a handful of sessions sits tight instead of
-      // stretching across the full card width.
-      const gaps = Math.max(plotted.length - 1, 1);
-      const step = Math.min(innerW / gaps, maxPointGap);
-      const used = step * gaps;
-      const start = left + (innerW - used) / 2;
-      xFor = (_point, fallbackSlot) => start + fallbackSlot * step;
-    } else {
-      // Time, not index — a three-month layoff should read longer than a week.
-      const times = plotted.map((p) => p.t).filter((t) => !Number.isNaN(t));
-      const t0 = times.length ? Math.min(...times) : 0;
-      const t1 = times.length ? Math.max(...times) : 0;
-      const tSpan = t1 - t0;
-      xFor = (point, fallbackSlot) => {
-        if (!tSpan || Number.isNaN(point.t)) {
-          return left + (fallbackSlot / Math.max(plotted.length - 1, 1)) * innerW;
-        }
-        return left + ((point.t - t0) / tSpan) * innerW;
-      };
-    }
-
-    const coords = points.map((point, index) => {
-      if (point.value == null) return { index, x: null, y: null, point };
-      const x = xFor(point, slotOf.get(point.key) ?? 0);
-      const y = PAD_Y + innerH * (1 - (point.value - lo) / span);
-      return { index, x, y, point };
-    }) as Array<{ index: number; x: number | null; y: number | null; point: ChartPoint }>;
-
-    const segments: string[] = [];
-    if (connectGaps) {
-      const joined = coords
-        .filter((c) => c.x != null && c.y != null)
-        .map((c) => `${c.x},${c.y}`)
-        .join(" ");
-      if (joined) segments.push(joined);
-    } else {
-      let current: string[] = [];
-      for (const c of coords) {
-        if (c.x == null || c.y == null) {
-          if (current.length > 1) segments.push(current.join(" "));
-          current = [];
-          continue;
-        }
-        current.push(`${c.x},${c.y}`);
-      }
-      if (current.length > 1) segments.push(current.join(" "));
-    }
-
-    // Date ticks: every point when the series is short, otherwise ends + middle.
-    const plottedCoords = coords.filter((c) => c.x != null && c.y != null);
-    let dateTicks = plottedCoords;
-    if (plottedCoords.length > 5) {
-      const mid = Math.floor(plottedCoords.length / 2);
-      dateTicks = [
-        plottedCoords[0],
-        plottedCoords[mid],
-        plottedCoords[plottedCoords.length - 1],
-      ];
-    }
-
-    return { coords, segments, left, right, innerW, innerH, lo, hi, dateTicks };
+    if (!width) return null;
+    return computeChartGeometry({
+      points,
+      width,
+      height,
+      flat,
+      showAxis,
+      connectGaps,
+      spacing,
+      maxPointGap,
+    });
   }, [
     points,
-    plotted,
     width,
     height,
     flat,

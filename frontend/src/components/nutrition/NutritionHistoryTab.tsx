@@ -202,6 +202,7 @@ export default function NutritionHistoryTab() {
             points={points}
             height={168}
             accent={chartSeries.mark}
+            connectGaps={true}
             onScrub={setScrub}
           />
 
